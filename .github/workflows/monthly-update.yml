@@ -53,11 +53,13 @@ jobs:
         run: npm ci
 
       - name: Fetch fresh EIA data
+        continue-on-error: true
         env:
           VITE_EIA_API_KEY: ${{ secrets.VITE_EIA_API_KEY }}
-        run: npx tsx scripts/fetch-eia-data.ts
+        run: npx --yes tsx scripts/fetch-eia-data.ts
 
       - name: Commit updated data (if changed)
+        continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
