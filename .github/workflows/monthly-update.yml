@@ -1,0 +1,83 @@
+# =============================================================
+# GenTrack — Monthly EIA Data Refresh & GitHub Pages Deploy
+# 
+# Runs on the 15th of each month (EIA publishes data by then).
+# Also runs on push to main and manual dispatch.
+#
+# Flow:
+#   1. Fetch fresh EIA data via scripts/fetch-eia-data.ts
+#   2. Commit updated plants.json to the repo
+#   3. Build the React app with Vite
+#   4. Deploy static files to GitHub Pages
+# =============================================================
+
+name: Deploy GenTrack
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Run at 06:00 UTC on the 15th of every month
+    - cron: '0 6 15 * *'
+  workflow_dispatch:
+
+# Allow only one deployment at a time
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch fresh EIA data
+        env:
+          VITE_EIA_API_KEY: ${{ secrets.VITE_EIA_API_KEY }}
+        run: npx tsx scripts/fetch-eia-data.ts
+
+      - name: Commit updated data (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/data/plants.json
+          git diff --cached --quiet || git commit -m "chore: update EIA plant data [$(date -u +%Y-%m-%d)]" && git push || true
+
+      - name: Build site
+        env:
+          VITE_BASE_PATH: /${{ github.event.repository.name }}/
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

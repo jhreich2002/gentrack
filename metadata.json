@@ -1,0 +1,5 @@
+{
+  "name": "GenTrack — Power Plant Analytics Dashboard",
+  "description": "A comprehensive dashboard analyzing US power plant performance using EIA-923 and EIA-860 data, calculating capacity factors, and identifying potential curtailment across ISOs/RTOs for Wind, Solar, and Nuclear fuel sources.",
+  "requestFramePermissions": []
+}
