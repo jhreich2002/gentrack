@@ -31,17 +31,21 @@ const PlantDetailView: React.FC<Props> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [news, setNews] = useState<NewsAnalysis | null>(null);
-  const [loadingNews, setLoadingNews] = useState(true);
+  const [loadingNews, setLoadingNews] = useState(false);
+  const [newsFetched, setNewsFetched] = useState(false);
 
+  // Only fetch news the first time the news tab is opened
   useEffect(() => {
+    if (activeTab !== 'news' || newsFetched) return;
     const fetchNews = async () => {
       setLoadingNews(true);
       const data = await getPlantNews(plant);
       setNews(data);
       setLoadingNews(false);
+      setNewsFetched(true);
     };
     fetchNews();
-  }, [plant]);
+  }, [activeTab, plant, newsFetched]);
 
   const diffFromRegAvg = stats.ttmAverage - regionalAvg;
   const diffFromSubAvg = stats.ttmAverage - subRegionalAvg;
@@ -58,7 +62,7 @@ const PlantDetailView: React.FC<Props> = ({
     const regionalPoint = regionalTrend?.find(rt => rt.month === f.month);
     return {
       month: f.month.split('-')[1],
-      factor: Math.round(f.factor * 100),
+      factor: f.factor !== null ? Math.round(f.factor * 100) : null,
       regionalFactor: regionalPoint ? Math.round(regionalPoint.factor * 100) : null
     };
   });
@@ -84,7 +88,14 @@ const PlantDetailView: React.FC<Props> = ({
             Owned by <span className="text-blue-400 font-bold">{plant.owner}</span> • {plant.region} / <span className="text-blue-300 font-semibold">{plant.subRegion}</span>
           </p>
           <p className="text-slate-500 text-xs mt-1 font-mono">
-            EIA Plant Code: <span className="text-slate-300 font-bold">{plant.eiaPlantCode}</span> • ID: {plant.id} • {plant.location.state}
+            EIA Plant Code: <span className="text-slate-300 font-bold">{plant.eiaPlantCode}</span> • ID: {plant.id}
+            {' • '}
+            {plant.county ? `${plant.county}, ` : ''}{plant.location.state}
+            {plant.cod && (
+              <> • Online: <span className="text-slate-300 font-bold">
+                {new Date(plant.cod + '-02').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+              </span></>
+            )}
           </p>
         </div>
         <button 
@@ -282,11 +293,15 @@ const PlantDetailView: React.FC<Props> = ({
               <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
                   <div className="text-[9px] font-bold text-slate-500 uppercase mb-2">Max Historical Factor</div>
-                  <div className="text-xl font-black text-white">{Math.round(Math.max(...stats.monthlyFactors.map(f => f.factor)) * 100)}%</div>
+                  <div className="text-xl font-black text-white">
+                    {(() => { const vals = stats.monthlyFactors.filter(f => f.factor !== null).map(f => f.factor as number); return vals.length > 0 ? `${Math.round(Math.max(...vals) * 100)}%` : 'N/A'; })()}
+                  </div>
                 </div>
                 <div className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
                   <div className="text-[9px] font-bold text-slate-500 uppercase mb-2">Min Historical Factor</div>
-                  <div className="text-xl font-black text-white">{Math.round(Math.min(...stats.monthlyFactors.map(f => f.factor)) * 100)}%</div>
+                  <div className="text-xl font-black text-white">
+                    {(() => { const vals = stats.monthlyFactors.filter(f => f.factor !== null).map(f => f.factor as number); return vals.length > 0 ? `${Math.round(Math.min(...vals) * 100)}%` : 'N/A'; })()}
+                  </div>
                 </div>
                 <div className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
                   <div className="text-[9px] font-bold text-slate-500 uppercase mb-2">Historical Volatility</div>

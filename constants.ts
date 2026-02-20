@@ -11,7 +11,9 @@ export const REGIONS: Region[] = [
   Region.Southeast,
   Region.PJM,
   Region.NYISO,
-  Region.ISONE
+  Region.ISONE,
+  Region.Hawaii,
+  Region.Alaska
 ];
 
 export const SUBREGIONS: Record<Region, string[]> = {
@@ -23,29 +25,34 @@ export const SUBREGIONS: Record<Region, string[]> = {
   [Region.ISONE]: ['Maine/NH', 'VT/CT/RI', 'Massachusetts'],
   [Region.SPP]: ['North', 'Central', 'South'],
   [Region.Northwest]: ['WA/OR Coast', 'Inland PNW', 'Mountain'],
-  [Region.Southwest]: ['Arizona/Nevada', 'New Mexico'],
-  [Region.Southeast]: ['Florida', 'Carolinas', 'Deep South']
+  [Region.Southwest]: ['Arizona/Nevada', 'New Mexico', 'Colorado'],
+  [Region.Southeast]: ['Florida', 'Carolinas', 'Deep South'],
+  [Region.Hawaii]: ['Oahu', 'Maui', 'Big Island'],
+  [Region.Alaska]: ['Railbelt', 'Remote']
 };
 
 export const FUEL_SOURCES: FuelSource[] = [
   FuelSource.Wind,
   FuelSource.Solar,
-  FuelSource.Nuclear
+  FuelSource.Nuclear,
 ];
 
-export const OWNERS = [
+// Top operators — dynamically populated in the app from loaded data.
+// This fallback list is used when no plants are loaded yet.
+export const DEFAULT_OWNERS = [
   "NextEra Energy", "Duke Energy", "Vistra Corp", "Exelon", "Dominion Energy",
-  "Southern Company", "Constellation Energy", "NRG Energy", "Avangrid", "Brookfield Renewable"
+  "Southern Company", "Constellation Energy", "NRG Energy", "Avangrid", "Brookfield Renewable",
+  "AES Corporation", "Berkshire Hathaway Energy", "Enel", "Invenergy", "Pattern Energy"
 ];
 
 // Typical expected TTM Capacity Factors for identifying curtailment
-export const TYPICAL_CAPACITY_FACTORS = {
+export const TYPICAL_CAPACITY_FACTORS: Record<FuelSource, number> = {
   [FuelSource.Wind]: 0.35,
   [FuelSource.Solar]: 0.22,
-  [FuelSource.Nuclear]: 0.92
+  [FuelSource.Nuclear]: 0.92,
 };
 
-export const COLORS = {
+export const COLORS: Record<string, string> = {
   [FuelSource.Wind]: '#38bdf8',
   [FuelSource.Solar]: '#facc15',
   [FuelSource.Nuclear]: '#4ade80',

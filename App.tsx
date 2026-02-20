@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { PowerPlant, Region, FuelSource, CapacityFactorStats, AnalysisResult } from './types';
-import { REGIONS, FUEL_SOURCES, COLORS, OWNERS, SUBREGIONS } from './constants';
+import { REGIONS, FUEL_SOURCES, COLORS, SUBREGIONS } from './constants';
 import { fetchPowerPlants, calculateCapacityFactorStats, getDataTimestamp } from './services/dataService';
 import { getGeminiInsights } from './services/geminiService';
 import CapacityChart from './components/CapacityChart';
@@ -31,10 +31,14 @@ const App: React.FC = () => {
 
   // Filters
   const [selectedFuels, setSelectedFuels] = useState<FuelSource[]>(FUEL_SOURCES);
-  const [selectedOwners, setSelectedOwners] = useState<string[]>(OWNERS);
+  const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
   const [selectedSubRegions, setSelectedSubRegions] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [showOnlyCurtailed, setShowOnlyCurtailed] = useState(false);
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 50;
   
   // Sorting State
   const [sortKey, setSortKey] = useState<SortKey>('curtailment');
@@ -63,6 +67,9 @@ const App: React.FC = () => {
       });
       setPlants(data);
       setStatsMap(stats);
+      // Initialize owners from plant data (select all)
+      const uniqueOwners = [...new Set(data.map(p => p.owner))].sort();
+      setSelectedOwners(uniqueOwners);
       setLoading(false);
     };
     init();
@@ -90,14 +97,16 @@ const App: React.FC = () => {
         : true;
 
       const fuelMatch = selectedFuels.includes(p.fuelSource);
-      const ownerMatch = selectedOwners.includes(p.owner);
       const searchMatch = 
         p.name.toLowerCase().includes(search.toLowerCase()) || 
         p.id.toLowerCase().includes(search.toLowerCase()) ||
-        p.owner.toLowerCase().includes(search.toLowerCase());
+        p.eiaPlantCode.toLowerCase().includes(search.toLowerCase()) ||
+        p.owner.toLowerCase().includes(search.toLowerCase()) ||
+        p.location?.state?.toLowerCase().includes(search.toLowerCase()) ||
+        p.county?.toLowerCase().includes(search.toLowerCase());
       const curtailmentMatch = showOnlyCurtailed ? statsMap[p.id]?.isLikelyCurtailed : true;
       
-      return regionMatch && subRegionMatch && fuelMatch && ownerMatch && searchMatch && curtailmentMatch;
+      return regionMatch && subRegionMatch && fuelMatch && searchMatch && curtailmentMatch;
     });
 
     result.sort((a, b) => {
@@ -114,7 +123,19 @@ const App: React.FC = () => {
     });
 
     return result;
-  }, [plants, activeTab, selectedSubRegions, selectedFuels, selectedOwners, search, showOnlyCurtailed, statsMap, sortKey, sortDesc, watchlist]);
+  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, showOnlyCurtailed, statsMap, sortKey, sortDesc, watchlist]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, selectedFuels, selectedSubRegions, search, showOnlyCurtailed, sortKey, sortDesc]);
+
+  // Paginated slice
+  const totalPages = Math.max(1, Math.ceil(filteredPlants.length / PAGE_SIZE));
+  const paginatedPlants = filteredPlants.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  // Dynamic owners list extracted from loaded data
+  const allOwners = useMemo(() => [...new Set(plants.map(p => p.owner))].sort(), [plants]);
 
   // Watchlist specific stats for the summary bar
   const watchlistStats = useMemo(() => {
@@ -158,7 +179,7 @@ const App: React.FC = () => {
       peerPlants.forEach(p => {
         const stats = statsMap[p.id];
         const monthlyFactor = stats.monthlyFactors.find(mf => mf.month === month);
-        if (monthlyFactor) { totalFactor += monthlyFactor.factor; count++; }
+        if (monthlyFactor && monthlyFactor.factor !== null) { totalFactor += monthlyFactor.factor; count++; }
       });
       return { month, factor: count > 0 ? totalFactor / count : 0 };
     });
@@ -294,8 +315,6 @@ const App: React.FC = () => {
               activeRegion={activeTab}
               selectedFuels={selectedFuels}
               setSelectedFuels={setSelectedFuels}
-              selectedOwners={selectedOwners}
-              setSelectedOwners={setSelectedOwners}
               selectedSubRegions={selectedSubRegions}
               setSelectedSubRegions={setSelectedSubRegions}
               search={search}
@@ -371,7 +390,7 @@ const App: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {filteredPlants.map(plant => {
+                    {paginatedPlants.map(plant => {
                       const stats = statsMap[plant.id];
                       const isWatched = watchlist.includes(plant.id);
                       return (
@@ -408,6 +427,72 @@ const App: React.FC = () => {
                 <div className="py-32 text-center text-slate-700 bg-slate-900/20">
                   <p className="font-semibold text-lg">{activeTab === 'Watchlist' ? 'Your Watch List is empty.' : 'No assets match your search.'}</p>
                   <p className="text-sm">{activeTab === 'Watchlist' ? 'Click the star icon next to a plant name in the Overview to track it.' : 'Adjust filters to see more results.'}</p>
+                </div>
+              )}
+
+              {/* Pagination Controls */}
+              {filteredPlants.length > PAGE_SIZE && (
+                <div className="flex items-center justify-between px-6 py-4 bg-slate-800/40 border-t border-slate-800">
+                  <div className="text-xs text-slate-500">
+                    Showing {((currentPage - 1) * PAGE_SIZE) + 1}–{Math.min(currentPage * PAGE_SIZE, filteredPlants.length)} of {filteredPlants.length.toLocaleString()} plants
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setCurrentPage(1)}
+                      disabled={currentPage === 1}
+                      className="px-2 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+                    >
+                      ««
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                      className="px-2 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+                    >
+                      ‹ Prev
+                    </button>
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                        let pageNum: number;
+                        if (totalPages <= 7) {
+                          pageNum = i + 1;
+                        } else if (currentPage <= 4) {
+                          pageNum = i + 1;
+                        } else if (currentPage >= totalPages - 3) {
+                          pageNum = totalPages - 6 + i;
+                        } else {
+                          pageNum = currentPage - 3 + i;
+                        }
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => setCurrentPage(pageNum)}
+                            className={`w-8 h-8 rounded text-xs font-bold transition-all ${
+                              currentPage === pageNum
+                                ? 'bg-blue-600 text-white shadow-lg'
+                                : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      disabled={currentPage === totalPages}
+                      className="px-2 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+                    >
+                      Next ›
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage(totalPages)}
+                      disabled={currentPage === totalPages}
+                      className="px-2 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+                    >
+                      »»
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

@@ -39,7 +39,7 @@ export const getGeminiInsights = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -86,7 +86,7 @@ export const getPlantNews = async (plant: PowerPlant): Promise<NewsAnalysis> => 
   
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
@@ -112,10 +112,19 @@ export const getPlantNews = async (plant: PowerPlant): Promise<NewsAnalysis> => 
       summary,
       items: uniqueItems
     };
-  } catch (error) {
-    console.error("Gemini News Error:", error);
+  } catch (error: any) {
+    const msg = error?.message || String(error);
+    console.error("Gemini News Error:", msg);
+    // Surface quota/auth errors clearly
+    const isQuota = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED');
+    const isAuth = msg.includes('401') || msg.includes('API_KEY') || msg.includes('INVALID');
+    const friendlyMsg = isQuota
+      ? 'Gemini API quota exceeded. The free tier limit has been reached — please check your API key quota at https://aistudio.google.com/apikey or try again later.'
+      : isAuth
+      ? 'Gemini API key is invalid or not authorized. Please check your GEMINI_API_KEY in .env.local.'
+      : `Unable to fetch news: ${msg}`;
     return {
-      summary: "Unable to fetch recent news at this moment.",
+      summary: friendlyMsg,
       items: []
     };
   }

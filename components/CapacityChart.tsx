@@ -16,7 +16,7 @@ const CapacityChart: React.FC<Props> = ({ plant, stats, regionalTrend }) => {
     const regionalPoint = regionalTrend?.find(rt => rt.month === f.month);
     return {
       name: f.month,
-      plantFactor: Math.round(f.factor * 100),
+      plantFactor: f.factor !== null ? Math.round(f.factor * 100) : null,
       regionalFactor: regionalPoint ? Math.round(regionalPoint.factor * 100) : null
     };
   });
@@ -38,6 +38,10 @@ const CapacityChart: React.FC<Props> = ({ plant, stats, regionalTrend }) => {
           <YAxis stroke="#94a3b8" fontSize={10} domain={[0, 100]} />
           <Tooltip 
             contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', fontSize: '12px' }}
+            formatter={(value: number | null, name: string) => [
+              value !== null ? `${value}%` : 'N/A',
+              name
+            ]}
           />
           <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
           <ReferenceLine 

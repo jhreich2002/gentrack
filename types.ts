@@ -9,7 +9,9 @@ export enum Region {
   Southeast = 'Southeast',
   PJM = 'PJM',
   NYISO = 'NYISO',
-  ISONE = 'ISO-NE'
+  ISONE = 'ISO-NE',
+  Hawaii = 'Hawaii',
+  Alaska = 'Alaska'
 }
 
 export enum FuelSource {
@@ -20,21 +22,24 @@ export enum FuelSource {
 
 export interface MonthlyGeneration {
   month: string; // YYYY-MM
-  mwh: number;
+  mwh: number | null; // null = EIA did not report generation for this month
 }
 
 export interface PowerPlant {
   id: string;
-  eiaPlantCode: string; // EIA plant code from Form EIA-923
+  eiaPlantCode: string; // EIA plant code from Form EIA-923 / EIA-860
   name: string;
-  owner: string;
+  owner: string;        // Entity name from EIA-860
   region: Region;
   subRegion: string;
   fuelSource: FuelSource;
-  nameplateCapacityMW: number;
+  nameplateCapacityMW: number; // Actual nameplate from EIA-860 (sum of all generators)
+  cod?: string;         // Commercial Operation Date (YYYY-MM), earliest generator at plant
+  county?: string;      // County from EIA-860
   generationHistory: MonthlyGeneration[];
   location: {
     state: string;
+    county?: string;
     lat: number;
     lng: number;
   };
@@ -42,7 +47,7 @@ export interface PowerPlant {
 
 export interface CapacityFactorStats {
   plantId: string;
-  monthlyFactors: { month: string; factor: number }[];
+  monthlyFactors: { month: string; factor: number | null }[]; // null = no EIA data for that month
   ttmAverage: number; // Trailing 12 Month Average
   isLikelyCurtailed: boolean;
   curtailmentScore: number; // 0 to 100

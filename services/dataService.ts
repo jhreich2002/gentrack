@@ -2,12 +2,6 @@ import { PowerPlant, Region, FuelSource, CapacityFactorStats, MonthlyGeneration 
 import { TYPICAL_CAPACITY_FACTORS, SUBREGIONS } from '../constants';
 import { FALLBACK_PLANTS } from './fallbackData';
 
-// Hours in each month
-const HOURS_IN_MONTH: Record<number, number> = {
-  1: 744, 2: 672, 3: 744, 4: 720, 5: 744, 6: 720,
-  7: 744, 8: 744, 9: 720, 10: 744, 11: 720, 12: 744
-};
-
 // -------------------------------------------------------------------
 // Static data loading
 // -------------------------------------------------------------------
@@ -64,8 +58,16 @@ export const calculateCapacityFactorStats = (plant: PowerPlant): CapacityFactorS
   const history = plant.generationHistory;
 
   const monthlyFactors = history.map(h => {
-    const monthNum = parseInt(h.month.split('-')[1], 10);
-    const hoursInMonth = HOURS_IN_MONTH[monthNum] || 730;
+    // Months with no EIA data are passed through as null — excluded from all calculations
+    if (h.mwh === null) {
+      return { month: h.month, factor: null };
+    }
+    const [yearStr, monthStr] = h.month.split('-');
+    const year = parseInt(yearStr, 10);
+    const monthNum = parseInt(monthStr, 10);
+    // new Date(year, monthNum, 0) gives the last day of the month — handles leap years correctly
+    const daysInMonth = new Date(year, monthNum, 0).getDate();
+    const hoursInMonth = daysInMonth * 24;
     const maxGeneration = plant.nameplateCapacityMW * hoursInMonth;
     const factor = maxGeneration > 0 ? h.mwh / maxGeneration : 0;
     return {
@@ -74,7 +76,8 @@ export const calculateCapacityFactorStats = (plant: PowerPlant): CapacityFactorS
     };
   });
 
-  const ttmData = monthlyFactors.slice(-12);
+  // TTM: only include months that have real EIA data
+  const ttmData = monthlyFactors.slice(-12).filter((f): f is { month: string; factor: number } => f.factor !== null);
   const ttmAverage = ttmData.length > 0
     ? ttmData.reduce((acc, curr) => acc + curr.factor, 0) / ttmData.length
     : 0;

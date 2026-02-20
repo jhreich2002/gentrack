@@ -1,14 +1,12 @@
 
 import React from 'react';
 import { Region, FuelSource } from '../types';
-import { FUEL_SOURCES, OWNERS, SUBREGIONS } from '../constants';
+import { FUEL_SOURCES, SUBREGIONS } from '../constants';
 
 interface Props {
   activeRegion: Region | 'Overview' | 'Watchlist';
   selectedFuels: FuelSource[];
   setSelectedFuels: (fuels: FuelSource[]) => void;
-  selectedOwners: string[];
-  setSelectedOwners: (owners: string[]) => void;
   selectedSubRegions: string[];
   setSelectedSubRegions: (subs: string[]) => void;
   search: string;
@@ -21,8 +19,6 @@ const FilterControls: React.FC<Props> = ({
   activeRegion,
   selectedFuels,
   setSelectedFuels,
-  selectedOwners,
-  setSelectedOwners,
   selectedSubRegions,
   setSelectedSubRegions,
   search,
