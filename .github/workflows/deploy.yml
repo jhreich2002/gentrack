@@ -48,6 +48,7 @@ jobs:
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
         run: npm run build
 
       - name: Setup Pages

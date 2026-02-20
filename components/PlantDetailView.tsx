@@ -325,7 +325,7 @@ const PlantDetailView: React.FC<Props> = ({
                     <p className="text-xs text-slate-500 font-medium">Recent operational news and market context</p>
                   </div>
                 </div>
-                <div className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20">Powered by Google Search</div>
+                <div className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20">Powered by Perplexity</div>
               </div>
 
               {loadingNews ? (
