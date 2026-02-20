@@ -26,7 +26,7 @@ export function getDataTimestamp(): string | null {
 // --- Core: Load plants from static JSON, fall back to built-in data ---
 export const fetchPowerPlants = async (): Promise<PowerPlant[]> => {
   try {
-    const res = await fetch('/data/plants.json');
+    const res = await fetch(`${import.meta.env.BASE_URL}data/plants.json`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     const manifest: DataManifest = await res.json();
