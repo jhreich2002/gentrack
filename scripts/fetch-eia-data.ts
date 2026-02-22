@@ -42,11 +42,17 @@ interface MonthlyGeneration {
   mwh: number | null; // null = EIA did not report generation for this month
 }
 
+interface PlantOwner {
+  name: string;
+  percent: number;
+}
+
 interface PowerPlant {
   id: string;
   eiaPlantCode: string;
   name: string;
   owner: string;
+  owners?: PlantOwner[];
   region: string;
   subRegion: string;
   fuelSource: string;
@@ -464,6 +470,11 @@ async function main() {
     console.error(`  ✗ EIA-860 fetch failed: ${err.message}`);
     console.warn('  ⚠ Proceeding with estimated capacities from EIA-923 only');
   }
+
+  // NOTE: EIA API v2 does not expose EIA-860 Schedule 2 ownership percentage
+  // data via any endpoint. The owners[] field is reserved for a future
+  // integration (e.g. bulk Excel download parser). Owner name is sourced
+  // from EIA-860 entityName above.
 
   // Filter out any plants that ended up with 0 capacity after enrichment
   const finalPlants = dedupedPlants.filter(p => p.nameplateCapacityMW >= 0.5);

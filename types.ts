@@ -25,11 +25,17 @@ export interface MonthlyGeneration {
   mwh: number | null; // null = EIA did not report generation for this month
 }
 
+export interface PlantOwner {
+  name: string;
+  percent: number;
+}
+
 export interface PowerPlant {
   id: string;
   eiaPlantCode: string; // EIA plant code from Form EIA-923 / EIA-860
   name: string;
-  owner: string;        // Entity name from EIA-860
+  owner: string;        // Majority owner entity name from EIA-860
+  owners?: PlantOwner[]; // All owners with percentages from EIA-860 Schedule 2
   region: Region;
   subRegion: string;
   fuelSource: FuelSource;

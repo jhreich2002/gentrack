@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { PowerPlant, CapacityFactorStats, FuelSource, NewsAnalysis } from '../types';
+import { PowerPlant, CapacityFactorStats, FuelSource, NewsAnalysis, PlantOwner } from '../types';
 import { COLORS, TYPICAL_CAPACITY_FACTORS } from '../constants';
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
@@ -85,7 +85,21 @@ const PlantDetailView: React.FC<Props> = ({
             </span>
           </div>
           <p className="text-slate-400 text-sm mt-1">
-            Owned by <span className="text-blue-400 font-bold">{plant.owner}</span> • {plant.region} / <span className="text-blue-300 font-semibold">{plant.subRegion}</span>
+            {plant.owners && plant.owners.length > 1 ? (
+              <>
+                Owned by{' '}
+                {plant.owners.map((o, i) => (
+                  <span key={i}>
+                    <span className="text-blue-400 font-bold">{o.name}</span>
+                    <span className="text-slate-500 text-xs font-mono ml-1">({o.percent}%)</span>
+                    {i < plant.owners!.length - 1 && <span className="text-slate-600 mx-1">•</span>}
+                  </span>
+                ))}
+              </>
+            ) : (
+              <>Owned by <span className="text-blue-400 font-bold">{plant.owner}</span></>
+            )}
+            {' '}• {plant.region} / <span className="text-blue-300 font-semibold">{plant.subRegion}</span>
           </p>
           <p className="text-slate-500 text-xs mt-1 font-mono">
             EIA Plant Code: <span className="text-slate-300 font-bold">{plant.eiaPlantCode}</span> • ID: {plant.id}
@@ -271,6 +285,41 @@ const PlantDetailView: React.FC<Props> = ({
                   <div className="text-[10px] text-slate-600 font-medium">Internal Algorithm</div>
                 </div>
               </div>
+
+              {/* Ownership breakdown — only shown when Schedule 2 data is available */}
+              {plant.owners && plant.owners.length > 0 && (
+                <div className="mt-8 pt-8 border-t border-slate-800">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-4">Ownership — EIA-860 Schedule 2</div>
+                  {/* Stacked percentage bar */}
+                  <div className="flex h-2 rounded-full overflow-hidden w-full mb-5">
+                    {plant.owners.map((o, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          width: `${o.percent}%`,
+                          backgroundColor: i === 0 ? '#3b82f6' : i === 1 ? '#6366f1' : i === 2 ? '#8b5cf6' : '#475569'
+                        }}
+                        title={`${o.name}: ${o.percent}%`}
+                      />
+                    ))}
+                  </div>
+                  {/* Owner rows */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {plant.owners.map((o, i) => (
+                      <div key={i} className="flex items-center justify-between bg-slate-800/30 px-4 py-2.5 rounded-xl border border-slate-700/50">
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className="w-2 h-2 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: i === 0 ? '#3b82f6' : i === 1 ? '#6366f1' : i === 2 ? '#8b5cf6' : '#475569' }}
+                          />
+                          <span className="text-xs text-slate-300 font-medium truncate">{o.name}</span>
+                        </div>
+                        <span className="text-xs font-black text-slate-200 font-mono ml-4 flex-shrink-0">{o.percent}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
