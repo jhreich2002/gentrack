@@ -34,6 +34,11 @@ const RETRY_DELAY_MS = 10_000;
 const PAGE_SIZE = 5000; // EIA max per request
 const RATE_LIMIT_DELAY_MS = 1_500; // delay between paginated requests
 
+// Data window — update these when new EIA releases are published
+const EIA923_START_MONTH = '2024-01';  // EIA-923 January 2024 (first month of current window)
+const EIA923_END_MONTH   = '2025-11';  // EIA-923 November 2025 (latest published final release)
+const EIA860_SURVEY_END  = '2024-12';  // EIA-860 2024 annual survey — December snapshot
+
 // -------------------------------------------------------------------
 // Types (mirrored from ../types.ts for standalone execution)
 // -------------------------------------------------------------------
@@ -172,11 +177,9 @@ async function fetchAllFuelData(fuel2002: string): Promise<any[]> {
     url.searchParams.set('sort[0][direction]', 'asc');
     url.searchParams.set('length', String(PAGE_SIZE));
     url.searchParams.set('offset', String(offset));
-    // Fetch last 2 years of data
-    const twoYearsAgo = new Date();
-    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-    const startMonth = `${twoYearsAgo.getFullYear()}-${String(twoYearsAgo.getMonth() + 1).padStart(2, '0')}`;
-    url.searchParams.set('start', startMonth);
+    // Pin to published EIA-923 window: January 2024 – November 2025
+    url.searchParams.set('start', EIA923_START_MONTH);
+    url.searchParams.set('end',   EIA923_END_MONTH);
 
     const json = await fetchWithRetry(url.toString());
     const data = json?.response?.data || [];
@@ -237,10 +240,9 @@ async function fetchEIA860Characteristics(
     fuelCodes.forEach(code => {
       url.searchParams.append('facets[energy_source_code][]', code);
     });
-    // Only fetch the most recent 3 months — we only need current plant characteristics
-    const threeMonthsAgo = new Date();
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-    url.searchParams.set('start', `${threeMonthsAgo.getFullYear()}-${String(threeMonthsAgo.getMonth() + 1).padStart(2, '0')}`);
+    // Pin to EIA-860 2024 annual survey — December 2024 is the final monthly snapshot
+    url.searchParams.set('start', EIA860_SURVEY_END);
+    url.searchParams.set('end',   EIA860_SURVEY_END);
     url.searchParams.set('sort[0][column]', 'plantid');
     url.searchParams.set('sort[0][direction]', 'asc');
     url.searchParams.set('length', String(PAGE_SIZE));
