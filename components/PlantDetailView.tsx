@@ -102,7 +102,8 @@ const PlantDetailView: React.FC<Props> = ({
             {' '}• {plant.region} / <span className="text-blue-300 font-semibold">{plant.subRegion}</span>
           </p>
           <p className="text-slate-500 text-xs mt-1 font-mono">
-            EIA Plant Code: <span className="text-slate-300 font-bold">{plant.eiaPlantCode}</span> • ID: {plant.id}
+            EIA Plant Code: <span className="text-slate-300 font-bold">{plant.eiaPlantCode}</span>
+            {plant.operatorId && <> • Operator ID: <span className="text-slate-300 font-bold">{plant.operatorId}</span></>}
             {' • '}
             {plant.county ? `${plant.county}, ` : ''}{plant.location.state}
             {plant.cod && (

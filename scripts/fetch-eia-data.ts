@@ -55,6 +55,7 @@ interface PlantOwner {
 interface PowerPlant {
   id: string;
   eiaPlantCode: string;
+  operatorId?: string;
   name: string;
   owner: string;
   owners?: PlantOwner[];
@@ -210,6 +211,7 @@ interface PlantCharacteristics {
   lat: number;
   lng: number;
   owner: string | undefined;   // entity-name from EIA-860
+  operatorId: string | undefined; // entityid from EIA-860
 }
 
 /**
@@ -235,6 +237,7 @@ async function fetchEIA860Characteristics(
     url.searchParams.append('data[]', 'county');
     url.searchParams.append('data[]', 'latitude');
     url.searchParams.append('data[]', 'longitude');
+    // entityid is a dimension field returned automatically — do not add to data[]
     // Facets — use append with [] notation for multi-value arrays
     url.searchParams.append('facets[status][]', 'OP');
     fuelCodes.forEach(code => {
@@ -283,11 +286,12 @@ async function fetchEIA860Characteristics(
     const county = r.county || undefined;
     const lat = parseFloat(r.latitude || '0');
     const lng = parseFloat(r.longitude || '0');
-    const owner = r.entityName || undefined;
+    const owner = r.entityName || r['entity-name'] || undefined;
+    const operatorId = r.entityid ? String(r.entityid) : undefined;
 
     const existing = plantMap.get(code);
     if (!existing) {
-      plantMap.set(code, { nameplateCapacityMW: cap, cod, county, lat, lng, owner });
+      plantMap.set(code, { nameplateCapacityMW: cap, cod, county, lat, lng, owner, operatorId });
     } else {
       // Sum generator capacities; keep earliest COD; keep first non-empty county/owner
       existing.nameplateCapacityMW += cap;
@@ -295,6 +299,7 @@ async function fetchEIA860Characteristics(
       if (!existing.county && county) existing.county = county;
       if (!existing.lat && lat) { existing.lat = lat; existing.lng = lng; }
       if (!existing.owner && owner) existing.owner = owner;
+      if (!existing.operatorId && operatorId) existing.operatorId = operatorId;
     }
   }
 
@@ -366,6 +371,7 @@ function processRecords(records: any[], fuelSource: string): PowerPlant[] {
     plants.push({
       id: `EIA-${plantCode}`,
       eiaPlantCode: plantCode,
+      operatorId: first?.operatorId ? String(first.operatorId) : undefined,
       name: first?.plantName || `Plant ${plantCode}`,
       owner: first?.operator || 'Unknown',
       region,
@@ -459,6 +465,7 @@ async function main() {
         if (ch.cod) plant.cod = ch.cod;
         if (ch.county) plant.county = ch.county;
         if (ch.owner) plant.owner = ch.owner;
+        if (ch.operatorId) plant.operatorId = ch.operatorId;
         if (ch.lat) { plant.location.lat = ch.lat; plant.location.lng = ch.lng; }
         if (ch.county) plant.location.county = ch.county;
         eia860Hits++;

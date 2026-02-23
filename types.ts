@@ -33,6 +33,7 @@ export interface PlantOwner {
 export interface PowerPlant {
   id: string;
   eiaPlantCode: string; // EIA plant code from Form EIA-923 / EIA-860
+  operatorId?: string;   // EIA entity ID from EIA-860 (entityid)
   name: string;
   owner: string;        // Majority owner entity name from EIA-860
   owners?: PlantOwner[]; // All owners with percentages from EIA-860 Schedule 2
