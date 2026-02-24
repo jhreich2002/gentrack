@@ -35,6 +35,7 @@ const App: React.FC = () => {
   const [selectedSubRegions, setSelectedSubRegions] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [showOnlyCurtailed, setShowOnlyCurtailed] = useState(false);
+  const [hideNoData, setHideNoData] = useState(false);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -135,8 +136,9 @@ const App: React.FC = () => {
         p.location?.state?.toLowerCase().includes(search.toLowerCase()) ||
         p.county?.toLowerCase().includes(search.toLowerCase());
       const curtailmentMatch = showOnlyCurtailed ? statsMap[p.id]?.isLikelyCurtailed : true;
+      const noDataMatch = hideNoData ? !statsMap[p.id]?.hasNoRecentData : true;
       
-      return regionMatch && subRegionMatch && fuelMatch && searchMatch && curtailmentMatch;
+      return regionMatch && subRegionMatch && fuelMatch && searchMatch && curtailmentMatch && noDataMatch;
     });
 
     result.sort((a, b) => {
@@ -153,12 +155,12 @@ const App: React.FC = () => {
     });
 
     return result;
-  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, showOnlyCurtailed, statsMap, sortKey, sortDesc, watchlist]);
+  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, showOnlyCurtailed, hideNoData, statsMap, sortKey, sortDesc, watchlist]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, selectedFuels, selectedSubRegions, search, showOnlyCurtailed, sortKey, sortDesc]);
+  }, [activeTab, selectedFuels, selectedSubRegions, search, showOnlyCurtailed, hideNoData, sortKey, sortDesc]);
 
   // Paginated slice
   const totalPages = Math.max(1, Math.ceil(filteredPlants.length / PAGE_SIZE));
@@ -174,7 +176,7 @@ const App: React.FC = () => {
     
     const totalCapacity = watchedPlants.reduce((acc, p) => acc + p.nameplateCapacityMW, 0);
     const avgFactor = watchedPlants.reduce((acc, p) => acc + (statsMap[p.id]?.ttmAverage || 0), 0) / watchedPlants.length;
-    const curtailedCount = watchedPlants.filter(p => statsMap[p.id]?.isLikelyCurtailed).length;
+    const curtailedCount = watchedPlants.filter(p => statsMap[p.id]?.isLikelyCurtailed && !statsMap[p.id]?.hasNoRecentData).length;
     
     return { totalCapacity, avgFactor, curtailedCount, count: watchedPlants.length };
   }, [plants, watchlist, statsMap]);
@@ -326,6 +328,8 @@ const App: React.FC = () => {
               setSearch={setSearch}
               showOnlyCurtailed={showOnlyCurtailed}
               setShowOnlyCurtailed={setShowOnlyCurtailed}
+              hideNoData={hideNoData}
+              setHideNoData={setHideNoData}
             />
 
             {/* Overview Summary */}
@@ -417,10 +421,15 @@ const App: React.FC = () => {
                           <td className="px-6 py-5 text-right font-mono text-sm text-slate-300">{plant.nameplateCapacityMW.toLocaleString()}</td>
                           <td className="px-6 py-5 text-right">
                             <div className="font-mono text-sm font-bold text-slate-200">{(stats.ttmAverage * 100).toFixed(1)}%</div>
-                            <div className="w-full h-1 bg-slate-800 rounded-full mt-2 overflow-hidden max-w-[80px] ml-auto"><div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(100, stats.ttmAverage * 100)}%`, backgroundColor: stats.isLikelyCurtailed ? COLORS.curtailed : COLORS[plant.fuelSource] }} /></div>
+                            <div className="w-full h-1 bg-slate-800 rounded-full mt-2 overflow-hidden max-w-[80px] ml-auto"><div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(100, stats.ttmAverage * 100)}%`, backgroundColor: stats.hasNoRecentData ? '#475569' : stats.isLikelyCurtailed ? COLORS.curtailed : COLORS[plant.fuelSource] }} /></div>
                           </td>
                           <td className="px-6 py-5 text-center">
-                            {stats.isLikelyCurtailed ? <div className="flex flex-col items-center gap-1 scale-90"><span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-red-900/40 text-red-400 border border-red-500/30">Curtailed</span><span className="text-[9px] text-red-500/60 font-mono">Score: {stats.curtailmentScore}</span></div> : <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-green-900/20 text-green-400/80 border border-green-500/20">Optimal</span>}
+                            {stats.hasNoRecentData
+                              ? <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-800 text-slate-500 border border-slate-700">No Data</span>
+                              : stats.isLikelyCurtailed
+                                ? <div className="flex flex-col items-center gap-1 scale-90"><span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-red-900/40 text-red-400 border border-red-500/30">Curtailed</span><span className="text-[9px] text-red-500/60 font-mono">Score: {stats.curtailmentScore}</span></div>
+                                : <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-green-900/20 text-green-400/80 border border-green-500/20">Optimal</span>
+                            }
                           </td>
                         </tr>
                       );

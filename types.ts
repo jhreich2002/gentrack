@@ -58,6 +58,7 @@ export interface CapacityFactorStats {
   ttmAverage: number; // Trailing 12 Month Average
   isLikelyCurtailed: boolean;
   curtailmentScore: number; // 0 to 100
+  hasNoRecentData: boolean; // true when every TTM month is null or 0 MWh — plant not curtailed, just unreported
 }
 
 export interface AnalysisResult {

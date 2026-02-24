@@ -54,12 +54,16 @@ function rowToPlant(row: PlantRow): PowerPlant {
 }
 
 function rowToStats(row: PlantRow): CapacityFactorStats {
+  // A plant with ttm_avg_factor === 0 had no reported generation in the trailing 12 months.
+  // Treat it as "no recent data" rather than "curtailed" so it doesn't pollute curtailment analysis.
+  const hasNoRecentData = row.ttm_avg_factor === 0;
   return {
     plantId: row.id,
     monthlyFactors: [],
     ttmAverage: row.ttm_avg_factor,
-    isLikelyCurtailed: row.is_likely_curtailed,
-    curtailmentScore: row.curtailment_score,
+    isLikelyCurtailed: hasNoRecentData ? false : row.is_likely_curtailed,
+    curtailmentScore: hasNoRecentData ? 0 : row.curtailment_score,
+    hasNoRecentData,
   };
 }
 
@@ -180,16 +184,20 @@ export const calculateCapacityFactorStats = (plant: PowerPlant): CapacityFactorS
     return { month: h.month, factor: Math.min(Math.max(factor, 0), 1) };
   });
 
-  const ttmData = monthlyFactors
-    .slice(-12)
-    .filter((f): f is { month: string; factor: number } => f.factor !== null);
+  const ttmSlice = monthlyFactors.slice(-12);
+  const ttmData = ttmSlice.filter((f): f is { month: string; factor: number } => f.factor !== null);
   const ttmAverage = ttmData.length > 0
     ? ttmData.reduce((acc, curr) => acc + curr.factor, 0) / ttmData.length
     : 0;
 
+  // A plant whose entire TTM window contains only null or 0-MWh months has no reported generation.
+  // Mark it distinctly so it doesn't distort curtailment analysis.
+  const ttmRaw = history.slice(-12);
+  const hasNoRecentData = ttmRaw.length === 0 || ttmRaw.every(h => h.mwh === null || h.mwh === 0);
+
   const typical = TYPICAL_CAPACITY_FACTORS[plant.fuelSource];
-  const isLikelyCurtailed = ttmAverage < typical * 0.7;
-  const curtailmentScore = Math.min(100, Math.max(0, ((typical - ttmAverage) / typical) * 100));
+  const isLikelyCurtailed = hasNoRecentData ? false : ttmAverage < typical * 0.7;
+  const curtailmentScore = hasNoRecentData ? 0 : Math.min(100, Math.max(0, ((typical - ttmAverage) / typical) * 100));
 
   return {
     plantId: plant.id,
@@ -197,5 +205,6 @@ export const calculateCapacityFactorStats = (plant: PowerPlant): CapacityFactorS
     ttmAverage,
     isLikelyCurtailed,
     curtailmentScore: Math.round(curtailmentScore),
+    hasNoRecentData,
   };
 };

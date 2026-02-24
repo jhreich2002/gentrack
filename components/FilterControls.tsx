@@ -13,6 +13,8 @@ interface Props {
   setSearch: (s: string) => void;
   showOnlyCurtailed: boolean;
   setShowOnlyCurtailed: (b: boolean) => void;
+  hideNoData: boolean;
+  setHideNoData: (b: boolean) => void;
 }
 
 const FilterControls: React.FC<Props> = ({
@@ -24,7 +26,9 @@ const FilterControls: React.FC<Props> = ({
   search,
   setSearch,
   showOnlyCurtailed,
-  setShowOnlyCurtailed
+  setShowOnlyCurtailed,
+  hideNoData,
+  setHideNoData,
 }) => {
   const toggleFuel = (fuel: FuelSource) => {
     setSelectedFuels(selectedFuels.includes(fuel) 
@@ -95,16 +99,28 @@ const FilterControls: React.FC<Props> = ({
 
       <div>
         <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 block">Status</label>
-        <button 
-          onClick={() => setShowOnlyCurtailed(!showOnlyCurtailed)}
-          className={`px-3 py-2 rounded-lg text-xs font-bold transition-all border ${
-            showOnlyCurtailed 
-              ? 'bg-red-900/30 border-red-500 text-red-400 shadow-[0_0_15px_rgba(239,68,68,0.2)]' 
-              : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
-          }`}
-        >
-          {showOnlyCurtailed ? '⚠️ CURTAILED ONLY' : 'ALL ASSETS'}
-        </button>
+        <div className="flex gap-1.5">
+          <button 
+            onClick={() => setShowOnlyCurtailed(!showOnlyCurtailed)}
+            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all border ${
+              showOnlyCurtailed 
+                ? 'bg-red-900/30 border-red-500 text-red-400 shadow-[0_0_15px_rgba(239,68,68,0.2)]' 
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+            }`}
+          >
+            {showOnlyCurtailed ? '⚠️ CURTAILED ONLY' : 'ALL ASSETS'}
+          </button>
+          <button 
+            onClick={() => setHideNoData(!hideNoData)}
+            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all border ${
+              hideNoData 
+                ? 'bg-slate-700 border-slate-500 text-slate-200 shadow-[0_0_12px_rgba(148,163,184,0.15)]' 
+                : 'bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-600'
+            }`}
+          >
+            {hideNoData ? '✕ NO DATA HIDDEN' : 'SHOW NO DATA'}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -505,11 +505,14 @@ async function main() {
       const max = plant.nameplateCapacityMW * days * 24;
       return max > 0 ? Math.min(1, Math.max(0, h.mwh / max)) : 0;
     });
+    const ttmSlice = history.slice(-12);
     const ttmData = monthlyFactors.slice(-12).filter((f): f is number => f !== null);
     const ttmAvg = ttmData.length > 0 ? ttmData.reduce((a, b) => a + b, 0) / ttmData.length : 0;
+    // Plant with no reported MWh at all should not be flagged as curtailed
+    const hasNoRecentData = ttmSlice.length === 0 || ttmSlice.every(h => h.mwh === null || h.mwh === 0);
     const typical = TYPICAL[plant.fuelSource] ?? 0.3;
-    const score = Math.round(Math.min(100, Math.max(0, ((typical - ttmAvg) / typical) * 100)));
-    return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed: ttmAvg < typical * 0.7 };
+    const score = hasNoRecentData ? 0 : Math.round(Math.min(100, Math.max(0, ((typical - ttmAvg) / typical) * 100)));
+    return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed: hasNoRecentData ? false : ttmAvg < typical * 0.7 };
   }
 
   // ─── Write output ────────────────────────────────────────────────
