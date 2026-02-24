@@ -60,11 +60,22 @@ const App: React.FC = () => {
     try {
       const plant = plants.find(p => p.id === id);
       if (!plant) return;
-      const [history, regTrend, subRegTrend] = await Promise.all([
+      // Use allSettled so a failing RPC (regional/subregional trend) does NOT
+      // block the generation history update — the chart must always render.
+      const [histResult, regResult, subRegResult] = await Promise.allSettled([
         fetchGenerationHistory(id),
         fetchRegionalTrend(plant.region, plant.fuelSource),
         fetchSubRegionalTrend(plant.region, plant.subRegion, plant.fuelSource),
       ]);
+
+      const history = histResult.status === 'fulfilled' ? histResult.value : [];
+      const regTrend = regResult.status === 'fulfilled' ? regResult.value : [];
+      const subRegTrend = subRegResult.status === 'fulfilled' ? subRegResult.value : [];
+
+      if (histResult.status === 'rejected') console.error('[GenTrack] Generation history fetch failed:', histResult.reason);
+      if (regResult.status === 'rejected') console.warn('[GenTrack] Regional trend fetch failed:', regResult.reason);
+      if (subRegResult.status === 'rejected') console.warn('[GenTrack] Sub-regional trend fetch failed:', subRegResult.reason);
+
       const updatedPlant = { ...plant, generationHistory: history };
       setPlants(prev => prev.map(p => p.id === id ? updatedPlant : p));
       setStatsMap(prev => ({ ...prev, [id]: calculateCapacityFactorStats(updatedPlant) }));
