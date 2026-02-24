@@ -12,6 +12,7 @@ interface Props {
   regionalAvg: number;
   subRegionalAvg: number;
   regionalTrend: { month: string; factor: number }[];
+  subRegionalTrend: { month: string; factor: number }[];
   generationLoading?: boolean;
   isWatched: boolean;
   onToggleWatch: (e: React.MouseEvent) => void;
@@ -26,6 +27,7 @@ const PlantDetailView: React.FC<Props> = ({
   regionalAvg, 
   subRegionalAvg, 
   regionalTrend,
+  subRegionalTrend,
   generationLoading = false,
   isWatched,
   onToggleWatch,
@@ -58,18 +60,23 @@ const PlantDetailView: React.FC<Props> = ({
   // Prepare focused TTM data for the overview spark-graph
   const ttmTrendData = stats.monthlyFactors.slice(-12).map(f => {
     const regionalPoint = regionalTrend?.find(rt => rt.month === f.month);
+    const subRegionalPoint = subRegionalTrend?.find(rt => rt.month === f.month);
     return {
       month: f.month.split('-')[1],
       factor: f.factor !== null ? Math.round(f.factor * 100) : null,
-      regionalFactor: regionalPoint ? Math.round(regionalPoint.factor * 100) : null
+      regionalFactor: regionalPoint ? Math.round(regionalPoint.factor * 100) : null,
+      subRegionalFactor: subRegionalPoint ? Math.round(subRegionalPoint.factor * 100) : null,
     };
   });
+
+  // TTM average as a flat reference value for the chart
+  const ttmAvgPct = Math.round(stats.ttmAverage * 100);
 
   // Auto-scale the TTM Y-axis so variance is visually legible.
   // If any month is 0 (e.g. solar in winter), anchor floor at 0 so the zero
   // months remain visible; otherwise tighten with ±5-point padding.
   const ttmAllValues = ttmTrendData
-    .flatMap(d => [d.factor, d.regionalFactor])
+    .flatMap(d => [d.factor, d.regionalFactor, d.subRegionalFactor])
     .filter((v): v is number => v !== null);
   const ttmHasZero = ttmAllValues.some(v => v === 0);
   const ttmMin = ttmAllValues.length > 0 ? Math.min(...ttmAllValues) : 0;
@@ -229,52 +236,51 @@ const PlantDetailView: React.FC<Props> = ({
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg overflow-hidden">
                 <div className="flex items-center justify-between mb-6">
                   <div>
-                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Trailing 12 Month Trend</h3>
-                    <p className="text-[10px] text-slate-600 font-bold">Performance Stability vs Regional Market</p>
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Capacity Factor vs Regional Average</h3>
+                    <p className="text-[10px] text-slate-600 font-bold">TRAILING 12 MONTHS — {plant.fuelSource.toUpperCase()} PEERS IN {plant.region.toUpperCase()}</p>
                   </div>
                   <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[plant.fuelSource] }}></div>
-                      <span className="text-[10px] text-slate-500 font-bold uppercase">Asset</span>
+                      <div className="w-3 h-1 rounded-full" style={{ backgroundColor: COLORS[plant.fuelSource] }}></div>
+                      <span className="text-[10px] text-slate-400 font-bold uppercase">{plant.name.split(' ').slice(0, 2).join(' ')}</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-slate-700"></div>
-                      <span className="text-[10px] text-slate-500 font-bold uppercase">Market Avg</span>
+                      <div className="w-3 h-px bg-violet-500"></div>
+                      <span className="text-[10px] text-slate-500 font-bold uppercase">{plant.subRegion}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-px bg-slate-600" style={{ borderTop: '1px dashed #475569' }}></div>
+                      <span className="text-[10px] text-slate-600 font-bold uppercase">{plant.region} Avg</span>
                     </div>
                   </div>
                 </div>
-                <div className="h-40 w-full">
+                <div className="h-48 w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={ttmTrendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                       <defs>
                         <linearGradient id="colorFactor" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={COLORS[plant.fuelSource]} stopOpacity={0.3}/>
+                          <stop offset="5%" stopColor={COLORS[plant.fuelSource]} stopOpacity={0.25}/>
                           <stop offset="95%" stopColor={COLORS[plant.fuelSource]} stopOpacity={0}/>
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                      <XAxis dataKey="month" hide />
+                      <XAxis dataKey="month" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
                       <YAxis stroke="#475569" fontSize={10} domain={ttmYDomain} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} />
                       <Tooltip 
                         contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '10px' }}
+                        formatter={(value: number | null, name: string) => [
+                          value !== null ? `${value}%` : 'N/A',
+                          name === 'factor' ? plant.name : name === 'subRegionalFactor' ? `${plant.subRegion} Avg` : `${plant.region} Avg`
+                        ]}
                       />
-                      <Area 
-                        type="monotone" 
-                        dataKey="regionalFactor" 
-                        stroke="#475569" 
-                        fill="transparent" 
-                        strokeWidth={1} 
-                        strokeDasharray="5 5" 
-                        dot={false}
-                      />
-                      <Area 
-                        type="monotone" 
-                        dataKey="factor" 
-                        stroke={COLORS[plant.fuelSource]} 
-                        fillOpacity={1} 
-                        fill="url(#colorFactor)" 
-                        strokeWidth={2}
-                      />
+                      {/* TTM average reference line */}
+                      <ReferenceLine y={ttmAvgPct} stroke={COLORS[plant.fuelSource]} strokeDasharray="3 3" strokeOpacity={0.5} label={{ value: `TTM ${ttmAvgPct}%`, position: 'insideTopRight', fill: COLORS[plant.fuelSource], fontSize: 9, opacity: 0.7 }} />
+                      {/* ISO/RTO regional average */}
+                      <Area type="monotone" dataKey="regionalFactor" stroke="#475569" fill="transparent" strokeWidth={1} strokeDasharray="5 5" dot={false} />
+                      {/* Sub-regional zone average */}
+                      <Area type="monotone" dataKey="subRegionalFactor" stroke="#8b5cf6" fill="transparent" strokeWidth={1.5} dot={false} />
+                      {/* This plant */}
+                      <Area type="monotone" dataKey="factor" stroke={COLORS[plant.fuelSource]} fillOpacity={1} fill="url(#colorFactor)" strokeWidth={2.5} dot={false} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
