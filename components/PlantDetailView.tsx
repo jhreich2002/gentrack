@@ -12,6 +12,7 @@ interface Props {
   regionalAvg: number;
   subRegionalAvg: number;
   regionalTrend: { month: string; factor: number }[];
+  generationLoading?: boolean;
   isWatched: boolean;
   onToggleWatch: (e: React.MouseEvent) => void;
   onBack: () => void;
@@ -24,7 +25,8 @@ const PlantDetailView: React.FC<Props> = ({
   stats, 
   regionalAvg, 
   subRegionalAvg, 
-  regionalTrend, 
+  regionalTrend,
+  generationLoading = false,
   isWatched,
   onToggleWatch,
   onBack 
@@ -159,7 +161,15 @@ const PlantDetailView: React.FC<Props> = ({
       </div>
 
       {/* Tab Content */}
-      <div className="flex-1">
+      <div className="flex-1 relative">
+        {generationLoading && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/80 rounded-2xl">
+            <div className="flex items-center gap-3 text-slate-400">
+              <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-blue-500"></div>
+              <span className="text-sm font-medium">Loading generation data...</span>
+            </div>
+          </div>
+        )}
         {activeTab === 'overview' && (
           <div className="space-y-8 animate-in fade-in duration-500">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

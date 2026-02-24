@@ -18,6 +18,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
 
 // -------------------------------------------------------------------
 // Config
@@ -33,6 +34,10 @@ const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 10_000;
 const PAGE_SIZE = 5000; // EIA max per request
 const RATE_LIMIT_DELAY_MS = 1_500; // delay between paginated requests
+
+// Supabase credentials (set in .env / GitHub Actions secrets)
+const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL  || '';
+const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 // Data window — update these when new EIA releases are published
 const EIA923_START_MONTH = '2024-01';  // EIA-923 January 2024 (first month of current window)
@@ -488,6 +493,25 @@ async function main() {
   // Filter out any plants that ended up with 0 capacity after enrichment
   const finalPlants = dedupedPlants.filter(p => p.nameplateCapacityMW >= 0.5);
 
+  // ─── Compute pre-aggregated stats for each plant ─────────────────
+  const TYPICAL: Record<string, number> = { Solar: 0.22, Wind: 0.35, Nuclear: 0.92 };
+
+  function computeStats(plant: PowerPlant) {
+    const history = plant.generationHistory;
+    const monthlyFactors = history.map(h => {
+      if (h.mwh === null) return null;
+      const [yr, mo] = h.month.split('-').map(Number);
+      const days = new Date(yr, mo, 0).getDate();
+      const max = plant.nameplateCapacityMW * days * 24;
+      return max > 0 ? Math.min(1, Math.max(0, h.mwh / max)) : 0;
+    });
+    const ttmData = monthlyFactors.slice(-12).filter((f): f is number => f !== null);
+    const ttmAvg = ttmData.length > 0 ? ttmData.reduce((a, b) => a + b, 0) / ttmData.length : 0;
+    const typical = TYPICAL[plant.fuelSource] ?? 0.3;
+    const score = Math.round(Math.min(100, Math.max(0, ((typical - ttmAvg) / typical) * 100)));
+    return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed: ttmAvg < typical * 0.7 };
+  }
+
   // ─── Write output ────────────────────────────────────────────────
   console.log('\n▶ Writing output...');
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -507,6 +531,70 @@ async function main() {
   console.log(`  ✓ ${finalPlants.length} plants, ${sizeMB} MB`);
   console.log(`  ✓ EIA-860 enrichment rate: ${eia860Hits}/${finalPlants.length} (${Math.round(eia860Hits / Math.max(finalPlants.length, 1) * 100)}%)`);
   console.log(`  ✓ Breakdown: ${JSON.stringify(fuelBreakdown)}`);
+
+  // ─── Upsert to Supabase (if credentials available) ───────────────
+  if (SUPABASE_URL && SUPABASE_KEY) {
+    console.log('\n▶ Upserting to Supabase...');
+    const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+    const now = new Date().toISOString();
+
+    // Build plant rows
+    const plantRows = finalPlants.map(p => {
+      const s = computeStats(p);
+      return {
+        id: p.id,
+        eia_plant_code: p.eiaPlantCode,
+        operator_id: p.operatorId ?? null,
+        name: p.name,
+        owner: p.owner,
+        region: p.region,
+        sub_region: p.subRegion ?? '',
+        fuel_source: p.fuelSource,
+        nameplate_capacity_mw: p.nameplateCapacityMW,
+        cod: p.cod ?? null,
+        county: p.county ?? null,
+        state: p.location.state,
+        lat: p.location.lat,
+        lng: p.location.lng,
+        ttm_avg_factor: s.ttmAvgFactor,
+        curtailment_score: s.curtailmentScore,
+        is_likely_curtailed: s.isLikelyCurtailed,
+        last_updated: now,
+      };
+    });
+
+    // Upsert plants in batches of 500
+    const BATCH = 500;
+    for (let i = 0; i < plantRows.length; i += BATCH) {
+      const batch = plantRows.slice(i, i + BATCH);
+      const { error } = await db.from('plants').upsert(batch, { onConflict: 'id' });
+      if (error) throw new Error(`Supabase plants upsert error: ${error.message}`);
+      console.log(`  ✓ Plants upserted: ${Math.min(i + BATCH, plantRows.length)}/${plantRows.length}`);
+    }
+
+    // Build generation rows
+    const genRows: { plant_id: string; month: string; mwh: number | null }[] = [];
+    for (const p of finalPlants) {
+      for (const h of p.generationHistory) {
+        genRows.push({ plant_id: p.id, month: h.month, mwh: h.mwh });
+      }
+    }
+
+    // Upsert generation in batches of 1000
+    for (let i = 0; i < genRows.length; i += 1000) {
+      const batch = genRows.slice(i, i + 1000);
+      const { error } = await db.from('monthly_generation').upsert(batch, { onConflict: 'plant_id,month' });
+      if (error) throw new Error(`Supabase generation upsert error: ${error.message}`);
+      if (i % 20000 === 0 || i + 1000 >= genRows.length) {
+        console.log(`  ✓ Generation rows upserted: ${Math.min(i + 1000, genRows.length)}/${genRows.length}`);
+      }
+    }
+
+    console.log(`  ✓ Supabase sync complete`);
+  } else {
+    console.log('  ℹ Supabase credentials not set — skipping DB upsert (JSON only)');
+  }
+
   console.log(`  ✓ Elapsed: ${elapsed} minutes`);
   console.log('\n✅ Done.');
 }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { PowerPlant, Region, FuelSource, CapacityFactorStats, AnalysisResult } from './types';
 import { REGIONS, FUEL_SOURCES, COLORS, SUBREGIONS } from './constants';
-import { fetchPowerPlants, calculateCapacityFactorStats, getDataTimestamp } from './services/dataService';
+import { fetchPowerPlants, fetchGenerationHistory, fetchRegionalTrend, fetchSubRegionalTrend, calculateCapacityFactorStats, getDataTimestamp } from './services/dataService';
 import { getGeminiInsights } from './services/geminiService';
 import CapacityChart from './components/CapacityChart';
 import RegionalComparison from './components/RegionalComparison';
@@ -46,11 +46,35 @@ const App: React.FC = () => {
   
   // Selection
   const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
+  const [generationLoading, setGenerationLoading] = useState(false);
+  const [regionalTrend, setRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
+  const [subRegionalTrend, setSubRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
 
   // Handle row click to view plant details
-  const handlePlantClick = (id: string) => {
+  const handlePlantClick = async (id: string) => {
     setSelectedPlantId(id);
     setView('detail');
+    setGenerationLoading(true);
+    setRegionalTrend([]);
+    setSubRegionalTrend([]);
+    try {
+      const plant = plants.find(p => p.id === id);
+      if (!plant) return;
+      const [history, regTrend, subRegTrend] = await Promise.all([
+        fetchGenerationHistory(id),
+        fetchRegionalTrend(plant.region, plant.fuelSource),
+        fetchSubRegionalTrend(plant.region, plant.subRegion, plant.fuelSource),
+      ]);
+      const updatedPlant = { ...plant, generationHistory: history };
+      setPlants(prev => prev.map(p => p.id === id ? updatedPlant : p));
+      setStatsMap(prev => ({ ...prev, [id]: calculateCapacityFactorStats(updatedPlant) }));
+      setRegionalTrend(regTrend);
+      setSubRegionalTrend(subRegTrend);
+    } catch (err) {
+      console.error('[GenTrack] Failed to load plant detail data:', err);
+    } finally {
+      setGenerationLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -60,14 +84,9 @@ const App: React.FC = () => {
   useEffect(() => {
     const init = async () => {
       setLoading(true);
-      const data = await fetchPowerPlants();
-      const stats: Record<string, CapacityFactorStats> = {};
-      data.forEach(p => {
-        stats[p.id] = calculateCapacityFactorStats(p);
-      });
+      const { plants: data, statsMap: stats } = await fetchPowerPlants();
       setPlants(data);
       setStatsMap(stats);
-      // Initialize owners from plant data (select all)
       const uniqueOwners = [...new Set(data.map(p => p.owner))].sort();
       setSelectedOwners(uniqueOwners);
       setLoading(false);
@@ -171,40 +190,15 @@ const App: React.FC = () => {
 
   const selectedPlant = useMemo(() => plants.find(p => p.id === selectedPlantId) || null, [plants, selectedPlantId]);
 
-  const getHistoryTrend = (peerPlants: PowerPlant[]) => {
-    if (peerPlants.length === 0) return [];
-    const months = peerPlants[0].generationHistory.map(h => h.month);
-    return months.map(month => {
-      let totalFactor = 0, count = 0;
-      peerPlants.forEach(p => {
-        const stats = statsMap[p.id];
-        const monthlyFactor = stats.monthlyFactors.find(mf => mf.month === month);
-        if (monthlyFactor && monthlyFactor.factor !== null) { totalFactor += monthlyFactor.factor; count++; }
-      });
-      return { month, factor: count > 0 ? totalFactor / count : 0 };
-    });
-  };
+  const regionalAvgFactor = useMemo(() => {
+    const ttm = regionalTrend.slice(-12);
+    return ttm.length > 0 ? ttm.reduce((acc, curr) => acc + curr.factor, 0) / ttm.length : 0;
+  }, [regionalTrend]);
 
-  const regionalTrend = useMemo(() => {
-    if (!selectedPlant) return [];
-    const peers = plants.filter(p => p.region === selectedPlant.region && p.fuelSource === selectedPlant.fuelSource);
-    return getHistoryTrend(peers);
-  }, [selectedPlant, plants, statsMap]);
-
-  const subRegionalTrend = useMemo(() => {
-    if (!selectedPlant) return [];
-    const peers = plants.filter(p => p.region === selectedPlant.region && p.subRegion === selectedPlant.subRegion && p.fuelSource === selectedPlant.fuelSource);
-    return getHistoryTrend(peers);
-  }, [selectedPlant, plants, statsMap]);
-
-  const getAvgFromTrend = (trend: { factor: number }[]) => {
-    if (trend.length === 0) return 0;
-    const ttm = trend.slice(-12);
-    return ttm.reduce((acc, curr) => acc + curr.factor, 0) / ttm.length;
-  };
-
-  const regionalAvgFactor = useMemo(() => getAvgFromTrend(regionalTrend), [regionalTrend]);
-  const subRegionalAvgFactor = useMemo(() => getAvgFromTrend(subRegionalTrend), [subRegionalTrend]);
+  const subRegionalAvgFactor = useMemo(() => {
+    const ttm = subRegionalTrend.slice(-12);
+    return ttm.length > 0 ? ttm.reduce((acc, curr) => acc + curr.factor, 0) / ttm.length : 0;
+  }, [subRegionalTrend]);
 
   if (loading) {
     return (
@@ -498,7 +492,7 @@ const App: React.FC = () => {
             </div>
           </>
         ) : (
-          selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => setView('dashboard')} />
+          selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => setView('dashboard')} />
         )}
       </main>
 
