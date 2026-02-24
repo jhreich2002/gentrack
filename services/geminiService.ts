@@ -101,10 +101,10 @@ function setCachedNews(plantId: string, data: NewsAnalysis): void {
   } catch {}
 }
 
-async function callGeminiNews(ai: GoogleGenAI, prompt: string, useGrounding: boolean): Promise<{ summary: string; items: NewsItem[] }> {
+async function callGeminiNews(ai: GoogleGenAI, prompt: string, useGrounding: boolean, model = 'gemini-2.0-flash'): Promise<{ summary: string; items: NewsItem[] }> {
   const config: any = useGrounding ? { tools: [{ googleSearch: {} }] } : {};
   const response = await ai.models.generateContent({
-    model: 'gemini-2.0-flash',
+    model,
     contents: prompt,
     config,
   });
@@ -149,14 +149,19 @@ export const getPlantNews = async (plant: PowerPlant): Promise<NewsAnalysis> => 
 
   const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-  // Attempt 1: grounded search
-  // Attempt 2 (on quota error): grounded search after 3s backoff
-  // Attempt 3 (on quota error): plain Gemini without grounding
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const useGrounding = attempt < 2;
+  // Attempt 1: gemini-2.0-flash + grounding
+  // Attempt 2 (on quota error): gemini-2.0-flash + grounding after 3s backoff
+  // Attempt 3 (on quota error): gemini-1.5-flash without grounding (separate quota bucket)
+  const attempts = [
+    { model: 'gemini-2.0-flash', useGrounding: true,  waitMs: 0 },
+    { model: 'gemini-2.0-flash', useGrounding: true,  waitMs: 3000 },
+    { model: 'gemini-1.5-flash', useGrounding: false, waitMs: 0 },
+  ];
+  for (let i = 0; i < attempts.length; i++) {
+    const { model, useGrounding, waitMs } = attempts[i];
     try {
-      if (attempt === 1) await delay(3000);
-      const result = await callGeminiNews(ai, prompt, useGrounding);
+      if (waitMs > 0) await delay(waitMs);
+      const result = await callGeminiNews(ai, prompt, useGrounding, model);
       const newsAnalysis: NewsAnalysis = { summary: result.summary, items: result.items };
       setCachedNews(plant.id, newsAnalysis);
       return newsAnalysis;
@@ -164,15 +169,15 @@ export const getPlantNews = async (plant: PowerPlant): Promise<NewsAnalysis> => 
       const msg: string = error?.message || String(error);
       const isQuota = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota');
       const isAuth  = msg.includes('401') || msg.includes('403') || msg.includes('API_KEY');
-      console.warn(`Gemini News attempt ${attempt + 1} failed:`, msg);
+      console.warn(`Gemini News attempt ${i + 1} (${model}) failed:`, msg);
 
       if (isAuth) {
         return { summary: 'Gemini API key is invalid or unauthorized. Check your GEMINI_API_KEY.', items: [] };
       }
-      if (!isQuota || attempt === 2) {
+      if (!isQuota || i === attempts.length - 1) {
         return { summary: `Unable to fetch news: ${msg}`, items: [] };
       }
-      // isQuota && attempt < 2 → loop continues with backoff/fallback
+      // isQuota and more attempts remain → continue
     }
   }
 
