@@ -1,89 +1,194 @@
 import { PowerPlant, Region, FuelSource, CapacityFactorStats, MonthlyGeneration } from '../types';
-import { TYPICAL_CAPACITY_FACTORS, SUBREGIONS } from '../constants';
+import { TYPICAL_CAPACITY_FACTORS } from '../constants';
 import { FALLBACK_PLANTS } from './fallbackData';
-
-// -------------------------------------------------------------------
-// Static data loading
-// -------------------------------------------------------------------
-// The app reads from /data/plants.json, which is generated monthly
-// by scripts/fetch-eia-data.ts (run via GitHub Actions cron).
-// If that file is missing or invalid, the built-in fallback data is used.
-
-interface DataManifest {
-  fetchedAt: string;
-  plantCount: number;
-  fuelBreakdown: Record<string, number>;
-  plants: PowerPlant[];
-}
+import { supabase } from './supabaseClient';
 
 let _dataTimestamp: string | null = null;
 
-/** Returns the ISO timestamp of when the static data was last fetched */
 export function getDataTimestamp(): string | null {
   return _dataTimestamp;
 }
 
-// --- Core: Load plants from static JSON, fall back to built-in data ---
-export const fetchPowerPlants = async (): Promise<PowerPlant[]> => {
+interface PlantRow {
+  id: string;
+  eia_plant_code: string;
+  operator_id: string | null;
+  name: string;
+  owner: string;
+  region: string;
+  sub_region: string;
+  fuel_source: string;
+  nameplate_capacity_mw: number;
+  cod: string | null;
+  county: string | null;
+  state: string;
+  lat: number;
+  lng: number;
+  ttm_avg_factor: number;
+  curtailment_score: number;
+  is_likely_curtailed: boolean;
+  last_updated: string;
+}
+
+function rowToPlant(row: PlantRow): PowerPlant {
+  return {
+    id: row.id,
+    eiaPlantCode: row.eia_plant_code,
+    operatorId: row.operator_id ?? undefined,
+    name: row.name,
+    owner: row.owner,
+    region: row.region as Region,
+    subRegion: row.sub_region,
+    fuelSource: row.fuel_source as FuelSource,
+    nameplateCapacityMW: row.nameplate_capacity_mw,
+    cod: row.cod ?? undefined,
+    county: row.county ?? undefined,
+    generationHistory: [],
+    location: {
+      state: row.state,
+      lat: row.lat,
+      lng: row.lng,
+      county: row.county ?? undefined,
+    },
+  };
+}
+
+function rowToStats(row: PlantRow): CapacityFactorStats {
+  return {
+    plantId: row.id,
+    monthlyFactors: [],
+    ttmAverage: row.ttm_avg_factor,
+    isLikelyCurtailed: row.is_likely_curtailed,
+    curtailmentScore: row.curtailment_score,
+  };
+}
+
+type FetchPlantsResult = { plants: PowerPlant[]; statsMap: Record<string, CapacityFactorStats> };
+
+export const fetchPowerPlants = async (): Promise<FetchPlantsResult> => {
+  try {
+    if (!import.meta.env.VITE_SUPABASE_URL) throw new Error('No Supabase URL');
+
+    const PAGE = 1000;
+    let allRows: PlantRow[] = [];
+    let from = 0;
+
+    while (true) {
+      const { data, error } = await supabase
+        .from('plants')
+        .select('*')
+        .range(from, from + PAGE - 1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allRows = allRows.concat(data as PlantRow[]);
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+
+    if (allRows.length === 0) throw new Error('No plants returned from Supabase');
+
+    _dataTimestamp = allRows[0]?.last_updated ?? new Date().toISOString();
+    console.log(`[GenTrack] Loaded ${allRows.length} plants from Supabase`);
+
+    const plants = allRows.map(rowToPlant);
+    const statsMap: Record<string, CapacityFactorStats> = {};
+    allRows.forEach(row => { statsMap[row.id] = rowToStats(row); });
+
+    return { plants, statsMap };
+  } catch (err) {
+    console.warn('[GenTrack] Supabase unavailable — falling back to static JSON:', err);
+  }
+
   try {
     const res = await fetch(`${import.meta.env.BASE_URL}data/plants.json`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const manifest: DataManifest = await res.json();
-
-    if (manifest.plants && manifest.plants.length > 0) {
-      _dataTimestamp = manifest.fetchedAt || null;
-      console.log(
-        `[GenTrack] Loaded ${manifest.plantCount} plants from static data (fetched ${manifest.fetchedAt})`
-      );
-      // Map region strings back to enum values
-      return manifest.plants.map(p => ({
+    const manifest = await res.json();
+    if (manifest.plants?.length > 0) {
+      _dataTimestamp = manifest.fetchedAt ?? null;
+      const plants: PowerPlant[] = manifest.plants.map((p: any) => ({
         ...p,
         region: p.region as Region,
         fuelSource: p.fuelSource as FuelSource,
       }));
+      const statsMap: Record<string, CapacityFactorStats> = {};
+      plants.forEach(p => { statsMap[p.id] = calculateCapacityFactorStats(p); });
+      console.log(`[GenTrack] Loaded ${plants.length} plants from static JSON`);
+      return { plants, statsMap };
     }
   } catch (err) {
-    console.warn('[GenTrack] Could not load /data/plants.json, using fallback:', err);
+    console.warn('[GenTrack] Static JSON unavailable:', err);
   }
 
-  // Fallback to built-in data
-  console.log('[GenTrack] Using built-in fallback data (' + FALLBACK_PLANTS.length + ' plants)');
+  console.log(`[GenTrack] Using built-in fallback data (${FALLBACK_PLANTS.length} plants)`);
   _dataTimestamp = null;
-  return [...FALLBACK_PLANTS];
+  const plants = [...FALLBACK_PLANTS];
+  const statsMap: Record<string, CapacityFactorStats> = {};
+  plants.forEach(p => { statsMap[p.id] = calculateCapacityFactorStats(p); });
+  return { plants, statsMap };
 };
 
-// --- Calculate Capacity Factor Stats from plant data ---
+export const fetchGenerationHistory = async (plantId: string): Promise<MonthlyGeneration[]> => {
+  const { data, error } = await supabase
+    .from('monthly_generation')
+    .select('month, mwh')
+    .eq('plant_id', plantId)
+    .order('month');
+
+  if (error) throw error;
+  return (data ?? []).map(r => ({ month: r.month as string, mwh: r.mwh as number | null }));
+};
+
+export const fetchRegionalTrend = async (
+  region: string,
+  fuelSource: string
+): Promise<{ month: string; factor: number }[]> => {
+  const { data, error } = await supabase.rpc('get_regional_trend', {
+    p_region: region,
+    p_fuel_source: fuelSource,
+  });
+  if (error) throw error;
+  return (data ?? []).map((r: any) => ({ month: r.month, factor: r.avg_factor ?? 0 }));
+};
+
+export const fetchSubRegionalTrend = async (
+  region: string,
+  subRegion: string,
+  fuelSource: string
+): Promise<{ month: string; factor: number }[]> => {
+  const { data, error } = await supabase.rpc('get_subregional_trend', {
+    p_region: region,
+    p_sub_region: subRegion,
+    p_fuel_source: fuelSource,
+  });
+  if (error) throw error;
+  return (data ?? []).map((r: any) => ({ month: r.month, factor: r.avg_factor ?? 0 }));
+};
+
 export const calculateCapacityFactorStats = (plant: PowerPlant): CapacityFactorStats => {
   const history = plant.generationHistory;
 
   const monthlyFactors = history.map(h => {
-    // Months with no EIA data are passed through as null — excluded from all calculations
-    if (h.mwh === null) {
-      return { month: h.month, factor: null };
-    }
+    if (h.mwh === null) return { month: h.month, factor: null };
     const [yearStr, monthStr] = h.month.split('-');
     const year = parseInt(yearStr, 10);
     const monthNum = parseInt(monthStr, 10);
-    // new Date(year, monthNum, 0) gives the last day of the month — handles leap years correctly
     const daysInMonth = new Date(year, monthNum, 0).getDate();
     const hoursInMonth = daysInMonth * 24;
     const maxGeneration = plant.nameplateCapacityMW * hoursInMonth;
     const factor = maxGeneration > 0 ? h.mwh / maxGeneration : 0;
-    return {
-      month: h.month,
-      factor: Math.min(Math.max(factor, 0), 1),
-    };
+    return { month: h.month, factor: Math.min(Math.max(factor, 0), 1) };
   });
 
-  // TTM: only include months that have real EIA data
-  const ttmData = monthlyFactors.slice(-12).filter((f): f is { month: string; factor: number } => f.factor !== null);
+  const ttmData = monthlyFactors
+    .slice(-12)
+    .filter((f): f is { month: string; factor: number } => f.factor !== null);
   const ttmAverage = ttmData.length > 0
     ? ttmData.reduce((acc, curr) => acc + curr.factor, 0) / ttmData.length
     : 0;
 
   const typical = TYPICAL_CAPACITY_FACTORS[plant.fuelSource];
-  const isLikelyCurtailed = ttmAverage < (typical * 0.7);
+  const isLikelyCurtailed = ttmAverage < typical * 0.7;
   const curtailmentScore = Math.min(100, Math.max(0, ((typical - ttmAverage) / typical) * 100));
 
   return {
