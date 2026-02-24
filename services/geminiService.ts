@@ -78,71 +78,56 @@ export const getGeminiInsights = async (
 
 /**
  * Searches for recent news and operational updates for a specific power plant
- * using Perplexity's sonar model (live web search with citations).
+ * using Gemini 2.0 Flash with Google Search grounding (live web search with citations).
  */
 export const getPlantNews = async (plant: PowerPlant): Promise<NewsAnalysis> => {
-  const apiKey = process.env.PERPLEXITY_API_KEY;
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
     return {
-      summary: "Perplexity API key is not configured. Add PERPLEXITY_API_KEY to your .env.local file.",
+      summary: "Gemini API key is not configured. Add GEMINI_API_KEY to your .env file.",
       items: []
     };
   }
 
-  const prompt = `Find recent news, operational updates, maintenance events, outages, or regulatory filings for the power plant "${plant.name}" (EIA plant code ${plant.eiaPlantCode}), owned by "${plant.owner}", located in ${plant.county ? `${plant.county} county, ` : ''}${plant.location.state}. Write a 2-3 sentence summary of the most relevant recent developments. Be specific and factual.`;
+  const ai = new GoogleGenAI({ apiKey });
+
+  const prompt = `You are an expert energy analyst with access to live web search. Find recent news, operational updates, maintenance events, outages, or regulatory filings for the power plant "${plant.name}" (EIA plant code ${plant.eiaPlantCode}), owned by "${plant.owner}", located in ${plant.county ? `${plant.county} county, ` : ''}${plant.location.state}. It is a ${plant.nameplateCapacityMW} MW ${plant.fuelSource} facility. Write a 2-3 sentence factual summary of the most relevant recent developments from the past 12 months. Be specific and cite real events.`;
 
   try {
-    const res = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'sonar',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert energy analyst. Provide concise, factual summaries about power plant operations, maintenance, and news. Focus on recent events from the past 12 months.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.2,
-        return_citations: true,
-      })
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+      }
     });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`HTTP ${res.status}: ${errText}`);
-    }
+    const summary = response.text || "No recent information found for this plant.";
 
-    const data = await res.json();
-    const summary = data.choices?.[0]?.message?.content || "No recent information found for this plant.";
-
-    // Perplexity returns citations as an array of URL strings
-    const citationUrls: string[] = data.citations || [];
-    const newsItems: NewsItem[] = citationUrls.map(url => {
-      let host = url;
-      try { host = new URL(url).hostname.replace('www.', ''); } catch {}
-      return { title: host, url, source: host };
-    });
+    // Extract grounding chunks (web sources cited by Gemini)
+    const chunks: any[] = (response as any).candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+    const newsItems: NewsItem[] = chunks
+      .filter((c: any) => c.web?.uri)
+      .map((c: any) => {
+        const url: string = c.web.uri;
+        const title: string = c.web.title || url;
+        let source = url;
+        try { source = new URL(url).hostname.replace('www.', ''); } catch {}
+        return { title, url, source };
+      });
 
     return { summary, items: newsItems };
 
   } catch (error: any) {
     const msg = error?.message || String(error);
-    console.error("Perplexity News Error:", msg);
-    const isAuth = msg.includes('401') || msg.includes('403');
-    const isQuota = msg.includes('429') || msg.includes('quota') || msg.includes('rate');
+    console.error("Gemini News Error:", msg);
+    const isAuth = msg.includes('401') || msg.includes('403') || msg.includes('API_KEY');
+    const isQuota = msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED');
     const friendlyMsg = isAuth
-      ? 'Perplexity API key is invalid or unauthorized. Check your PERPLEXITY_API_KEY.'
+      ? 'Gemini API key is invalid or unauthorized. Check your GEMINI_API_KEY.'
       : isQuota
-      ? 'Perplexity API rate limit reached. Please try again in a moment.'
+      ? 'Gemini API quota reached. Please try again in a moment.'
       : `Unable to fetch news: ${msg}`;
     return { summary: friendlyMsg, items: [] };
   }

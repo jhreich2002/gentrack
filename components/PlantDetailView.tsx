@@ -485,7 +485,7 @@ const PlantDetailView: React.FC<Props> = ({
                     <p className="text-xs text-slate-500 font-medium">Recent operational news and market context</p>
                   </div>
                 </div>
-                <div className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20">Powered by Perplexity</div>
+                <div className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20">Powered by Gemini</div>
               </div>
 
               {loadingNews ? (
@@ -507,7 +507,7 @@ const PlantDetailView: React.FC<Props> = ({
                     <div className="absolute top-0 right-0 p-4 opacity-5 transition-opacity group-hover:opacity-10">
                       <svg className="w-24 h-24" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
                     </div>
-                    <h4 className="text-[10px] font-black text-indigo-400 uppercase mb-3 tracking-widest">Gemini Analysis</h4>
+                    <h4 className="text-[10px] font-black text-indigo-400 uppercase mb-3 tracking-widest">AI News Summary</h4>
                     <p className="text-slate-200 text-sm leading-relaxed font-medium relative z-10">
                       {news?.summary}
                     </p>
