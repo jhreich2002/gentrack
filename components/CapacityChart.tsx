@@ -23,6 +23,17 @@ const CapacityChart: React.FC<Props> = ({ plant, stats, regionalTrend }) => {
 
   const typicalLine = TYPICAL_CAPACITY_FACTORS[plant.fuelSource] * 100;
 
+  const allValues = [
+    ...data.flatMap(d => [d.plantFactor, d.regionalFactor]),
+    typicalLine,
+  ].filter((v): v is number => v !== null);
+  const hasZero = allValues.some(v => v === 0);
+  const minVal = allValues.length > 0 ? Math.min(...allValues) : 0;
+  const maxVal = allValues.length > 0 ? Math.max(...allValues) : 100;
+  const yDomain: [number, number] = allValues.length > 0
+    ? [hasZero ? 0 : Math.max(0, Math.floor(minVal) - 5), Math.min(100, Math.ceil(maxVal) + 5)]
+    : [0, 100];
+
   return (
     <div className="h-72 w-full bg-slate-800/50 rounded-xl p-4 border border-slate-700">
       <h3 className="text-sm font-medium text-slate-400 mb-4">Capacity Factor Trend (%)</h3>
@@ -35,7 +46,7 @@ const CapacityChart: React.FC<Props> = ({ plant, stats, regionalTrend }) => {
             fontSize={10} 
             tickFormatter={(val) => val.split('-')[1] + '/' + val.split('-')[0].slice(2)}
           />
-          <YAxis stroke="#94a3b8" fontSize={10} domain={[0, 100]} />
+          <YAxis stroke="#94a3b8" fontSize={10} domain={yDomain} tickFormatter={(v: number) => `${v}%`} />
           <Tooltip 
             contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', fontSize: '12px' }}
             formatter={(value: number | null, name: string) => [
