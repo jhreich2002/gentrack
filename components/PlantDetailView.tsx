@@ -65,6 +65,19 @@ const PlantDetailView: React.FC<Props> = ({
     };
   });
 
+  // Auto-scale the TTM Y-axis so variance is visually legible.
+  // If any month is 0 (e.g. solar in winter), anchor floor at 0 so the zero
+  // months remain visible; otherwise tighten with ±5-point padding.
+  const ttmAllValues = ttmTrendData
+    .flatMap(d => [d.factor, d.regionalFactor])
+    .filter((v): v is number => v !== null);
+  const ttmHasZero = ttmAllValues.some(v => v === 0);
+  const ttmMin = ttmAllValues.length > 0 ? Math.min(...ttmAllValues) : 0;
+  const ttmMax = ttmAllValues.length > 0 ? Math.max(...ttmAllValues) : 100;
+  const ttmYDomain: [number, number] = ttmAllValues.length > 0
+    ? [ttmHasZero ? 0 : Math.max(0, Math.floor(ttmMin) - 5), Math.min(100, Math.ceil(ttmMax) + 5)]
+    : [0, 100];
+
   return (
     <div className="flex flex-col h-full overflow-y-auto pb-20">
       {/* Header Section */}
@@ -241,7 +254,7 @@ const PlantDetailView: React.FC<Props> = ({
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
                       <XAxis dataKey="month" hide />
-                      <YAxis stroke="#475569" fontSize={10} domain={[0, 100]} tickLine={false} axisLine={false} />
+                      <YAxis stroke="#475569" fontSize={10} domain={ttmYDomain} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} />
                       <Tooltip 
                         contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '10px' }}
                       />
