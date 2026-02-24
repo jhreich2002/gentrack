@@ -77,16 +77,28 @@ export const getGeminiInsights = async (
 };
 
 const NEWS_CACHE_PREFIX = 'gentrack_news_';
+const NEWS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+interface NewsCacheEntry { data: NewsAnalysis; ts: number; }
 
 function getCachedNews(plantId: string): NewsAnalysis | null {
   try {
-    const raw = sessionStorage.getItem(NEWS_CACHE_PREFIX + plantId);
-    return raw ? JSON.parse(raw) : null;
+    const raw = localStorage.getItem(NEWS_CACHE_PREFIX + plantId);
+    if (!raw) return null;
+    const entry: NewsCacheEntry = JSON.parse(raw);
+    if (Date.now() - entry.ts > NEWS_CACHE_TTL_MS) {
+      localStorage.removeItem(NEWS_CACHE_PREFIX + plantId);
+      return null;
+    }
+    return entry.data;
   } catch { return null; }
 }
 
 function setCachedNews(plantId: string, data: NewsAnalysis): void {
-  try { sessionStorage.setItem(NEWS_CACHE_PREFIX + plantId, JSON.stringify(data)); } catch {}
+  try {
+    const entry: NewsCacheEntry = { data, ts: Date.now() };
+    localStorage.setItem(NEWS_CACHE_PREFIX + plantId, JSON.stringify(entry));
+  } catch {}
 }
 
 async function callGeminiNews(ai: GoogleGenAI, prompt: string, useGrounding: boolean): Promise<{ summary: string; items: NewsItem[] }> {

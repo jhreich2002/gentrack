@@ -36,18 +36,14 @@ const PlantDetailView: React.FC<Props> = ({
   const [loadingNews, setLoadingNews] = useState(false);
   const [newsFetched, setNewsFetched] = useState(false);
 
-  // Only fetch news the first time the news tab is opened
-  useEffect(() => {
-    if (activeTab !== 'news' || newsFetched) return;
-    const fetchNews = async () => {
-      setLoadingNews(true);
-      const data = await getPlantNews(plant);
-      setNews(data);
-      setLoadingNews(false);
-      setNewsFetched(true);
-    };
-    fetchNews();
-  }, [activeTab, plant, newsFetched]);
+  const handleLoadNews = async () => {
+    if (loadingNews) return;
+    setLoadingNews(true);
+    const data = await getPlantNews(plant);
+    setNews(data);
+    setLoadingNews(false);
+    setNewsFetched(true);
+  };
 
   const diffFromRegAvg = stats.ttmAverage - regionalAvg;
   const diffFromSubAvg = stats.ttmAverage - subRegionalAvg;
@@ -488,7 +484,28 @@ const PlantDetailView: React.FC<Props> = ({
                 <div className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20">Powered by Gemini</div>
               </div>
 
-              {loadingNews ? (
+              {/* Initial state — show load button */}
+              {!newsFetched && !loadingNews && (
+                <div className="py-20 flex flex-col items-center justify-center space-y-5">
+                  <div className="bg-indigo-600/10 p-5 rounded-2xl border border-indigo-500/20">
+                    <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-slate-300 font-bold text-sm">Fetch live news for {plant.name}</p>
+                    <p className="text-xs text-slate-500 mt-1">Uses Gemini AI with Google Search grounding</p>
+                  </div>
+                  <button
+                    onClick={handleLoadNews}
+                    className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-indigo-900/30 transition-all flex items-center gap-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                    Load News & Intelligence
+                  </button>
+                </div>
+              )}
+
+              {/* Loading spinner */}
+              {loadingNews && (
                 <div className="py-20 flex flex-col items-center justify-center space-y-6">
                   <div className="relative">
                     <div className="w-12 h-12 rounded-full border-2 border-indigo-500/20 border-t-indigo-500 animate-spin"></div>
@@ -498,10 +515,13 @@ const PlantDetailView: React.FC<Props> = ({
                   </div>
                   <div className="text-center">
                     <p className="text-slate-400 font-bold text-sm">Searching for updates on {plant.name}...</p>
-                    <p className="text-xs text-slate-600 mt-1">Fetching maintenance logs and regional curtailment reports</p>
+                    <p className="text-xs text-slate-600 mt-1">Gemini is searching the web — this takes a few seconds</p>
                   </div>
                 </div>
-              ) : (
+              )}
+
+              {/* Results */}
+              {newsFetched && !loadingNews && news && (
                 <div className="space-y-8">
                   <div className="bg-indigo-900/10 p-6 rounded-2xl border border-indigo-500/20 relative overflow-hidden group">
                     <div className="absolute top-0 right-0 p-4 opacity-5 transition-opacity group-hover:opacity-10">
@@ -509,14 +529,14 @@ const PlantDetailView: React.FC<Props> = ({
                     </div>
                     <h4 className="text-[10px] font-black text-indigo-400 uppercase mb-3 tracking-widest">AI News Summary</h4>
                     <p className="text-slate-200 text-sm leading-relaxed font-medium relative z-10">
-                      {news?.summary}
+                      {news.summary}
                     </p>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {news && news.items.length > 0 ? (
+                    {news.items.length > 0 ? (
                       news.items.map((item, idx) => (
-                        <a 
+                        <a
                           key={idx}
                           href={item.url}
                           target="_blank"
@@ -535,6 +555,12 @@ const PlantDetailView: React.FC<Props> = ({
                         <p className="text-xs font-bold italic">No specific news articles indexed for this plant recently.</p>
                       </div>
                     )}
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button onClick={handleLoadNews} className="text-xs text-slate-500 hover:text-slate-300 border border-slate-800 hover:border-slate-600 px-4 py-2 rounded-lg transition-colors">
+                      Refresh
+                    </button>
                   </div>
                 </div>
               )}
