@@ -27,6 +27,7 @@ interface PlantRow {
   ttm_avg_factor: number;
   curtailment_score: number;
   is_likely_curtailed: boolean;
+  is_maintenance_offline: boolean | null;
   last_updated: string;
 }
 
@@ -54,16 +55,18 @@ function rowToPlant(row: PlantRow): PowerPlant {
 }
 
 function rowToStats(row: PlantRow): CapacityFactorStats {
-  // A plant with ttm_avg_factor === 0 had no reported generation in the trailing 12 months.
-  // Treat it as "no recent data" rather than "curtailed" so it doesn't pollute curtailment analysis.
-  const hasNoRecentData = row.ttm_avg_factor === 0;
+  const isMaintenanceOffline = row.is_maintenance_offline ?? false;
+  // "No recent data" = insufficient active months and not a known maintenance outage.
+  // We proxy this from Supabase using ttm_avg_factor === 0 when not maintenance offline.
+  const hasNoRecentData = !isMaintenanceOffline && row.ttm_avg_factor === 0;
   return {
     plantId: row.id,
     monthlyFactors: [],
     ttmAverage: row.ttm_avg_factor,
-    isLikelyCurtailed: hasNoRecentData ? false : row.is_likely_curtailed,
-    curtailmentScore: hasNoRecentData ? 0 : row.curtailment_score,
+    isLikelyCurtailed: (isMaintenanceOffline || hasNoRecentData) ? false : row.is_likely_curtailed,
+    curtailmentScore: (isMaintenanceOffline || hasNoRecentData) ? 0 : row.curtailment_score,
     hasNoRecentData,
+    isMaintenanceOffline,
   };
 }
 
@@ -115,8 +118,7 @@ export const fetchPowerPlants = async (): Promise<FetchPlantsResult> => {
         region: p.region as Region,
         fuelSource: p.fuelSource as FuelSource,
       }));
-      const statsMap: Record<string, CapacityFactorStats> = {};
-      plants.forEach(p => { statsMap[p.id] = calculateCapacityFactorStats(p); });
+      const statsMap = computeAllStats(plants);
       console.log(`[GenTrack] Loaded ${plants.length} plants from static JSON`);
       return { plants, statsMap };
     }
@@ -127,8 +129,7 @@ export const fetchPowerPlants = async (): Promise<FetchPlantsResult> => {
   console.log(`[GenTrack] Using built-in fallback data (${FALLBACK_PLANTS.length} plants)`);
   _dataTimestamp = null;
   const plants = [...FALLBACK_PLANTS];
-  const statsMap: Record<string, CapacityFactorStats> = {};
-  plants.forEach(p => { statsMap[p.id] = calculateCapacityFactorStats(p); });
+  const statsMap = computeAllStats(plants);
   return { plants, statsMap };
 };
 
@@ -169,7 +170,69 @@ export const fetchSubRegionalTrend = async (
   return (data ?? []).map((r: any) => ({ month: r.month, factor: r.avg_factor ?? 0 }));
 };
 
-export const calculateCapacityFactorStats = (plant: PowerPlant): CapacityFactorStats => {
+/**
+ * Build a per-region+fuel monthly average CF map from all plants.
+ * Only months where a plant actually generated (CF > 2%) contribute.
+ * Returns Map< "region-fuel" → Map< "YYYY-MM" → avgCF > >
+ */
+export function computeRegionalMonthlyAverages(
+  plants: PowerPlant[]
+): Map<string, Map<string, number>> {
+  const accum = new Map<string, Map<string, { sum: number; count: number }>>();
+
+  for (const plant of plants) {
+    const key = `${plant.region}-${plant.fuelSource}`;
+    if (!accum.has(key)) accum.set(key, new Map());
+    const monthMap = accum.get(key)!;
+
+    for (const h of plant.generationHistory) {
+      if (h.mwh === null || h.mwh === 0) continue;
+      const [yr, mo] = h.month.split('-').map(Number);
+      const days = new Date(yr, mo, 0).getDate();
+      const max = plant.nameplateCapacityMW * days * 24;
+      if (max <= 0) continue;
+      const cf = Math.min(1, Math.max(0, h.mwh / max));
+      if (cf < 0.02) continue;
+      const prev = monthMap.get(h.month) ?? { sum: 0, count: 0 };
+      monthMap.set(h.month, { sum: prev.sum + cf, count: prev.count + 1 });
+    }
+  }
+
+  const result = new Map<string, Map<string, number>>();
+  for (const [key, monthMap] of accum) {
+    const avgMap = new Map<string, number>();
+    for (const [month, { sum, count }] of monthMap) {
+      avgMap.set(month, sum / count);
+    }
+    result.set(key, avgMap);
+  }
+  return result;
+}
+
+/**
+ * Compute stats for all plants at once, using regional peer averages as the benchmark.
+ * Use this instead of calling calculateCapacityFactorStats per-plant when you have
+ * the full plant list available (static JSON / fallback data paths).
+ */
+export function computeAllStats(plants: PowerPlant[]): Record<string, CapacityFactorStats> {
+  const regionalAvgMaps = computeRegionalMonthlyAverages(plants);
+  const map: Record<string, CapacityFactorStats> = {};
+  for (const plant of plants) {
+    const key = `${plant.region}-${plant.fuelSource}`;
+    map[plant.id] = calculateCapacityFactorStats(plant, regionalAvgMaps.get(key));
+  }
+  return map;
+}
+
+/**
+ * Compute capacity factor stats for a single plant.
+ * Pass `regionalAvgByMonth` (month → avg CF) to use regional peer comparison;
+ * falls back to national typical CF when omitted or incomplete.
+ */
+export const calculateCapacityFactorStats = (
+  plant: PowerPlant,
+  regionalAvgByMonth?: Map<string, number>
+): CapacityFactorStats => {
   const history = plant.generationHistory;
 
   const monthlyFactors = history.map(h => {
@@ -190,21 +253,57 @@ export const calculateCapacityFactorStats = (plant: PowerPlant): CapacityFactorS
     ? ttmData.reduce((acc, curr) => acc + curr.factor, 0) / ttmData.length
     : 0;
 
-  // A plant whose entire TTM window contains only null or 0-MWh months has no reported generation.
-  // Mark it distinctly so it doesn't distort curtailment analysis.
+  // Trailing consecutive zero/null months → planned maintenance or extended offline period
   const ttmRaw = history.slice(-12);
-  const hasNoRecentData = ttmRaw.length === 0 || ttmRaw.every(h => h.mwh === null || h.mwh === 0);
+  let trailingZeroCount = 0;
+  for (let i = ttmRaw.length - 1; i >= 0; i--) {
+    const h = ttmRaw[i];
+    if (h.mwh === null || h.mwh === 0) trailingZeroCount++;
+    else break;
+  }
+  const isMaintenanceOffline = trailingZeroCount >= 3;
 
+  // Active months: months in TTM where the plant was actually generating (CF > 2%)
+  const activeTtmMonths = ttmSlice.filter(
+    (f): f is { month: string; factor: number } => f.factor !== null && f.factor > 0.02
+  );
+  const hasEnoughData = activeTtmMonths.length >= 6;
+
+  // Insufficient signal — not in maintenance, just not enough reporting history
+  const hasNoRecentData = !isMaintenanceOffline && !hasEnoughData;
+
+  // Regional benchmark: average CF for this region+fuel on the same active months
   const typical = TYPICAL_CAPACITY_FACTORS[plant.fuelSource];
-  const isLikelyCurtailed = hasNoRecentData ? false : ttmAverage < typical * 0.7;
-  const curtailmentScore = hasNoRecentData ? 0 : Math.min(100, Math.max(0, ((typical - ttmAverage) / typical) * 100));
+  let regionalRef = typical;
+  if (regionalAvgByMonth && activeTtmMonths.length > 0) {
+    const regionVals = activeTtmMonths
+      .map(f => regionalAvgByMonth.get(f.month))
+      .filter((v): v is number => v !== undefined);
+    if (regionVals.length > 0) {
+      regionalRef = regionVals.reduce((a, b) => a + b, 0) / regionVals.length;
+    }
+  }
+
+  const activeAvgCF = hasEnoughData
+    ? activeTtmMonths.reduce((a, b) => a + b.factor, 0) / activeTtmMonths.length
+    : ttmAverage;
+
+  // Curtailed = generating plant consistently underperforming regional peers by >20%
+  const isLikelyCurtailed =
+    !isMaintenanceOffline && hasEnoughData && activeAvgCF < regionalRef * 0.80;
+
+  const curtailmentScore =
+    isMaintenanceOffline || !hasEnoughData
+      ? 0
+      : Math.round(Math.min(100, Math.max(0, ((regionalRef - activeAvgCF) / regionalRef) * 100)));
 
   return {
     plantId: plant.id,
     monthlyFactors,
     ttmAverage,
     isLikelyCurtailed,
-    curtailmentScore: Math.round(curtailmentScore),
+    curtailmentScore,
     hasNoRecentData,
+    isMaintenanceOffline,
   };
 };

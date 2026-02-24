@@ -57,8 +57,9 @@ export interface CapacityFactorStats {
   monthlyFactors: { month: string; factor: number | null }[]; // null = no EIA data for that month
   ttmAverage: number; // Trailing 12 Month Average
   isLikelyCurtailed: boolean;
-  curtailmentScore: number; // 0 to 100
-  hasNoRecentData: boolean; // true when every TTM month is null or 0 MWh — plant not curtailed, just unreported
+  curtailmentScore: number; // 0 to 100 — deficit vs regional avg on active months
+  hasNoRecentData: boolean; // true when <6 active TTM months and not in maintenance
+  isMaintenanceOffline: boolean; // true when ≥3 trailing consecutive zero/null months (planned outage)
 }
 
 export interface AnalysisResult {

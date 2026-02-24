@@ -192,7 +192,7 @@ const PlantDetailView: React.FC<Props> = ({
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col justify-center items-center text-center shadow-lg relative overflow-hidden group">
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-blue-500/20 to-transparent"></div>
                 <div className="text-[10px] uppercase font-bold text-slate-500 mb-2 tracking-widest">TTM Capacity Factor</div>
-                <div className="text-6xl font-black mb-2 transition-transform group-hover:scale-110 duration-300" style={{ color: stats.hasNoRecentData ? '#64748b' : stats.isLikelyCurtailed ? COLORS.curtailed : COLORS[plant.fuelSource] }}>
+                <div className="text-6xl font-black mb-2 transition-transform group-hover:scale-110 duration-300" style={{ color: stats.isMaintenanceOffline ? '#d97706' : stats.hasNoRecentData ? '#64748b' : stats.isLikelyCurtailed ? COLORS.curtailed : COLORS[plant.fuelSource] }}>
                   {(stats.ttmAverage * 100).toFixed(1)}%
                 </div>
                 <div className="flex flex-col gap-2 mt-4 w-full">
@@ -307,9 +307,11 @@ const PlantDetailView: React.FC<Props> = ({
                 </div>
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Curtailment Risk</div>
-                  {stats.hasNoRecentData
-                    ? <div className="text-2xl font-black text-slate-600">N/A<span className="text-xs opacity-40 ml-1">no data</span></div>
-                    : <div className={`text-2xl font-black ${stats.curtailmentScore > 50 ? 'text-red-500' : 'text-slate-200'}`}>{stats.curtailmentScore}<span className="text-xs opacity-40">/100</span></div>
+                  {stats.isMaintenanceOffline
+                    ? <div className="text-2xl font-black text-amber-500">N/A<span className="text-xs opacity-40 ml-1">maintenance</span></div>
+                    : stats.hasNoRecentData
+                      ? <div className="text-2xl font-black text-slate-600">N/A<span className="text-xs opacity-40 ml-1">no data</span></div>
+                      : <div className={`text-2xl font-black ${stats.curtailmentScore > 50 ? 'text-red-500' : 'text-slate-200'}`}>{stats.curtailmentScore}<span className="text-xs opacity-40">/100</span></div>
                   }
                   <div className="text-[10px] text-slate-600 font-medium">Internal Algorithm</div>
                 </div>

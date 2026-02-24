@@ -15,6 +15,8 @@ interface Props {
   setShowOnlyCurtailed: (b: boolean) => void;
   hideNoData: boolean;
   setHideNoData: (b: boolean) => void;
+  hideMaintenance: boolean;
+  setHideMaintenance: (b: boolean) => void;
 }
 
 const FilterControls: React.FC<Props> = ({
@@ -29,6 +31,8 @@ const FilterControls: React.FC<Props> = ({
   setShowOnlyCurtailed,
   hideNoData,
   setHideNoData,
+  hideMaintenance,
+  setHideMaintenance,
 }) => {
   const toggleFuel = (fuel: FuelSource) => {
     setSelectedFuels(selectedFuels.includes(fuel) 
@@ -119,6 +123,16 @@ const FilterControls: React.FC<Props> = ({
             }`}
           >
             {hideNoData ? '✕ NO DATA HIDDEN' : 'SHOW NO DATA'}
+          </button>
+          <button 
+            onClick={() => setHideMaintenance(!hideMaintenance)}
+            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all border ${
+              hideMaintenance 
+                ? 'bg-amber-900/30 border-amber-500 text-amber-400 shadow-[0_0_12px_rgba(217,119,6,0.15)]' 
+                : 'bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-600'
+            }`}
+          >
+            {hideMaintenance ? '✕ MAINTENANCE HIDDEN' : 'SHOW MAINTENANCE'}
           </button>
         </div>
       </div>

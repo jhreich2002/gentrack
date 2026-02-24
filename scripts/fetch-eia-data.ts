@@ -496,7 +496,37 @@ async function main() {
   // ─── Compute pre-aggregated stats for each plant ─────────────────
   const TYPICAL: Record<string, number> = { Solar: 0.22, Wind: 0.35, Nuclear: 0.92 };
 
-  function computeStats(plant: PowerPlant) {
+  // First pass: build regional monthly average CF from all plants (only active months, CF > 2%).
+  // Key: "region-fuelSource" → Map<"YYYY-MM", avgCF>
+  function buildRegionalAvgMaps(plants: PowerPlant[]): Map<string, Map<string, number>> {
+    const accum = new Map<string, Map<string, { sum: number; count: number }>>();
+    for (const plant of plants) {
+      const key = `${plant.region}-${plant.fuelSource}`;
+      if (!accum.has(key)) accum.set(key, new Map());
+      const monthMap = accum.get(key)!;
+      for (const h of plant.generationHistory) {
+        if (h.mwh === null || h.mwh === 0) continue;
+        const [yr, mo] = h.month.split('-').map(Number);
+        const days = new Date(yr, mo, 0).getDate();
+        const max = plant.nameplateCapacityMW * days * 24;
+        if (max <= 0) continue;
+        const cf = Math.min(1, Math.max(0, h.mwh / max));
+        if (cf < 0.02) continue;
+        const prev = monthMap.get(h.month) ?? { sum: 0, count: 0 };
+        monthMap.set(h.month, { sum: prev.sum + cf, count: prev.count + 1 });
+      }
+    }
+    const result = new Map<string, Map<string, number>>();
+    for (const [key, monthMap] of accum) {
+      const avgMap = new Map<string, number>();
+      for (const [month, { sum, count }] of monthMap) avgMap.set(month, sum / count);
+      result.set(key, avgMap);
+    }
+    return result;
+  }
+
+  // Second pass: score each plant against its regional peers.
+  function computeStats(plant: PowerPlant, regionalAvgByMonth?: Map<string, number>) {
     const history = plant.generationHistory;
     const monthlyFactors = history.map(h => {
       if (h.mwh === null) return null;
@@ -505,14 +535,48 @@ async function main() {
       const max = plant.nameplateCapacityMW * days * 24;
       return max > 0 ? Math.min(1, Math.max(0, h.mwh / max)) : 0;
     });
-    const ttmSlice = history.slice(-12);
-    const ttmData = monthlyFactors.slice(-12).filter((f): f is number => f !== null);
+    const ttmRaw = history.slice(-12);
+    const ttmFactors = monthlyFactors.slice(-12);
+    const ttmData = ttmFactors.filter((f): f is number => f !== null);
     const ttmAvg = ttmData.length > 0 ? ttmData.reduce((a, b) => a + b, 0) / ttmData.length : 0;
-    // Plant with no reported MWh at all should not be flagged as curtailed
-    const hasNoRecentData = ttmSlice.length === 0 || ttmSlice.every(h => h.mwh === null || h.mwh === 0);
+
+    // Trailing consecutive zero/null months → planned maintenance / known offline
+    let trailingZeroCount = 0;
+    for (let i = ttmRaw.length - 1; i >= 0; i--) {
+      const h = ttmRaw[i];
+      if (h.mwh === null || h.mwh === 0) trailingZeroCount++;
+      else break;
+    }
+    const isMaintenanceOffline = trailingZeroCount >= 3;
+
+    // Active months in TTM (plant was generating, CF > 2%)
+    const activeTtmMonths = ttmRaw
+      .map((h, i) => ({ month: h.month, factor: ttmFactors[i] }))
+      .filter((m): m is { month: string; factor: number } => m.factor !== null && m.factor > 0.02);
+    const hasEnoughData = activeTtmMonths.length >= 6;
+
+    // Regional benchmark: avg CF for this region+fuel on the plant's active months
     const typical = TYPICAL[plant.fuelSource] ?? 0.3;
-    const score = hasNoRecentData ? 0 : Math.round(Math.min(100, Math.max(0, ((typical - ttmAvg) / typical) * 100)));
-    return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed: hasNoRecentData ? false : ttmAvg < typical * 0.7 };
+    let regionalRef = typical;
+    if (regionalAvgByMonth && activeTtmMonths.length > 0) {
+      const regionVals = activeTtmMonths
+        .map(m => regionalAvgByMonth.get(m.month))
+        .filter((v): v is number => v !== undefined);
+      if (regionVals.length > 0) {
+        regionalRef = regionVals.reduce((a, b) => a + b, 0) / regionVals.length;
+      }
+    }
+
+    const activeAvgCF = hasEnoughData
+      ? activeTtmMonths.reduce((a, b) => a + b.factor, 0) / activeTtmMonths.length
+      : ttmAvg;
+
+    const isLikelyCurtailed = !isMaintenanceOffline && hasEnoughData && activeAvgCF < regionalRef * 0.80;
+    const score = isMaintenanceOffline || !hasEnoughData
+      ? 0
+      : Math.round(Math.min(100, Math.max(0, ((regionalRef - activeAvgCF) / regionalRef) * 100)));
+
+    return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed, isMaintenanceOffline };
   }
 
   // ─── Write output ────────────────────────────────────────────────
@@ -541,9 +605,13 @@ async function main() {
     const db = createClient(SUPABASE_URL, SUPABASE_KEY);
     const now = new Date().toISOString();
 
+    // Build regional avg maps once for all plants, then score each plant against its peers
+    const regionalAvgMaps = buildRegionalAvgMaps(finalPlants);
+
     // Build plant rows
     const plantRows = finalPlants.map(p => {
-      const s = computeStats(p);
+      const key = `${p.region}-${p.fuelSource}`;
+      const s = computeStats(p, regionalAvgMaps.get(key));
       return {
         id: p.id,
         eia_plant_code: p.eiaPlantCode,
@@ -562,6 +630,7 @@ async function main() {
         ttm_avg_factor: s.ttmAvgFactor,
         curtailment_score: s.curtailmentScore,
         is_likely_curtailed: s.isLikelyCurtailed,
+        is_maintenance_offline: s.isMaintenanceOffline,
         last_updated: now,
       };
     });
