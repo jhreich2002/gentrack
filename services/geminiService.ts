@@ -76,59 +76,93 @@ export const getGeminiInsights = async (
   }
 };
 
+const NEWS_CACHE_PREFIX = 'gentrack_news_';
+
+function getCachedNews(plantId: string): NewsAnalysis | null {
+  try {
+    const raw = sessionStorage.getItem(NEWS_CACHE_PREFIX + plantId);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function setCachedNews(plantId: string, data: NewsAnalysis): void {
+  try { sessionStorage.setItem(NEWS_CACHE_PREFIX + plantId, JSON.stringify(data)); } catch {}
+}
+
+async function callGeminiNews(ai: GoogleGenAI, prompt: string, useGrounding: boolean): Promise<{ summary: string; items: NewsItem[] }> {
+  const config: any = useGrounding ? { tools: [{ googleSearch: {} }] } : {};
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.0-flash',
+    contents: prompt,
+    config,
+  });
+
+  const summary = response.text || 'No recent information found for this plant.';
+  const chunks: any[] = useGrounding
+    ? ((response as any).candidates?.[0]?.groundingMetadata?.groundingChunks ?? [])
+    : [];
+  const items: NewsItem[] = chunks
+    .filter((c: any) => c.web?.uri)
+    .map((c: any) => {
+      const url: string = c.web.uri;
+      const title: string = c.web.title || url;
+      let source = url;
+      try { source = new URL(url).hostname.replace('www.', ''); } catch {}
+      return { title, url, source };
+    });
+
+  return { summary, items };
+}
+
 /**
  * Searches for recent news and operational updates for a specific power plant
  * using Gemini 2.0 Flash with Google Search grounding (live web search with citations).
+ * Results are cached in sessionStorage to avoid redundant API calls.
  */
 export const getPlantNews = async (plant: PowerPlant): Promise<NewsAnalysis> => {
-  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+  // Return cached result immediately if available
+  const cached = getCachedNews(plant.id);
+  if (cached) return cached;
 
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return {
-      summary: "Gemini API key is not configured. Add GEMINI_API_KEY to your .env file.",
+      summary: 'Gemini API key is not configured. Add GEMINI_API_KEY to your .env file.',
       items: []
     };
   }
 
   const ai = new GoogleGenAI({ apiKey });
+  const prompt = `You are an expert energy analyst. Summarize recent news, operational updates, maintenance events, outages, or regulatory filings for the power plant "${plant.name}" (EIA plant code ${plant.eiaPlantCode}), owned by "${plant.owner}", located in ${plant.county ? `${plant.county} county, ` : ''}${plant.location.state}. It is a ${plant.nameplateCapacityMW} MW ${plant.fuelSource} facility. Write 2-3 sentences covering the most relevant developments from the past 12 months. Be specific and factual.`;
 
-  const prompt = `You are an expert energy analyst with access to live web search. Find recent news, operational updates, maintenance events, outages, or regulatory filings for the power plant "${plant.name}" (EIA plant code ${plant.eiaPlantCode}), owned by "${plant.owner}", located in ${plant.county ? `${plant.county} county, ` : ''}${plant.location.state}. It is a ${plant.nameplateCapacityMW} MW ${plant.fuelSource} facility. Write a 2-3 sentence factual summary of the most relevant recent developments from the past 12 months. Be specific and cite real events.`;
+  const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
+  // Attempt 1: grounded search
+  // Attempt 2 (on quota error): grounded search after 3s backoff
+  // Attempt 3 (on quota error): plain Gemini without grounding
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const useGrounding = attempt < 2;
+    try {
+      if (attempt === 1) await delay(3000);
+      const result = await callGeminiNews(ai, prompt, useGrounding);
+      const newsAnalysis: NewsAnalysis = { summary: result.summary, items: result.items };
+      setCachedNews(plant.id, newsAnalysis);
+      return newsAnalysis;
+    } catch (error: any) {
+      const msg: string = error?.message || String(error);
+      const isQuota = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota');
+      const isAuth  = msg.includes('401') || msg.includes('403') || msg.includes('API_KEY');
+      console.warn(`Gemini News attempt ${attempt + 1} failed:`, msg);
+
+      if (isAuth) {
+        return { summary: 'Gemini API key is invalid or unauthorized. Check your GEMINI_API_KEY.', items: [] };
       }
-    });
-
-    const summary = response.text || "No recent information found for this plant.";
-
-    // Extract grounding chunks (web sources cited by Gemini)
-    const chunks: any[] = (response as any).candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
-    const newsItems: NewsItem[] = chunks
-      .filter((c: any) => c.web?.uri)
-      .map((c: any) => {
-        const url: string = c.web.uri;
-        const title: string = c.web.title || url;
-        let source = url;
-        try { source = new URL(url).hostname.replace('www.', ''); } catch {}
-        return { title, url, source };
-      });
-
-    return { summary, items: newsItems };
-
-  } catch (error: any) {
-    const msg = error?.message || String(error);
-    console.error("Gemini News Error:", msg);
-    const isAuth = msg.includes('401') || msg.includes('403') || msg.includes('API_KEY');
-    const isQuota = msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED');
-    const friendlyMsg = isAuth
-      ? 'Gemini API key is invalid or unauthorized. Check your GEMINI_API_KEY.'
-      : isQuota
-      ? 'Gemini API quota reached. Please try again in a moment.'
-      : `Unable to fetch news: ${msg}`;
-    return { summary: friendlyMsg, items: [] };
+      if (!isQuota || attempt === 2) {
+        return { summary: `Unable to fetch news: ${msg}`, items: [] };
+      }
+      // isQuota && attempt < 2 → loop continues with backoff/fallback
+    }
   }
+
+  return { summary: 'Unable to fetch news after multiple attempts. Please try again later.', items: [] };
 };
