@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { PowerPlant, CapacityFactorStats, FuelSource, NewsAnalysis, PlantOwner } from '../types';
-import { COLORS, TYPICAL_CAPACITY_FACTORS } from '../constants';
+import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } from '../constants';
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
 import { getPlantNews } from '../services/geminiService';
@@ -57,12 +57,12 @@ const PlantDetailView: React.FC<Props> = ({
     { name: 'National Typical', value: Math.round(TYPICAL_CAPACITY_FACTORS[plant.fuelSource] * 100), color: '#334155' },
   ];
 
-  // Prepare focused TTM data for the overview spark-graph
-  const ttmTrendData = stats.monthlyFactors.slice(-12).map(f => {
+  // Prepare full-history data for the overview spark-graph (Jan 2024 → present)
+  const ttmTrendData = stats.monthlyFactors.map(f => {
     const regionalPoint = regionalTrend?.find(rt => rt.month === f.month);
     const subRegionalPoint = subRegionalTrend?.find(rt => rt.month === f.month);
     return {
-      month: f.month.split('-')[1],
+      month: f.month,
       factor: f.factor !== null ? Math.round(f.factor * 100) : null,
       regionalFactor: regionalPoint ? Math.round(regionalPoint.factor * 100) : null,
       subRegionalFactor: subRegionalPoint ? Math.round(subRegionalPoint.factor * 100) : null,
@@ -237,7 +237,7 @@ const PlantDetailView: React.FC<Props> = ({
                 <div className="flex items-center justify-between mb-6">
                   <div>
                     <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Capacity Factor vs Regional Average</h3>
-                    <p className="text-[10px] text-slate-600 font-bold">TRAILING 12 MONTHS — {plant.fuelSource.toUpperCase()} PEERS IN {plant.region.toUpperCase()}</p>
+                    <p className="text-[10px] text-slate-600 font-bold">JAN 2024 — PRESENT — {plant.fuelSource.toUpperCase()} PEERS IN {plant.region.toUpperCase()}</p>
                   </div>
                   <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2">
@@ -264,10 +264,11 @@ const PlantDetailView: React.FC<Props> = ({
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                      <XAxis dataKey="month" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+                      <XAxis dataKey="month" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} tickFormatter={formatMonthYear} interval={2} />
                       <YAxis stroke="#475569" fontSize={10} domain={ttmYDomain} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} />
                       <Tooltip 
                         contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '10px' }}
+                        labelFormatter={(label: string) => formatMonthYear(label)}
                         formatter={(value: number | null, name: string) => [
                           value !== null ? `${value}%` : 'N/A',
                           name === 'factor' ? plant.name : name === 'subRegionalFactor' ? `${plant.subRegion} Avg` : `${plant.region} Avg`
@@ -400,10 +401,18 @@ const PlantDetailView: React.FC<Props> = ({
         )}
 
         {activeTab === 'generation' && (() => {
-          const genData = plant.generationHistory.map(g => ({
-            name: g.month.split('-')[1] + '/' + g.month.split('-')[0].slice(2),
-            mwh: g.mwh,
-          }));
+          // Expand to full EIA range (Jan 2024 → latest reported month), null = not in EIA database
+          const genHistMap = new Map(plant.generationHistory.map(g => [g.month, g.mwh]));
+          const latestGenMonth = plant.generationHistory.length > 0
+            ? plant.generationHistory[plant.generationHistory.length - 1].month
+            : EIA_START_MONTH;
+          const genData: { name: string; mwh: number | null }[] = [];
+          let genCursor = EIA_START_MONTH;
+          while (genCursor <= latestGenMonth) {
+            genData.push({ name: genCursor, mwh: genHistMap.has(genCursor) ? (genHistMap.get(genCursor) ?? null) : null });
+            const [gy, gm] = genCursor.split('-').map(Number);
+            genCursor = gm === 12 ? `${gy + 1}-01` : `${gy}-${String(gm + 1).padStart(2, '0')}`;
+          }
           const nonNullMwh = plant.generationHistory
             .filter(g => g.mwh !== null)
             .map(g => g.mwh as number);
@@ -440,7 +449,8 @@ const PlantDetailView: React.FC<Props> = ({
                         fontSize={9}
                         tickLine={false}
                         axisLine={false}
-                        interval="preserveStartEnd"
+                        interval={2}
+                        tickFormatter={formatMonthYear}
                       />
                       <YAxis
                         stroke="#475569"
@@ -453,6 +463,7 @@ const PlantDetailView: React.FC<Props> = ({
                       <Tooltip
                         cursor={{ fill: 'rgba(255,255,255,0.04)' }}
                         contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '11px' }}
+                        labelFormatter={(label: string) => formatMonthYear(label)}
                         formatter={(value: number | null) => [
                           value !== null ? `${value.toLocaleString()} MWh` : 'N/A',
                           'Generation'
@@ -476,7 +487,7 @@ const PlantDetailView: React.FC<Props> = ({
                       {peakMwh !== null ? `${Math.round(peakMwh).toLocaleString()} MWh` : 'N/A'}
                     </div>
                     <div className="text-[9px] text-slate-600 mt-1">
-                      {peakMonth ? peakMonth.split('-')[1] + '/' + peakMonth.split('-')[0].slice(2) : ''}
+                      {peakMonth ? formatMonthYear(peakMonth) : ''}
                     </div>
                   </div>
                   <div className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">

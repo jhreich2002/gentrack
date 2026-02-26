@@ -59,3 +59,15 @@ export const COLORS: Record<string, string> = {
   curtailed: '#f87171',
   normal: '#94a3b8'
 };
+
+// First month of available EIA generation data
+export const EIA_START_MONTH = '2024-01';
+
+/**
+ * Format a YYYY-MM string as a short month + year label, e.g. "Jan 2024".
+ * Safe for use in Recharts tickFormatter and labelFormatter.
+ */
+export function formatMonthYear(yyyyMm: string): string {
+  const [year, month] = yyyyMm.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+}

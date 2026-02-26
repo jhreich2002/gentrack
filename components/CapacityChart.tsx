@@ -2,7 +2,7 @@
 import React from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from 'recharts';
 import { CapacityFactorStats, PowerPlant } from '../types';
-import { TYPICAL_CAPACITY_FACTORS, COLORS } from '../constants';
+import { TYPICAL_CAPACITY_FACTORS, COLORS, formatMonthYear } from '../constants';
 
 interface Props {
   plant: PowerPlant;
@@ -44,11 +44,13 @@ const CapacityChart: React.FC<Props> = ({ plant, stats, regionalTrend }) => {
             dataKey="name" 
             stroke="#94a3b8" 
             fontSize={10} 
-            tickFormatter={(val) => val.split('-')[1] + '/' + val.split('-')[0].slice(2)}
+            tickFormatter={formatMonthYear}
+            interval={2}
           />
           <YAxis stroke="#94a3b8" fontSize={10} domain={yDomain} tickFormatter={(v: number) => `${v}%`} />
           <Tooltip 
             contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', fontSize: '12px' }}
+            labelFormatter={(label: string) => formatMonthYear(label)}
             formatter={(value: number | null, name: string) => [
               value !== null ? `${value}%` : 'N/A',
               name

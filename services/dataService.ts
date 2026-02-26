@@ -1,5 +1,5 @@
 import { PowerPlant, Region, FuelSource, CapacityFactorStats, MonthlyGeneration } from '../types';
-import { TYPICAL_CAPACITY_FACTORS } from '../constants';
+import { TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH } from '../constants';
 import { FALLBACK_PLANTS } from './fallbackData';
 import { supabase } from './supabaseClient';
 
@@ -237,7 +237,7 @@ export const calculateCapacityFactorStats = (
 ): CapacityFactorStats => {
   const history = plant.generationHistory;
 
-  const monthlyFactors = history.map(h => {
+  const rawFactors = history.map(h => {
     if (h.mwh === null) return { month: h.month, factor: null };
     const [yearStr, monthStr] = h.month.split('-');
     const year = parseInt(yearStr, 10);
@@ -248,6 +248,18 @@ export const calculateCapacityFactorStats = (
     const factor = maxGeneration > 0 ? h.mwh / maxGeneration : 0;
     return { month: h.month, factor: Math.min(Math.max(factor, 0), 1) };
   });
+
+  // Expand to full EIA range (EIA_START_MONTH → latest month in data),
+  // filling any missing months as null (not reported / not in EIA database).
+  const rawFactorMap = new Map(rawFactors.map(f => [f.month, f]));
+  const latestMonth = rawFactors.length > 0 ? rawFactors[rawFactors.length - 1].month : EIA_START_MONTH;
+  const monthlyFactors: { month: string; factor: number | null }[] = [];
+  let cursor = EIA_START_MONTH;
+  while (cursor <= latestMonth) {
+    monthlyFactors.push(rawFactorMap.get(cursor) ?? { month: cursor, factor: null });
+    const [cy, cm] = cursor.split('-').map(Number);
+    cursor = cm === 12 ? `${cy + 1}-01` : `${cy}-${String(cm + 1).padStart(2, '0')}`;
+  }
 
   const ttmSlice = monthlyFactors.slice(-12);
   const ttmData = ttmSlice.filter((f): f is { month: string; factor: number } => f.factor !== null);
