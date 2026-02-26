@@ -576,7 +576,7 @@ async function main() {
       ? 0
       : Math.round(Math.min(100, Math.max(0, ((regionalRef - activeAvgCF) / regionalRef) * 100)));
 
-    return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed, isMaintenanceOffline };
+    return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed, isMaintenanceOffline, trailingZeroMonths: trailingZeroCount };
   }
 
   // ─── Write output ────────────────────────────────────────────────
@@ -631,6 +631,7 @@ async function main() {
         curtailment_score: s.curtailmentScore,
         is_likely_curtailed: s.isLikelyCurtailed,
         is_maintenance_offline: s.isMaintenanceOffline,
+        trailing_zero_months: s.trailingZeroMonths,
         last_updated: now,
       };
     });

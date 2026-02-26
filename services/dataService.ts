@@ -28,6 +28,7 @@ interface PlantRow {
   curtailment_score: number;
   is_likely_curtailed: boolean;
   is_maintenance_offline: boolean | null;
+  trailing_zero_months: number | null;
   last_updated: string;
 }
 
@@ -67,6 +68,7 @@ function rowToStats(row: PlantRow): CapacityFactorStats {
     curtailmentScore: (isMaintenanceOffline || hasNoRecentData) ? 0 : row.curtailment_score,
     hasNoRecentData,
     isMaintenanceOffline,
+    trailingZeroMonths: row.trailing_zero_months ?? 0,
   };
 }
 
@@ -305,5 +307,6 @@ export const calculateCapacityFactorStats = (
     curtailmentScore,
     hasNoRecentData,
     isMaintenanceOffline,
+    trailingZeroMonths: trailingZeroCount,
   };
 };

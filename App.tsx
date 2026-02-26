@@ -34,9 +34,9 @@ const App: React.FC = () => {
   const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
   const [selectedSubRegions, setSelectedSubRegions] = useState<string[]>([]);
   const [search, setSearch] = useState('');
-  const [showOnlyCurtailed, setShowOnlyCurtailed] = useState(false);
-  const [hideNoData, setHideNoData] = useState(false);
-  const [hideMaintenance, setHideMaintenance] = useState(false);
+  const [dataGapThreshold, setDataGapThreshold] = useState<number | null>(null);
+  const [minCurtailmentLag, setMinCurtailmentLag] = useState<number>(0);
+  const [maxCFThreshold, setMaxCFThreshold] = useState<number | null>(null);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -139,11 +139,18 @@ const App: React.FC = () => {
         p.owner.toLowerCase().includes(search.toLowerCase()) ||
         p.location?.state?.toLowerCase().includes(search.toLowerCase()) ||
         p.county?.toLowerCase().includes(search.toLowerCase());
-      const curtailmentMatch = showOnlyCurtailed ? statsMap[p.id]?.isLikelyCurtailed : true;
-      const noDataMatch = hideNoData ? !statsMap[p.id]?.hasNoRecentData : true;
-      const maintenanceMatch = hideMaintenance ? !statsMap[p.id]?.isMaintenanceOffline : true;
+      const stats = statsMap[p.id];
+      const gapMatch = dataGapThreshold === null
+        ? true
+        : (stats?.trailingZeroMonths ?? 0) < dataGapThreshold;
+      const lagMatch = minCurtailmentLag === 0
+        ? true
+        : (stats?.isLikelyCurtailed && (stats?.curtailmentScore ?? 0) >= minCurtailmentLag);
+      const cfMatch = maxCFThreshold === null
+        ? true
+        : (stats?.ttmAverage ?? 0) * 100 <= maxCFThreshold;
       
-      return regionMatch && subRegionMatch && fuelMatch && searchMatch && curtailmentMatch && noDataMatch && maintenanceMatch;
+      return regionMatch && subRegionMatch && fuelMatch && searchMatch && gapMatch && lagMatch && cfMatch;
     });
 
     result.sort((a, b) => {
@@ -160,12 +167,12 @@ const App: React.FC = () => {
     });
 
     return result;
-  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, showOnlyCurtailed, hideNoData, hideMaintenance, statsMap, sortKey, sortDesc, watchlist]);
+  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, dataGapThreshold, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, selectedFuels, selectedSubRegions, search, showOnlyCurtailed, hideNoData, hideMaintenance, sortKey, sortDesc]);
+  }, [activeTab, selectedFuels, selectedSubRegions, search, dataGapThreshold, minCurtailmentLag, maxCFThreshold, sortKey, sortDesc]);
 
   // Paginated slice
   const totalPages = Math.max(1, Math.ceil(filteredPlants.length / PAGE_SIZE));
@@ -181,7 +188,7 @@ const App: React.FC = () => {
     
     const totalCapacity = watchedPlants.reduce((acc, p) => acc + p.nameplateCapacityMW, 0);
     const avgFactor = watchedPlants.reduce((acc, p) => acc + (statsMap[p.id]?.ttmAverage || 0), 0) / watchedPlants.length;
-    const curtailedCount = watchedPlants.filter(p => statsMap[p.id]?.isLikelyCurtailed && !statsMap[p.id]?.hasNoRecentData && !statsMap[p.id]?.isMaintenanceOffline).length;
+    const curtailedCount = watchedPlants.filter(p => statsMap[p.id]?.isLikelyCurtailed).length;
     
     return { totalCapacity, avgFactor, curtailedCount, count: watchedPlants.length };
   }, [plants, watchlist, statsMap]);
@@ -331,12 +338,12 @@ const App: React.FC = () => {
               setSelectedSubRegions={setSelectedSubRegions}
               search={search}
               setSearch={setSearch}
-              showOnlyCurtailed={showOnlyCurtailed}
-              setShowOnlyCurtailed={setShowOnlyCurtailed}
-              hideNoData={hideNoData}
-              setHideNoData={setHideNoData}
-              hideMaintenance={hideMaintenance}
-              setHideMaintenance={setHideMaintenance}
+              dataGapThreshold={dataGapThreshold}
+              setDataGapThreshold={setDataGapThreshold}
+              minCurtailmentLag={minCurtailmentLag}
+              setMinCurtailmentLag={setMinCurtailmentLag}
+              maxCFThreshold={maxCFThreshold}
+              setMaxCFThreshold={setMaxCFThreshold}
             />
 
             {/* Overview Summary */}

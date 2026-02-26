@@ -60,6 +60,7 @@ export interface CapacityFactorStats {
   curtailmentScore: number; // 0 to 100 — deficit vs regional avg on active months
   hasNoRecentData: boolean; // true when <6 active TTM months and not in maintenance
   isMaintenanceOffline: boolean; // true when ≥3 trailing consecutive zero/null months (planned outage)
+  trailingZeroMonths: number; // count of consecutive trailing zero/null months
 }
 
 export interface AnalysisResult {
