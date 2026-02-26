@@ -3,12 +3,16 @@ import { PowerPlant, Region, FuelSource, CapacityFactorStats, AnalysisResult } f
 import { REGIONS, FUEL_SOURCES, COLORS, SUBREGIONS } from './constants';
 import { fetchPowerPlants, fetchGenerationHistory, fetchRegionalTrend, fetchSubRegionalTrend, calculateCapacityFactorStats, getDataTimestamp } from './services/dataService';
 import { getGeminiInsights } from './services/geminiService';
+import { onAuthStateChange, getProfile, fetchWatchlist, addToWatchlist, removeFromWatchlist, signOut } from './services/authService';
+import { supabase } from './services/supabaseClient';
 import CapacityChart from './components/CapacityChart';
 import RegionalComparison from './components/RegionalComparison';
 import PlantDetailView from './components/PlantDetailView';
 import FilterControls from './components/FilterControls';
+import CoverPage from './components/CoverPage';
+import AdminPage from './components/AdminPage';
 
-type View = 'dashboard' | 'detail';
+type View = 'dashboard' | 'detail' | 'admin';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor';
 
@@ -19,11 +23,13 @@ const App: React.FC = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const [insights, setInsights] = useState<AnalysisResult | null>(null);
 
-  // Persistence for Watchlist
-  const [watchlist, setWatchlist] = useState<string[]>(() => {
-    const saved = localStorage.getItem('plant_watchlist');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Persistence for Watchlist (synced to Supabase when logged in)
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+
+  // Auth state
+  const [session, setSession] = useState<any>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   // View & Tab State
   const [view, setView] = useState<View>('dashboard');
@@ -93,9 +99,27 @@ const App: React.FC = () => {
     }
   };
 
+  // Auth: restore session, sync role and watchlist from Supabase
   useEffect(() => {
-    localStorage.setItem('plant_watchlist', JSON.stringify(watchlist));
-  }, [watchlist]);
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      if (!data.session) setAuthLoading(false);
+    });
+    const sub = onAuthStateChange(async (sess) => {
+      setSession(sess);
+      setAuthLoading(false);
+      if (sess) {
+        const profile = await getProfile(sess.user.id);
+        setUserRole(profile?.role ?? 'user');
+        try { const wl = await fetchWatchlist(sess.user.id); setWatchlist(wl); }
+        catch { setWatchlist([]); }
+      } else {
+        setUserRole(null);
+        setWatchlist([]);
+      }
+    });
+    return () => sub.unsubscribe();
+  }, []);
 
   useEffect(() => {
     const init = async () => {
@@ -200,9 +224,18 @@ const App: React.FC = () => {
 
   const toggleWatch = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    setWatchlist(prev => 
-      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
-    );
+    if (!session) return;
+    const userId = session.user.id;
+    setWatchlist(prev => {
+      const isWatched = prev.includes(id);
+      if (isWatched) {
+        removeFromWatchlist(userId, id).catch(console.error);
+        return prev.filter(i => i !== id);
+      } else {
+        addToWatchlist(userId, id).catch(console.error);
+        return [...prev, id];
+      }
+    });
   };
 
   const handleGenerateInsights = async () => {
@@ -224,6 +257,35 @@ const App: React.FC = () => {
     const ttm = subRegionalTrend.slice(-12);
     return ttm.length > 0 ? ttm.reduce((acc, curr) => acc + curr.factor, 0) / ttm.length : 0;
   }, [subRegionalTrend]);
+
+  if (authLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-950">
+        <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <CoverPage />;
+  }
+
+  if (userRole === 'blocked') {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-950 flex-col gap-6 text-center px-6">
+        <div className="w-16 h-16 rounded-full bg-red-900/20 border border-red-500/20 flex items-center justify-center">
+          <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+        </div>
+        <div>
+          <h2 className="text-xl font-black text-white mb-2">Account Suspended</h2>
+          <p className="text-slate-500 text-sm max-w-sm">Your account has been suspended. Please contact the administrator.</p>
+        </div>
+        <button onClick={() => signOut()} className="px-6 py-2.5 rounded-xl border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 text-sm font-bold transition-all">
+          Sign Out
+        </button>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -303,10 +365,42 @@ const App: React.FC = () => {
             </button>
           ))}
         </nav>
+
+        {/* User info + admin link + sign out */}
+        <div className="p-4 border-t border-slate-800 space-y-1">
+          {userRole === 'admin' && (
+            <button
+              onClick={() => setView('admin')}
+              className={`w-full text-left px-4 py-3 rounded-xl transition-all duration-200 flex items-center gap-3 ${
+                view === 'admin'
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/20'
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+              }`}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+              <span className="text-sm font-semibold">Admin</span>
+            </button>
+          )}
+          <div className="px-4 py-3 flex items-center justify-between">
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Signed in as</div>
+              <div className="text-xs text-slate-400 font-medium truncate mt-0.5">{session?.user?.email}</div>
+            </div>
+            <button
+              onClick={() => signOut()}
+              className="ml-3 p-2 rounded-lg text-slate-600 hover:text-red-400 hover:bg-slate-800 transition-colors flex-shrink-0"
+              title="Sign Out"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+            </button>
+          </div>
+        </div>
       </aside>
 
       <main className="flex-1 overflow-y-auto bg-slate-950 p-8 custom-scrollbar relative">
-        {view === 'dashboard' ? (
+        {view === 'admin' && userRole === 'admin' ? (
+          <AdminPage currentUserId={session.user.id} onBack={() => setView('dashboard')} />
+        ) : view === 'dashboard' ? (
           <>
             <header className="flex justify-between items-start mb-8">
               <div>
