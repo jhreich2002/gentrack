@@ -80,6 +80,37 @@ export interface NewsAnalysis {
   items: NewsItem[];
 }
 
+// ── News Intelligence ────────────────────────────────────────────────────────
+
+/** A single stored news article from the news_articles Supabase table. */
+export interface NewsArticle {
+  id:             string;
+  title:          string;
+  description:    string | null;
+  url:            string;
+  sourceName:     string | null;
+  publishedAt:    string;           // ISO-8601 timestamp
+  topics:         string[];         // outage | regulatory | financial | weather | construction | other
+  sentimentLabel: 'positive' | 'negative' | 'neutral' | null;
+}
+
+/** Precomputed risk rating from the plant_news_ratings Supabase table. */
+export interface PlantNewsRating {
+  eiaPlantCode:  string;
+  articles30d:   number;
+  negative30d:   number;
+  outage30d:     number;
+  articles90d:   number;
+  negative90d:   number;
+  outage90d:     number;
+  articles365d:  number;
+  negative365d:  number;
+  outage365d:    number;
+  newsRiskScore: number;   // 0–100 composite score
+  topArticleIds: string[];
+  computedAt:    string;   // ISO-8601 timestamp
+}
+
 export interface PlantOwnership {
   eiaPlantCode:                 string;
   powerPlant:                   string | null;

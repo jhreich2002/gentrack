@@ -1,11 +1,12 @@
 
 import React, { useEffect, useState } from 'react';
-import { PowerPlant, CapacityFactorStats, FuelSource, NewsAnalysis, PlantOwner, PlantOwnership } from '../types';
+import { PowerPlant, CapacityFactorStats, FuelSource, NewsAnalysis, PlantOwner, PlantOwnership, NewsArticle, PlantNewsRating } from '../types';
 import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } from '../constants';
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
 import { getPlantNews } from '../services/geminiService';
 import { fetchPlantOwnership } from '../services/ownershipService';
+import { fetchPlantNewsArticles, fetchPlantNewsRating } from '../services/newsIntelService';
 
 interface Props {
   plant: PowerPlant;
@@ -42,6 +43,36 @@ const PlantDetailView: React.FC<Props> = ({
   const [ownership, setOwnership] = useState<PlantOwnership | null>(null);
   const [loadingOwnership, setLoadingOwnership] = useState(false);
   const [ownershipFetched, setOwnershipFetched] = useState(false);
+
+  // ── News Intelligence (stored articles + risk rating) ────────────────────
+  const [newsArticles, setNewsArticles] = useState<NewsArticle[]>([]);
+  const [newsRating, setNewsRating] = useState<PlantNewsRating | null>(null);
+  const [loadingIntel, setLoadingIntel] = useState(false);
+  const [intelFetched, setIntelFetched] = useState(false);
+  const [intelTopicFilter, setIntelTopicFilter] = useState<string>('all');
+  const [intelDaysBack, setIntelDaysBack] = useState<number>(90);
+
+  const handleLoadNewsIntel = async (daysBack = intelDaysBack) => {
+    if (loadingIntel || intelFetched) return;
+    setLoadingIntel(true);
+    const [articles, rating] = await Promise.all([
+      fetchPlantNewsArticles(plant.eiaPlantCode, { daysBack }),
+      fetchPlantNewsRating(plant.eiaPlantCode),
+    ]);
+    setNewsArticles(articles);
+    setNewsRating(rating);
+    setLoadingIntel(false);
+    setIntelFetched(true);
+  };
+
+  // Reset all per-plant state when the plant changes
+  useEffect(() => {
+    setActiveTab('overview');
+    setNews(null); setNewsFetched(false);
+    setOwnership(null); setOwnershipFetched(false);
+    setNewsArticles([]); setNewsRating(null);
+    setIntelFetched(false); setIntelTopicFilter('all'); setIntelDaysBack(90);
+  }, [plant.eiaPlantCode]);
 
   const handleLoadOwnership = async () => {
     if (loadingOwnership || ownershipFetched) return;
@@ -189,7 +220,7 @@ const PlantDetailView: React.FC<Props> = ({
           OWNERSHIP & PPA
         </button>
         <button 
-          onClick={() => setActiveTab('news')}
+          onClick={() => { setActiveTab('news'); handleLoadNewsIntel(); }}
           className={`px-6 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'news' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10l4 4v10a2 2 0 01-2 2zM14 4v4h4" /></svg>
@@ -612,6 +643,183 @@ const PlantDetailView: React.FC<Props> = ({
 
         {activeTab === 'news' && (
           <div className="animate-in slide-in-from-right-4 fade-in duration-500 space-y-8">
+
+            {/* ── Historical Intelligence Section ───────────────────────── */}
+            <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="bg-emerald-700 p-2.5 rounded-xl shadow-lg shadow-emerald-900/20">
+                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white tracking-tight">Historical Intelligence</h2>
+                    <p className="text-xs text-slate-500 font-medium">Stored articles from nightly news pipeline</p>
+                  </div>
+                </div>
+                {/* Risk badge */}
+                {newsRating && (
+                  <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-black uppercase tracking-widest ${
+                    newsRating.newsRiskScore >= 50 ? 'bg-red-500/10 border-red-500/30 text-red-400' :
+                    newsRating.newsRiskScore >= 20 ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' :
+                    'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                  }`}>
+                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
+                    Risk: {newsRating.newsRiskScore.toFixed(0)}/100
+                  </div>
+                )}
+              </div>
+
+              {/* Window counts strip */}
+              {newsRating && (
+                <div className="grid grid-cols-3 gap-3 mb-6">
+                  {[['30d', newsRating.articles30d, newsRating.negative30d, newsRating.outage30d],
+                    ['90d', newsRating.articles90d, newsRating.negative90d, newsRating.outage90d],
+                    ['1yr', newsRating.articles365d, newsRating.negative365d, newsRating.outage365d]
+                  ].map(([label, total, neg, outage]) => (
+                    <div key={String(label)} className="bg-slate-800/40 rounded-xl p-4 border border-slate-700/50">
+                      <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">{label}</div>
+                      <div className="text-lg font-black text-white">{String(total)} <span className="text-xs font-normal text-slate-400">articles</span></div>
+                      <div className="flex gap-3 mt-1">
+                        <span className="text-[10px] font-bold text-red-400">{String(neg)} neg</span>
+                        <span className="text-[10px] font-bold text-amber-400">{String(outage)} outage</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Topic filter pills + time window selector */}
+              {intelFetched && newsArticles.length > 0 && (
+                <div className="flex items-center gap-2 mb-5 flex-wrap">
+                  {['all','outage','regulatory','financial','weather','construction'].map(t => (
+                    <button
+                      key={t}
+                      onClick={() => setIntelTopicFilter(t)}
+                      className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
+                        intelTopicFilter === t
+                          ? 'bg-emerald-600 border-emerald-500 text-white'
+                          : 'bg-slate-800/40 border-slate-700/50 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                  <div className="ml-auto flex gap-1">
+                    {[30, 90, 365].map(d => (
+                      <button
+                        key={d}
+                        onClick={() => {
+                          setIntelDaysBack(d);
+                          setIntelFetched(false);
+                          setNewsArticles([]);
+                          setNewsRating(null);
+                          setTimeout(() => handleLoadNewsIntel, 0);
+                          // re-fetch with new window
+                          setLoadingIntel(true);
+                          Promise.all([
+                            fetchPlantNewsArticles(plant.eiaPlantCode, { daysBack: d }),
+                            fetchPlantNewsRating(plant.eiaPlantCode),
+                          ]).then(([arts, rat]) => {
+                            setNewsArticles(arts); setNewsRating(rat);
+                            setLoadingIntel(false); setIntelFetched(true);
+                          });
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all ${
+                          intelDaysBack === d
+                            ? 'bg-slate-700 border-slate-500 text-white'
+                            : 'bg-slate-800/40 border-slate-700/50 text-slate-500 hover:text-slate-300'
+                        }`}
+                      >{d === 365 ? '1yr' : `${d}d`}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Loading */}
+              {loadingIntel && (
+                <div className="py-14 flex flex-col items-center justify-center space-y-4">
+                  <div className="w-10 h-10 rounded-full border-2 border-emerald-500/20 border-t-emerald-500 animate-spin"></div>
+                  <p className="text-slate-400 text-xs font-bold">Loading historical articles...</p>
+                </div>
+              )}
+
+              {/* Empty / not yet ingested */}
+              {intelFetched && !loadingIntel && newsArticles.length === 0 && !newsRating && (
+                <div className="py-12 text-center text-slate-600 bg-slate-800/10 rounded-2xl border border-dashed border-slate-800">
+                  <svg className="w-8 h-8 mx-auto mb-3 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2" /></svg>
+                  <p className="text-xs font-bold italic">No historical articles yet — the nightly pipeline hasn't run or no news matched this plant.</p>
+                </div>
+              )}
+
+              {/* Article list */}
+              {intelFetched && !loadingIntel && newsArticles.length > 0 && (() => {
+                const filtered = intelTopicFilter === 'all'
+                  ? newsArticles
+                  : newsArticles.filter(a => a.topics?.includes(intelTopicFilter));
+
+                const TOPIC_COLORS: Record<string, string> = {
+                  outage: 'text-red-400 bg-red-500/10 border-red-500/20',
+                  regulatory: 'text-blue-400 bg-blue-500/10 border-blue-500/20',
+                  financial: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
+                  weather: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
+                  construction: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+                  other: 'text-slate-400 bg-slate-500/10 border-slate-500/20',
+                };
+
+                return (
+                  <div className="space-y-3">
+                    {filtered.length === 0 && (
+                      <p className="text-center text-xs text-slate-600 py-8 italic">No {intelTopicFilter} articles in this window.</p>
+                    )}
+                    {filtered.map(article => (
+                      <a
+                        key={article.id}
+                        href={article.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`flex flex-col p-4 rounded-xl border transition-all group ${
+                          article.sentimentLabel === 'negative'
+                            ? 'bg-red-950/10 border-red-900/30 hover:border-red-600/40'
+                            : article.sentimentLabel === 'positive'
+                            ? 'bg-emerald-950/10 border-emerald-900/30 hover:border-emerald-600/40'
+                            : 'bg-slate-800/20 border-slate-700/40 hover:border-slate-600/60'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3 mb-2">
+                          <div className="flex-1">
+                            <div className="text-sm font-bold text-slate-200 group-hover:text-white line-clamp-2 leading-snug">{article.title}</div>
+                            {article.description && (
+                              <div className="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">{article.description}</div>
+                            )}
+                          </div>
+                          <svg className="w-4 h-4 shrink-0 text-slate-600 group-hover:text-slate-400 transition-colors mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {article.sourceName && (
+                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{article.sourceName}</span>
+                          )}
+                          <span className="text-[9px] text-slate-600">•</span>
+                          <span className="text-[9px] text-slate-600">
+                            {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          </span>
+                          {(article.topics ?? []).map(t => (
+                            <span key={t} className={`text-[9px] px-1.5 py-0.5 rounded border font-bold uppercase tracking-widest ${TOPIC_COLORS[t] ?? TOPIC_COLORS.other}`}>{t}</span>
+                          ))}
+                          {article.sentimentLabel === 'negative' && (
+                            <span className="ml-auto text-[9px] font-black text-red-400 uppercase tracking-widest">◼ Negative</span>
+                          )}
+                          {article.sentimentLabel === 'positive' && (
+                            <span className="ml-auto text-[9px] font-black text-emerald-400 uppercase tracking-widest">◼ Positive</span>
+                          )}
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                );
+              })()}
+            </section>
+
+            {/* ── Gemini Live Intelligence (existing) ──────────────────── */}
             <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
               <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-3">

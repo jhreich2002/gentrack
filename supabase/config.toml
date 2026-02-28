@@ -1,0 +1,21 @@
+# GenTrack — Supabase project configuration
+# Used by the Supabase CLI for Edge Function deployment
+# https://supabase.com/docs/reference/cli/config
+
+[project]
+id = "ohmmtplnaddrfuoowpuq"
+
+[functions.news-ingest]
+# Nightly news ingestion: ~40 coarse NewsAPI.org queries → news_articles table
+# Required secrets: NEWSAPI_KEY (set via: npx supabase secrets set NEWSAPI_KEY=<key>)
+# Scheduled by: scripts/005_cron_schedules.sql (06:00 UTC daily)
+
+[functions.embed-articles]
+# Nightly embedding: finds unembedded articles → Gemini text-embedding-004 → updates embeddings
+# Required secrets: GEMINI_API_KEY (set via: npx supabase secrets set GEMINI_API_KEY=<key>)
+# Scheduled by: scripts/005_cron_schedules.sql (08:00 UTC daily)
+
+[functions.compute-ratings]
+# Nightly ratings: aggregates article counts per plant → plant_news_ratings table
+# No external API needed — pure PostgreSQL aggregation
+# Scheduled by: scripts/005_cron_schedules.sql (09:30 UTC daily)
