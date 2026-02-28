@@ -1,10 +1,11 @@
 
 import React, { useEffect, useState } from 'react';
-import { PowerPlant, CapacityFactorStats, FuelSource, NewsAnalysis, PlantOwner } from '../types';
+import { PowerPlant, CapacityFactorStats, FuelSource, NewsAnalysis, PlantOwner, PlantOwnership } from '../types';
 import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } from '../constants';
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
 import { getPlantNews } from '../services/geminiService';
+import { fetchPlantOwnership } from '../services/ownershipService';
 
 interface Props {
   plant: PowerPlant;
@@ -19,7 +20,7 @@ interface Props {
   onBack: () => void;
 }
 
-type DetailTab = 'overview' | 'monthly' | 'generation' | 'news';
+type DetailTab = 'overview' | 'monthly' | 'generation' | 'ownership' | 'news';
 
 const PlantDetailView: React.FC<Props> = ({ 
   plant, 
@@ -37,6 +38,19 @@ const PlantDetailView: React.FC<Props> = ({
   const [news, setNews] = useState<NewsAnalysis | null>(null);
   const [loadingNews, setLoadingNews] = useState(false);
   const [newsFetched, setNewsFetched] = useState(false);
+
+  const [ownership, setOwnership] = useState<PlantOwnership | null>(null);
+  const [loadingOwnership, setLoadingOwnership] = useState(false);
+  const [ownershipFetched, setOwnershipFetched] = useState(false);
+
+  const handleLoadOwnership = async () => {
+    if (loadingOwnership || ownershipFetched) return;
+    setLoadingOwnership(true);
+    const data = await fetchPlantOwnership(plant.eiaPlantCode);
+    setOwnership(data);
+    setLoadingOwnership(false);
+    setOwnershipFetched(true);
+  };
 
   const handleLoadNews = async () => {
     if (loadingNews) return;
@@ -166,6 +180,13 @@ const PlantDetailView: React.FC<Props> = ({
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9" rx="1" strokeWidth="2"/><rect x="10" y="7" width="4" height="14" rx="1" strokeWidth="2"/><rect x="17" y="3" width="4" height="18" rx="1" strokeWidth="2"/></svg>
           GENERATION (MWH)
+        </button>
+        <button
+          onClick={() => { setActiveTab('ownership'); handleLoadOwnership(); }}
+          className={`px-6 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'ownership' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+          OWNERSHIP & PPA
         </button>
         <button 
           onClick={() => setActiveTab('news')}
@@ -502,6 +523,90 @@ const PlantDetailView: React.FC<Props> = ({
             </div>
           );
         })()}
+
+        {activeTab === 'ownership' && (
+          <div className="animate-in slide-in-from-right-4 fade-in duration-500 space-y-6">
+            {loadingOwnership && (
+              <div className="py-20 flex flex-col items-center justify-center space-y-6">
+                <div className="w-12 h-12 rounded-full border-2 border-emerald-500/20 border-t-emerald-500 animate-spin"></div>
+                <p className="text-slate-400 font-bold text-sm">Loading ownership data...</p>
+              </div>
+            )}
+
+            {ownershipFetched && !loadingOwnership && !ownership && (
+              <div className="py-20 text-center bg-slate-900 rounded-2xl border border-slate-800">
+                <p className="text-sm font-bold text-slate-400">No ownership data on record for this plant.</p>
+                <p className="text-xs text-slate-600 mt-1">EIA Site Code: {plant.eiaPlantCode}</p>
+              </div>
+            )}
+
+            {ownershipFetched && !loadingOwnership && ownership && (
+              <>
+                {/* Ownership Structure */}
+                <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="bg-emerald-600 p-2.5 rounded-xl shadow-lg shadow-emerald-900/20">
+                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-bold text-white tracking-tight">Ownership Structure</h2>
+                      <p className="text-xs text-slate-500 font-medium">Ownership chain and operating interest</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {([
+                      { label: 'Owner',                    value: ownership.owner },
+                      { label: 'Ultimate Parent',          value: ownership.ultParent },
+                      { label: 'Operator Ultimate Parent', value: ownership.operatorUltParent },
+                      { label: 'Operating Ownership',      value: ownership.operOwnPct != null ? `${ownership.operOwnPct}%` : null },
+                      { label: 'Ownership Status',         value: ownership.ownStatus },
+                      { label: 'Planned Ownership',        value: ownership.plannedOwn },
+                      { label: 'Owner EIA Utility Code',   value: ownership.ownerEiaUtilityCode },
+                      { label: 'Parent EIA Utility Code',  value: ownership.parentEiaUtilityCode },
+                    ] as { label: string; value: string | null }[]).map(({ label, value }) => (
+                      <div key={label} className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">{label}</div>
+                        <div className="text-sm font-bold text-white">{value ?? <span className="text-slate-600 font-normal italic">N/A</span>}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {/* PPA Details */}
+                <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="bg-blue-600 p-2.5 rounded-xl shadow-lg shadow-blue-900/20">
+                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-bold text-white tracking-tight">Power Purchase Agreement</h2>
+                      <p className="text-xs text-slate-500 font-medium">Largest PPA counterparty and contract terms</p>
+                    </div>
+                  </div>
+                  {ownership.largestPpaCounterparty ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {([
+                        { label: 'Counterparty',        value: ownership.largestPpaCounterparty },
+                        { label: 'Contracted Capacity', value: ownership.largestPpaCapacityMW != null ? `${ownership.largestPpaCapacityMW} MW` : null },
+                        { label: 'Contract Start',      value: ownership.largestPpaStartDate },
+                        { label: 'Contract Expiration', value: ownership.largestPpaExpirationDate },
+                      ] as { label: string; value: string | null }[]).map(({ label, value }) => (
+                        <div key={label} className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
+                          <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">{label}</div>
+                          <div className="text-sm font-bold text-white">{value ?? <span className="text-slate-600 font-normal italic">N/A</span>}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-10 text-center text-slate-600 bg-slate-800/10 rounded-2xl border border-dashed border-slate-800">
+                      <p className="text-xs font-bold italic">No PPA data on record for this plant.</p>
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
+          </div>
+        )}
 
         {activeTab === 'news' && (
           <div className="animate-in slide-in-from-right-4 fade-in duration-500 space-y-8">

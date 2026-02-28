@@ -79,3 +79,22 @@ export interface NewsAnalysis {
   summary: string;
   items: NewsItem[];
 }
+
+export interface PlantOwnership {
+  eiaPlantCode:             string;
+  powerPlant:               string | null;
+  plantKey:                 string | null;
+  plantOperatorInstnKey:    string | null;
+  operatorUltParent:        string | null;
+  owner:                    string | null;
+  operOwnPct:               number | null;  // Operating ownership %
+  ownerEiaUtilityCode:      string | null;
+  ultParent:                string | null;
+  parentEiaUtilityCode:     string | null;
+  ownStatus:                string | null;
+  plannedOwn:               string | null;  // Planned ownership
+  largestPpaCounterparty:   string | null;
+  largestPpaCapacityMW:     number | null;
+  largestPpaStartDate:      string | null;
+  largestPpaExpirationDate: string | null;
+}
