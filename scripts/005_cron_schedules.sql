@@ -9,47 +9,44 @@
 -- ============================================================
 
 -- Remove any previous versions of these jobs (idempotent)
-SELECT cron.unschedule('gentrack-news-ingest')   WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'gentrack-news-ingest');
-SELECT cron.unschedule('gentrack-embed-articles') WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'gentrack-embed-articles');
+SELECT cron.unschedule('gentrack-news-ingest')    WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'gentrack-news-ingest');
+SELECT cron.unschedule('gentrack-embed-articles')  WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'gentrack-embed-articles');
 SELECT cron.unschedule('gentrack-compute-ratings') WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'gentrack-compute-ratings');
 
 -- ── 1. News Ingest — 06:00 UTC every day ─────────────────────────────────────
--- Calls ~40 coarse NewsAPI queries, deduplicates, stores raw articles
 SELECT cron.schedule(
   'gentrack-news-ingest',
   '0 6 * * *',
   $$
   SELECT net.http_post(
     url     := 'https://ohmmtplnaddrfuoowpuq.supabase.co/functions/v1/news-ingest',
-    headers := '{"Content-Type":"application/json","Authorization":"Bearer <SERVICE_ROLE_KEY>"}'::jsonb,
+    headers := '{"Content-Type":"application/json","Authorization":"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9obW10cGxuYWRkcmZ1b293cHVxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTkwMDU4NywiZXhwIjoyMDg3NDc2NTg3fQ.zlFMdTMcmVb0W9k8DC-IM6cieil5Wjc9NiGJ0VT2MEs"}'::jsonb,
     body    := '{}'::jsonb
   );
   $$
 );
 
 -- ── 2. Embed Articles — 08:00 UTC every day ──────────────────────────────────
--- Finds new articles without embeddings, calls Gemini text-embedding-004 in batches
 SELECT cron.schedule(
   'gentrack-embed-articles',
   '0 8 * * *',
   $$
   SELECT net.http_post(
     url     := 'https://ohmmtplnaddrfuoowpuq.supabase.co/functions/v1/embed-articles',
-    headers := '{"Content-Type":"application/json","Authorization":"Bearer <SERVICE_ROLE_KEY>"}'::jsonb,
+    headers := '{"Content-Type":"application/json","Authorization":"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9obW10cGxuYWRkcmZ1b293cHVxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTkwMDU4NywiZXhwIjoyMDg3NDc2NTg3fQ.zlFMdTMcmVb0W9k8DC-IM6cieil5Wjc9NiGJ0VT2MEs"}'::jsonb,
     body    := '{}'::jsonb
   );
   $$
 );
 
 -- ── 3. Compute Ratings — 09:30 UTC every day ─────────────────────────────────
--- Aggregates article counts per plant into plant_news_ratings
 SELECT cron.schedule(
   'gentrack-compute-ratings',
   '30 9 * * *',
   $$
   SELECT net.http_post(
     url     := 'https://ohmmtplnaddrfuoowpuq.supabase.co/functions/v1/compute-ratings',
-    headers := '{"Content-Type":"application/json","Authorization":"Bearer <SERVICE_ROLE_KEY>"}'::jsonb,
+    headers := '{"Content-Type":"application/json","Authorization":"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9obW10cGxuYWRkcmZ1b293cHVxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTkwMDU4NywiZXhwIjoyMDg3NDc2NTg3fQ.zlFMdTMcmVb0W9k8DC-IM6cieil5Wjc9NiGJ0VT2MEs"}'::jsonb,
     body    := '{}'::jsonb
   );
   $$

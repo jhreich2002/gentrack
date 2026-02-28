@@ -70,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_news_articles_embedding
 ALTER TABLE news_articles ENABLE ROW LEVEL SECURITY;
 
 -- Public read (anon browser client can read articles for the News tab)
+DROP POLICY IF EXISTS "news_articles: public read" ON news_articles;
 CREATE POLICY "news_articles: public read"
   ON news_articles FOR SELECT
   USING (true);

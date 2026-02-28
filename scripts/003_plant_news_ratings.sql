@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS plant_news_ratings (
 
 ALTER TABLE plant_news_ratings ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "plant_news_ratings: public read" ON plant_news_ratings;
 CREATE POLICY "plant_news_ratings: public read"
   ON plant_news_ratings FOR SELECT
   USING (true);
