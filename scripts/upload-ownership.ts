@@ -24,8 +24,11 @@ const COL_MAP: Record<string, string> = {
   POWER_PLANT:                            'power_plant',
   PLANT_KEY:                              'plant_key',
   EIA_SITE_CODE:                          'eia_site_code',
+  TECH_TYPE:                              'tech_type',
+  PLANT_OPERATOR:                         'plant_operator',
   PLANT_OPERATOR_INSTN_KEY:               'plant_operator_instn_key',
   OPERATOR_ULT_PARENT:                    'operator_ult_parent',
+  OPERATOR_ULT_PARENT_INSTN_KEY:          'operator_ult_parent_instn_key',
   OWNER:                                  'owner',
   OPER_OWN:                               'oper_own',
   OWNER_EIA_UTILITY_CODE:                 'owner_eia_utility_code',
@@ -43,20 +46,26 @@ const NUMERIC_COLS = new Set(['oper_own', 'largest_ppa_contracted_capacity']);
 const DATE_COLS    = new Set(['largest_ppa_contracted_start_date', 'largest_ppa_contracted_expiration_date']);
 const BATCH_SIZE   = 500;
 
-// ── CSV parser (handles quoted fields and Windows line endings) ─────────────
+// ── CSV parser (handles quoted fields, Windows line endings, and junk header rows) ──
 function parseCSV(content: string): Record<string, string>[] {
   const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  if (lines.length < 2) throw new Error('CSV has fewer than 2 lines — no data rows found');
 
-  // Parse header row, stripping BOM and quotes
-  const headers = lines[0]
+  // Find the actual header row — the first line that contains EIA_SITE_CODE
+  const headerLineIdx = lines.findIndex(l =>
+    l.toUpperCase().includes('EIA_SITE_CODE')
+  );
+  if (headerLineIdx === -1) throw new Error('Could not find a header row containing EIA_SITE_CODE');
+
+  const headers = lines[headerLineIdx]
     .replace(/^\uFEFF/, '') // strip UTF-8 BOM if present
     .split(',')
     .map(h => h.trim().replace(/^"|"$/g, '').toUpperCase());
 
+  console.log(`  Header row found on line ${headerLineIdx + 1}: ${headers.slice(0, 5).join(', ')}...`);
+
   return lines
-    .slice(1)
-    .filter(l => l.trim())
+    .slice(headerLineIdx + 1)
+    .filter(l => l.trim() && !l.split(',').every(v => !v.trim())) // skip blank rows
     .map(line => {
       const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
       return Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? '']));
@@ -77,7 +86,8 @@ function toSupabaseRow(raw: Record<string, string>): Record<string, any> | null 
       row[dbCol] = isNaN(n) ? null : n;
     } else if (DATE_COLS.has(dbCol)) {
       const d = new Date(val);
-      row[dbCol] = isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
+      const yr = d.getFullYear();
+      row[dbCol] = isNaN(d.getTime()) || yr < 1900 || yr > 2100 ? null : d.toISOString().split('T')[0];
     } else {
       row[dbCol] = val;
     }
@@ -115,10 +125,18 @@ async function main() {
   const rawRows = parseCSV(content);
   console.log(`✓ Parsed ${rawRows.length} rows from ${path.basename(absPath)}`);
 
-  const rows    = rawRows.map(toSupabaseRow).filter(Boolean) as Record<string, any>[];
-  const skipped = rawRows.length - rows.length;
+  const allRows  = rawRows.map(toSupabaseRow).filter(Boolean) as Record<string, any>[];
+  const skipped  = rawRows.length - allRows.length;
+
+  // Deduplicate by eia_site_code — keep last occurrence (most recent ownership record)
+  const deduped  = new Map<string, Record<string, any>>();
+  for (const row of allRows) deduped.set(row.eia_site_code, row);
+  const rows = Array.from(deduped.values());
+  const dupes = allRows.length - rows.length;
+
   console.log(`  Rows to upsert : ${rows.length}`);
   if (skipped > 0) console.log(`  Skipped (no EIA_SITE_CODE): ${skipped}`);
+  if (dupes > 0)   console.log(`  Deduped (multiple rows per plant): ${dupes}`);
 
   let upserted = 0;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {

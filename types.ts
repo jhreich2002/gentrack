@@ -81,20 +81,23 @@ export interface NewsAnalysis {
 }
 
 export interface PlantOwnership {
-  eiaPlantCode:             string;
-  powerPlant:               string | null;
-  plantKey:                 string | null;
-  plantOperatorInstnKey:    string | null;
-  operatorUltParent:        string | null;
-  owner:                    string | null;
-  operOwnPct:               number | null;  // Operating ownership %
-  ownerEiaUtilityCode:      string | null;
-  ultParent:                string | null;
-  parentEiaUtilityCode:     string | null;
-  ownStatus:                string | null;
-  plannedOwn:               string | null;  // Planned ownership
-  largestPpaCounterparty:   string | null;
-  largestPpaCapacityMW:     number | null;
-  largestPpaStartDate:      string | null;
-  largestPpaExpirationDate: string | null;
+  eiaPlantCode:                 string;
+  powerPlant:                   string | null;
+  plantKey:                     string | null;
+  techType:                     string | null;
+  plantOperator:                string | null;
+  plantOperatorInstnKey:        string | null;
+  operatorUltParent:            string | null;
+  operatorUltParentInstnKey:    string | null;
+  owner:                        string | null;
+  operOwnPct:                   number | null;  // Operating ownership %
+  ownerEiaUtilityCode:          string | null;
+  ultParent:                    string | null;
+  parentEiaUtilityCode:         string | null;
+  ownStatus:                    string | null;
+  plannedOwn:                   string | null;  // Planned ownership
+  largestPpaCounterparty:       string | null;
+  largestPpaCapacityMW:         number | null;
+  largestPpaStartDate:          string | null;
+  largestPpaExpirationDate:     string | null;
 }

@@ -555,14 +555,16 @@ const PlantDetailView: React.FC<Props> = ({
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {([
-                      { label: 'Owner',                    value: ownership.owner },
-                      { label: 'Ultimate Parent',          value: ownership.ultParent },
-                      { label: 'Operator Ultimate Parent', value: ownership.operatorUltParent },
-                      { label: 'Operating Ownership',      value: ownership.operOwnPct != null ? `${ownership.operOwnPct}%` : null },
-                      { label: 'Ownership Status',         value: ownership.ownStatus },
-                      { label: 'Planned Ownership',        value: ownership.plannedOwn },
-                      { label: 'Owner EIA Utility Code',   value: ownership.ownerEiaUtilityCode },
-                      { label: 'Parent EIA Utility Code',  value: ownership.parentEiaUtilityCode },
+                      { label: 'Owner',                        value: ownership.owner },
+                      { label: 'Ultimate Parent',              value: ownership.ultParent },
+                      { label: 'Operator',                     value: ownership.plantOperator },
+                      { label: 'Operator Ultimate Parent',     value: ownership.operatorUltParent },
+                      { label: 'Technology Type',              value: ownership.techType },
+                      { label: 'Operating Ownership',          value: ownership.operOwnPct != null ? `${ownership.operOwnPct}%` : null },
+                      { label: 'Ownership Status',             value: ownership.ownStatus },
+                      { label: 'Planned Ownership',            value: ownership.plannedOwn },
+                      { label: 'Owner EIA Utility Code',       value: ownership.ownerEiaUtilityCode },
+                      { label: 'Parent EIA Utility Code',      value: ownership.parentEiaUtilityCode },
                     ] as { label: string; value: string | null }[]).map(({ label, value }) => (
                       <div key={label} className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
                         <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">{label}</div>

@@ -7,8 +7,11 @@ CREATE TABLE IF NOT EXISTS plant_ownership (
   eia_site_code                          text        PRIMARY KEY,
   power_plant                            text,
   plant_key                              text,
+  tech_type                              text,
+  plant_operator                         text,
   plant_operator_instn_key               text,
   operator_ult_parent                    text,
+  operator_ult_parent_instn_key          text,
   owner                                  text,
   oper_own                               numeric,    -- Operating ownership %
   owner_eia_utility_code                 text,
@@ -31,3 +34,8 @@ CREATE POLICY "plant_ownership: public read"
   USING (true);
 
 -- Only service role can write (no insert/update/delete policy = blocked for non-service-role clients)
+
+-- ── Run these if the table already exists (adds new columns) ─────────────
+ALTER TABLE plant_ownership ADD COLUMN IF NOT EXISTS tech_type text;
+ALTER TABLE plant_ownership ADD COLUMN IF NOT EXISTS plant_operator text;
+ALTER TABLE plant_ownership ADD COLUMN IF NOT EXISTS operator_ult_parent_instn_key text;
