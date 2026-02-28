@@ -118,6 +118,7 @@ interface PlantMeta {
   owner: string;
   fuelSource: string;
   state: string;
+  nameplateCapacityMw: number;
 }
 
 interface OwnerMeta {
@@ -125,8 +126,9 @@ interface OwnerMeta {
   ult_parent: string | null;
 }
 
-function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ query: string; tag: string }> {
-  const queries: Array<{ query: string; tag: string }> = [];
+function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ query: string; tag: string; plantCode?: string }> {
+  const plantNameQueries: Array<{ query: string; tag: string; plantCode?: string }> = [];
+  const genericQueries:   Array<{ query: string; tag: string; plantCode?: string }> = [];
 
   // 1. Unique ultimate parent companies (top 25 by plant count)
   const parentCount: Record<string, number> = {};
@@ -140,7 +142,7 @@ function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ quer
     .map(([name]) => name);
 
   for (const parent of topParents) {
-    queries.push({ query: `"${parent}" power plant`, tag: parent });
+    genericQueries.push({ query: `"${parent}" power plant`, tag: parent });
   }
 
   // 2. Fuel-type + state combos for the 6 highest-capacity states
@@ -157,7 +159,7 @@ function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ quer
   for (const [state, fuels] of topStates) {
     for (const fuel of fuels) {
       const fuelWord = fuel === 'Solar' ? 'solar farm' : fuel === 'Wind' ? 'wind farm' : 'nuclear plant';
-      queries.push({ query: `${fuelWord} ${state}`, tag: `${fuel}:${state}` });
+      genericQueries.push({ query: `${fuelWord} ${state}`, tag: `${fuel}:${state}` });
     }
   }
 
@@ -170,10 +172,30 @@ function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ quer
     'power plant acquisition merger United States',
   ];
   for (const q of generic) {
-    queries.push({ query: q, tag: 'generic' });
+    genericQueries.push({ query: q, tag: 'generic' });
   }
 
-  return queries;
+  // 4. Plant-name specific queries for top plants by capacity (up to 20 queries)
+  // Run FIRST so their plant_codes are recorded before generic queries dedup the same URLs.
+  const SKIP_GENERIC_NAMES = new Set(['energy', 'power', 'solar', 'wind', 'unit', 'plant', 'station', 'farm', 'gen']);
+  const SKIP_NAME_FRAGMENTS = ['increment', 'state-fuel', 'level', 'aggregate'];
+  const topPlants = [...plants]
+    .filter(p =>
+      p.name.length >= 6 &&
+      !SKIP_GENERIC_NAMES.has(p.name.toLowerCase()) &&
+      !SKIP_NAME_FRAGMENTS.some(f => p.name.toLowerCase().includes(f)) &&
+      p.eiaPlantCode !== '99999'
+    )
+    .sort((a, b) => b.nameplateCapacityMw - a.nameplateCapacityMw)
+    .slice(0, 20);
+
+  for (const p of topPlants) {
+    const fuelWord = p.fuelSource === 'Nuclear' ? 'nuclear' : p.fuelSource === 'Wind' ? 'wind' : p.fuelSource === 'Solar' ? 'solar' : 'power';
+    plantNameQueries.push({ query: `"${p.name}" ${fuelWord} plant`, tag: `plant:${p.eiaPlantCode}`, plantCode: p.eiaPlantCode });
+  }
+
+  // Plant-name queries run first to ensure they get plant_codes before generic queries dedup them
+  return [...plantNameQueries, ...genericQueries];
 }
 
 // ── Article → plant code matching ────────────────────────────────────────────
@@ -296,7 +318,7 @@ Deno.serve(async (_req) => {
     // ── Load plant metadata for query building + matching ──────────────────
     const { data: plantsData, error: plantsErr } = await supabase
       .from('plants')
-      .select('eia_plant_code, name, owner, fuel_source, state');
+      .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw');
 
     if (plantsErr || !plantsData) {
       console.error('Failed to load plants:', plantsErr?.message);
@@ -304,11 +326,12 @@ Deno.serve(async (_req) => {
     }
 
     const plants: PlantMeta[] = plantsData.map((p: Record<string, string>) => ({
-      eiaPlantCode: p.eia_plant_code,
-      name:         p.name,
-      owner:        p.owner ?? '',
-      fuelSource:   p.fuel_source ?? '',
-      state:        p.state ?? '',
+      eiaPlantCode:       p.eia_plant_code,
+      name:               p.name,
+      owner:              p.owner ?? '',
+      fuelSource:         p.fuel_source ?? '',
+      state:              p.state ?? '',
+      nameplateCapacityMw: Number(p.nameplate_capacity_mw ?? 0),
     }));
 
     // ── Load owner metadata from plant_ownership for query enrichment ──────
@@ -338,7 +361,7 @@ Deno.serve(async (_req) => {
     let totalNew = 0;
     const toInsert: Record<string, unknown>[] = [];
 
-    for (const { query, tag } of queries) {
+    for (const { query, tag, plantCode } of queries) {
       const articles = await fetchNewsApiArticles(query, newsApiKey, fromDate);
 
       for (const article of articles) {
@@ -348,6 +371,8 @@ Deno.serve(async (_req) => {
 
         const searchText = `${article.title ?? ''} ${article.description ?? ''} ${article.content ?? ''}`;
         const { plant_codes, owner_names, states, fuel_types } = matchPlants(searchText, plantIdx, plants);
+        // If this query was plant-specific, always attribute the article to that plant
+        if (plantCode && !plant_codes.includes(plantCode)) plant_codes.push(plantCode);
         const topics    = classifyTopics(searchText);
         const sentiment = classifySentiment(searchText);
 
