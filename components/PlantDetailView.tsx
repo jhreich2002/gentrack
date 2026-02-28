@@ -713,8 +713,6 @@ const PlantDetailView: React.FC<Props> = ({
                           setIntelFetched(false);
                           setNewsArticles([]);
                           setNewsRating(null);
-                          setTimeout(() => handleLoadNewsIntel, 0);
-                          // re-fetch with new window
                           setLoadingIntel(true);
                           Promise.all([
                             fetchPlantNewsArticles(plant.eiaPlantCode, { daysBack: d }),
