@@ -25,8 +25,9 @@ async function embedQuery(text: string): Promise<number[]> {
   const ai = new GoogleGenAI({ apiKey });
   // @ts-ignore — embedContent is available in @google/genai ≥1.0
   const result = await ai.models.embedContent({
-    model: 'text-embedding-004',
+    model: 'gemini-embedding-001',
     contents: text,
+    config: { outputDimensionality: 768 },
   });
   return result.embeddings[0].values as number[];
 }

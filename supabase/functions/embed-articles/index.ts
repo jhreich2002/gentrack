@@ -20,7 +20,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const GEMINI_EMBED_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents';
 
 const BATCH_SIZE   = 100;  // Gemini batchEmbedContents supports up to 100 texts
 const FETCH_LIMIT  = 500;  // Max articles to embed per run (avoids timeout)
@@ -35,6 +35,7 @@ interface ArticleRow {
 interface EmbedRequest {
   model: string;
   content: { parts: [{ text: string }] };
+  outputDimensionality?: number;
 }
 
 interface BatchEmbedResponse {
@@ -43,8 +44,9 @@ interface BatchEmbedResponse {
 
 async function batchEmbed(texts: string[], apiKey: string): Promise<number[][]> {
   const requests: EmbedRequest[] = texts.map(text => ({
-    model: 'models/text-embedding-004',
+    model: 'models/gemini-embedding-001',
     content: { parts: [{ text }] },
+    outputDimensionality: 768,
   }));
 
   const res = await fetch(`${GEMINI_EMBED_URL}?key=${apiKey}`, {
