@@ -152,6 +152,52 @@ export async function fetchPlantNewsState(
   };
 }
 
+// ── callPlantSummarize ────────────────────────────────────────────────────────
+
+export interface PlantSummaryResponse {
+  summary_text: string;
+  fti_angle_bullets: string[];
+  summary_last_updated_at: string;
+  from_cache: boolean;
+}
+
+/**
+ * Calls the plant-news-summarize Edge Function to get (or refresh) the
+ * Gemini-generated situation summary and FTI advisory bullets for a plant.
+ * Returns null if the call fails.
+ */
+export async function callPlantSummarize(
+  eiaPlantCode: string,
+  plantName: string,
+  plantOwner: string,
+): Promise<PlantSummaryResponse | null> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+  const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+  if (!supabaseUrl) {
+    console.warn('callPlantSummarize: VITE_SUPABASE_URL not set');
+    return null;
+  }
+
+  try {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/plant-news-summarize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(anonKey ? { Authorization: `Bearer ${anonKey}`, apikey: anonKey } : {}),
+      },
+      body: JSON.stringify({ eia_plant_code: eiaPlantCode, plant_name: plantName, plant_owner: plantOwner }),
+    });
+    if (!resp.ok) {
+      console.error('callPlantSummarize HTTP', resp.status, await resp.text());
+      return null;
+    }
+    return (await resp.json()) as PlantSummaryResponse;
+  } catch (err) {
+    console.error('callPlantSummarize fetch error:', err);
+    return null;
+  }
+}
+
 // ── semanticSearchPlantNews ───────────────────────────────────────────────────
 
 export interface SemanticSearchResult extends NewsArticle {

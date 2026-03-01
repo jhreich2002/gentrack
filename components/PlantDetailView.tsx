@@ -1,12 +1,11 @@
 
 import React, { useEffect, useState } from 'react';
-import { PowerPlant, CapacityFactorStats, FuelSource, NewsAnalysis, PlantOwner, PlantOwnership, NewsArticle, PlantNewsRating } from '../types';
+import { PowerPlant, CapacityFactorStats, FuelSource, PlantOwner, PlantOwnership, NewsArticle, PlantNewsRating } from '../types';
 import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } from '../constants';
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
-import { getPlantNews } from '../services/geminiService';
 import { fetchPlantOwnership } from '../services/ownershipService';
-import { fetchPlantNewsArticles, fetchPlantNewsRating } from '../services/newsIntelService';
+import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse } from '../services/newsIntelService';
 import { getGlobalLatestMonth } from '../services/dataService';
 
 interface Props {
@@ -37,9 +36,6 @@ const PlantDetailView: React.FC<Props> = ({
   onBack 
 }) => {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
-  const [news, setNews] = useState<NewsAnalysis | null>(null);
-  const [loadingNews, setLoadingNews] = useState(false);
-  const [newsFetched, setNewsFetched] = useState(false);
 
   const [ownership, setOwnership] = useState<PlantOwnership | null>(null);
   const [loadingOwnership, setLoadingOwnership] = useState(false);
@@ -53,25 +49,51 @@ const PlantDetailView: React.FC<Props> = ({
   const [intelTopicFilter, setIntelTopicFilter] = useState<string>('all');
   const [intelDaysBack, setIntelDaysBack] = useState<number>(90);
 
+  // ── Situation Summary (LLM) ──────────────────────────────────────────────
+  const [plantSummary, setPlantSummary] = useState<PlantSummaryResponse | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+
   const handleLoadNewsIntel = async (daysBack = intelDaysBack) => {
     if (loadingIntel || intelFetched) return;
     setLoadingIntel(true);
-    const [articles, rating] = await Promise.all([
+    // Kick off articles + rating + cached summary in parallel
+    const [articles, rating, cachedState] = await Promise.all([
       fetchPlantNewsArticles(plant.eiaPlantCode, { daysBack }),
       fetchPlantNewsRating(plant.eiaPlantCode),
+      fetchPlantNewsState(plant.eiaPlantCode),
     ]);
     setNewsArticles(articles);
     setNewsRating(rating);
+    if (cachedState?.summaryText) {
+      setPlantSummary({
+        summary_text: cachedState.summaryText,
+        fti_angle_bullets: cachedState.ftiAngleBullets,
+        summary_last_updated_at: cachedState.summaryLastUpdatedAt ?? '',
+        from_cache: true,
+      });
+    }
     setLoadingIntel(false);
     setIntelFetched(true);
+  };
+
+  const handleRefreshSummary = async () => {
+    if (loadingSummary) return;
+    setLoadingSummary(true);
+    const result = await callPlantSummarize(
+      plant.eiaPlantCode,
+      plant.name,
+      plant.owner,
+    );
+    if (result) setPlantSummary(result);
+    setLoadingSummary(false);
   };
 
   // Reset all per-plant state when the plant changes
   useEffect(() => {
     setActiveTab('overview');
-    setNews(null); setNewsFetched(false);
     setOwnership(null); setOwnershipFetched(false);
     setNewsArticles([]); setNewsRating(null);
+    setPlantSummary(null); setLoadingSummary(false);
     setIntelFetched(false); setIntelTopicFilter('all'); setIntelDaysBack(90);
   }, [plant.eiaPlantCode]);
 
@@ -82,15 +104,6 @@ const PlantDetailView: React.FC<Props> = ({
     setOwnership(data);
     setLoadingOwnership(false);
     setOwnershipFetched(true);
-  };
-
-  const handleLoadNews = async () => {
-    if (loadingNews) return;
-    setLoadingNews(true);
-    const data = await getPlantNews(plant);
-    setNews(data);
-    setLoadingNews(false);
-    setNewsFetched(true);
   };
 
   const diffFromRegAvg = stats.ttmAverage - regionalAvg;
@@ -643,6 +656,86 @@ const PlantDetailView: React.FC<Props> = ({
         {activeTab === 'news' && (
           <div className="animate-in slide-in-from-right-4 fade-in duration-500 space-y-8">
 
+            {/* ── Situation Summary Card ────────────────────────────────── */}
+            <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="bg-violet-700 p-2.5 rounded-xl shadow-lg shadow-violet-900/20">
+                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white tracking-tight">Situation Summary</h2>
+                    <p className="text-xs text-slate-500 font-medium">AI-generated advisory analysis via Gemini Flash</p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleRefreshSummary}
+                  disabled={loadingSummary}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all bg-violet-900/20 border-violet-500/30 text-violet-400 hover:bg-violet-900/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {loadingSummary ? (
+                    <div className="w-3 h-3 rounded-full border border-violet-400/30 border-t-violet-400 animate-spin" />
+                  ) : (
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                  )}
+                  {loadingSummary ? 'Analyzing...' : 'Refresh Analysis'}
+                </button>
+              </div>
+
+              {/* Loading state */}
+              {loadingSummary && !plantSummary && (
+                <div className="py-10 flex flex-col items-center justify-center space-y-4">
+                  <div className="w-8 h-8 rounded-full border-2 border-violet-500/20 border-t-violet-500 animate-spin"></div>
+                  <p className="text-slate-400 text-xs font-bold">Generating advisory analysis...</p>
+                </div>
+              )}
+
+              {/* Summary content */}
+              {plantSummary && (
+                <div className="space-y-5">
+                  <p className="text-sm text-slate-300 leading-relaxed">{plantSummary.summary_text}</p>
+
+                  {plantSummary.fti_angle_bullets.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[9px] font-black text-violet-400 uppercase tracking-widest">Advisory Angles</div>
+                      <ul className="space-y-1.5">
+                        {plantSummary.fti_angle_bullets.map((bullet, i) => (
+                          <li key={i} className="flex items-start gap-2 text-xs text-slate-300">
+                            <span className="mt-0.5 text-violet-500 font-black flex-shrink-0">◆</span>
+                            <span>{bullet}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+                    <div className="text-[9px] text-slate-600 font-medium">
+                      {plantSummary.from_cache ? 'Cached analysis' : 'Fresh analysis'} •{' '}
+                      {plantSummary.summary_last_updated_at
+                        ? (() => {
+                            const ageMs = Date.now() - new Date(plantSummary.summary_last_updated_at).getTime();
+                            const ageH  = Math.floor(ageMs / 3_600_000);
+                            const ageM  = Math.floor((ageMs % 3_600_000) / 60_000);
+                            return ageH > 0 ? `${ageH}h ${ageM}m ago` : `${ageM}m ago`;
+                          })()
+                        : 'just now'}
+                    </div>
+                    <div className="text-[9px] text-slate-600">Gemini 2.0 Flash Lite</div>
+                  </div>
+                </div>
+              )}
+
+              {/* No summary yet + not loading */}
+              {!plantSummary && !loadingSummary && (
+                <div className="py-8 text-center text-slate-600 bg-slate-800/10 rounded-2xl border border-dashed border-slate-800">
+                  <svg className="w-7 h-7 mx-auto mb-3 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+                  <p className="text-xs font-bold italic">No analysis generated yet.</p>
+                  <p className="text-[10px] text-slate-700 mt-1">Click <span className="text-violet-500">Refresh Analysis</span> to generate an AI situation summary.</p>
+                </div>
+              )}
+            </section>
+
             {/* ── Historical Intelligence Section ───────────────────────── */}
             <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
               <div className="flex items-center justify-between mb-6">
@@ -814,103 +907,6 @@ const PlantDetailView: React.FC<Props> = ({
                   </div>
                 );
               })()}
-            </section>
-
-            {/* ── Gemini Live Intelligence (existing) ──────────────────── */}
-            <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-3">
-                  <div className="bg-indigo-600 p-2.5 rounded-xl shadow-lg shadow-indigo-900/20">
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-bold text-white tracking-tight">AI Intelligence Summary</h2>
-                    <p className="text-xs text-slate-500 font-medium">Recent operational news and market context</p>
-                  </div>
-                </div>
-                <div className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20">Powered by Gemini</div>
-              </div>
-
-              {/* Initial state — show load button */}
-              {!newsFetched && !loadingNews && (
-                <div className="py-20 flex flex-col items-center justify-center space-y-5">
-                  <div className="bg-indigo-600/10 p-5 rounded-2xl border border-indigo-500/20">
-                    <svg className="w-8 h-8 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-slate-300 font-bold text-sm">Fetch live news for {plant.name}</p>
-                    <p className="text-xs text-slate-500 mt-1">Uses Gemini AI with Google Search grounding</p>
-                  </div>
-                  <button
-                    onClick={handleLoadNews}
-                    className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-indigo-900/30 transition-all flex items-center gap-2"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                    Load News & Intelligence
-                  </button>
-                </div>
-              )}
-
-              {/* Loading spinner */}
-              {loadingNews && (
-                <div className="py-20 flex flex-col items-center justify-center space-y-6">
-                  <div className="relative">
-                    <div className="w-12 h-12 rounded-full border-2 border-indigo-500/20 border-t-indigo-500 animate-spin"></div>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></div>
-                    </div>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-slate-400 font-bold text-sm">Searching for updates on {plant.name}...</p>
-                    <p className="text-xs text-slate-600 mt-1">Gemini is searching the web — this takes a few seconds</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Results */}
-              {newsFetched && !loadingNews && news && (
-                <div className="space-y-8">
-                  <div className="bg-indigo-900/10 p-6 rounded-2xl border border-indigo-500/20 relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 p-4 opacity-5 transition-opacity group-hover:opacity-10">
-                      <svg className="w-24 h-24" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
-                    </div>
-                    <h4 className="text-[10px] font-black text-indigo-400 uppercase mb-3 tracking-widest">AI News Summary</h4>
-                    <p className="text-slate-200 text-sm leading-relaxed font-medium relative z-10">
-                      {news.summary}
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {news.items.length > 0 ? (
-                      news.items.map((item, idx) => (
-                        <a
-                          key={idx}
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex flex-col p-5 bg-slate-800/30 border border-slate-700/50 rounded-2xl hover:bg-slate-800/60 hover:border-indigo-500/50 transition-all group shadow-sm hover:shadow-indigo-500/5"
-                        >
-                          <div className="flex justify-between items-start mb-2">
-                            <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">{item.source}</span>
-                            <svg className="w-4 h-4 text-slate-600 group-hover:text-indigo-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                          </div>
-                          <div className="text-sm font-bold text-slate-200 group-hover:text-white line-clamp-2 leading-snug">{item.title}</div>
-                        </a>
-                      ))
-                    ) : (
-                      <div className="col-span-full text-center py-10 text-slate-600 bg-slate-800/10 rounded-2xl border border-dashed border-slate-800">
-                        <p className="text-xs font-bold italic">No specific news articles indexed for this plant recently.</p>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex justify-end">
-                    <button onClick={handleLoadNews} className="text-xs text-slate-500 hover:text-slate-300 border border-slate-800 hover:border-slate-600 px-4 py-2 rounded-lg transition-colors">
-                      Refresh
-                    </button>
-                  </div>
-                </div>
-              )}
             </section>
           </div>
         )}
