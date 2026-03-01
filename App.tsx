@@ -12,8 +12,9 @@ import CompanyDetailView from './components/CompanyDetailView';
 import FilterControls from './components/FilterControls';
 import CoverPage from './components/CoverPage';
 import AdminPage from './components/AdminPage';
+import ProspectingDashboard from './components/ProspectingDashboard';
 
-type View = 'dashboard' | 'detail' | 'admin' | 'company';
+type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'prospecting';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor';
 
@@ -343,6 +344,18 @@ const App: React.FC = () => {
             <span className={`text-[10px] px-1.5 py-0.5 rounded ${activeTab === 'Watchlist' ? 'bg-amber-900/40 text-amber-100' : 'bg-slate-800 text-slate-500'}`}>{watchlist.length}</span>
           </button>
           
+          <button
+            onClick={() => setView('prospecting')}
+            className={`w-full text-left px-4 py-3 rounded-xl transition-all duration-200 flex items-center gap-3 ${
+              view === 'prospecting'
+                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/20'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+            }`}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+            <span className="text-sm font-semibold tracking-wide">Prospecting</span>
+          </button>
+
           <div className="pt-6 pb-2 px-4">
             <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">ISO / RTO SECTORS</span>
           </div>
@@ -632,6 +645,8 @@ const App: React.FC = () => {
         ) : (
           view === 'company' && selectedUltParent
             ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} />
+            : view === 'prospecting'
+            ? <ProspectingDashboard onCompanyClick={handleCompanyClick} />
             : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => setView('dashboard')} onCompanyClick={handleCompanyClick} />
         )}
       </main>

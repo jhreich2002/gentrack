@@ -5,7 +5,7 @@ import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } fr
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
 import { fetchPlantOwnership } from '../services/ownershipService';
-import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse } from '../services/newsIntelService';
+import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse, semanticSearchPlantNews, SemanticSearchResult } from '../services/newsIntelService';
 import { getGlobalLatestMonth } from '../services/dataService';
 
 interface Props {
@@ -54,6 +54,12 @@ const PlantDetailView: React.FC<Props> = ({
   // ── Situation Summary (LLM) ──────────────────────────────────────────────
   const [plantSummary, setPlantSummary] = useState<PlantSummaryResponse | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
+
+  // ── Semantic Search ──────────────────────────────────────────────────────
+  const [semanticQuery, setSemanticQuery] = useState('');
+  const [semanticResults, setSemanticResults] = useState<SemanticSearchResult[]>([]);
+  const [searchingSemantics, setSearchingSemantics] = useState(false);
+  const [semanticSearched, setSemanticSearched] = useState(false);
 
   const handleLoadNewsIntel = async (daysBack = intelDaysBack) => {
     if (loadingIntel || intelFetched) return;
@@ -737,6 +743,106 @@ const PlantDetailView: React.FC<Props> = ({
                   <svg className="w-7 h-7 mx-auto mb-3 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
                   <p className="text-xs font-bold italic">No analysis generated yet.</p>
                   <p className="text-[10px] text-slate-700 mt-1">Click <span className="text-violet-500">Refresh Analysis</span> to generate an AI situation summary.</p>
+                </div>
+              )}
+            </section>
+
+            {/* ── Semantic Search Section ────────────────────────────── */}
+            <section className="bg-slate-900 border border-indigo-900/40 rounded-2xl p-8 shadow-lg">
+              <div className="flex items-center gap-3 mb-5">
+                <div className="bg-indigo-700 p-2.5 rounded-xl shadow-lg shadow-indigo-900/20">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-white tracking-tight">Semantic Search</h2>
+                  <p className="text-xs text-slate-500 font-medium">Ask a question — AI matches it against stored articles</p>
+                </div>
+              </div>
+
+              <form
+                onSubmit={async e => {
+                  e.preventDefault();
+                  if (!semanticQuery.trim() || searchingSemantics) return;
+                  setSearchingSemantics(true);
+                  setSemanticSearched(false);
+                  const results = await semanticSearchPlantNews(plant.eiaPlantCode, semanticQuery.trim());
+                  setSemanticResults(results);
+                  setSearchingSemantics(false);
+                  setSemanticSearched(true);
+                }}
+                className="flex gap-2 mb-5"
+              >
+                <input
+                  type="text"
+                  value={semanticQuery}
+                  onChange={e => setSemanticQuery(e.target.value)}
+                  placeholder="e.g. environmental violations, grid connection disputes, transmission upgrades..."
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40 transition-all"
+                />
+                <button
+                  type="submit"
+                  disabled={!semanticQuery.trim() || searchingSemantics}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-black uppercase tracking-widest bg-indigo-600 hover:bg-indigo-500 text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {searchingSemantics
+                    ? <div className="w-4 h-4 rounded-full border border-indigo-300/30 border-t-indigo-200 animate-spin" />
+                    : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>}
+                  {searchingSemantics ? 'Searching...' : 'Search'}
+                </button>
+              </form>
+
+              {/* Results */}
+              {semanticSearched && semanticResults.length === 0 && (
+                <div className="py-10 text-center text-slate-600 bg-slate-800/10 rounded-2xl border border-dashed border-slate-800">
+                  <svg className="w-7 h-7 mx-auto mb-3 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  <p className="text-xs font-bold italic">No matching articles found. Try a broader query or ensure embeddings have been generated.</p>
+                </div>
+              )}
+
+              {semanticResults.length > 0 && (
+                <div className="space-y-3">
+                  <div className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-1">{semanticResults.length} result{semanticResults.length !== 1 ? 's' : ''} — ranked by semantic similarity</div>
+                  {semanticResults.map(article => (
+                    <a
+                      key={article.id}
+                      href={article.url ?? '#'}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block bg-slate-800/40 border border-indigo-900/30 rounded-xl p-4 hover:bg-slate-800/60 hover:border-indigo-700/50 transition-all"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{article.sourceName}</span>
+                            {article.published_at && (
+                              <span className="text-[9px] text-slate-600">
+                                {new Date(article.published_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                              </span>
+                            )}
+                            {article.topics?.slice(0,2).map(t => (
+                              <span key={t} className="text-[8px] px-1.5 py-0.5 rounded-full bg-slate-700/60 text-slate-400 border border-slate-600/50 uppercase font-bold tracking-wide">{t}</span>
+                            ))}
+                          </div>
+                          <div className="text-sm font-bold text-slate-100 leading-snug mb-1">{article.title}</div>
+                          {article.description && (
+                            <p className="text-xs text-slate-400 line-clamp-2">{article.description}</p>
+                          )}
+                        </div>
+                        <div className="flex-shrink-0 flex flex-col items-end gap-1">
+                          <span className="text-[9px] font-black px-2 py-1 rounded-lg bg-indigo-900/40 border border-indigo-700/40 text-indigo-300 whitespace-nowrap">
+                            {((article.similarity ?? 0) * 100).toFixed(0)}% match
+                          </span>
+                          {article.sentimentLabel && (
+                            <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide ${
+                              article.sentimentLabel === 'negative' ? 'bg-red-500/10 text-red-400' :
+                              article.sentimentLabel === 'positive' ? 'bg-emerald-500/10 text-emerald-400' :
+                              'bg-slate-700/40 text-slate-500'
+                            }`}>{article.sentimentLabel}</span>
+                          )}
+                        </div>
+                      </div>
+                    </a>
+                  ))}
                 </div>
               )}
             </section>

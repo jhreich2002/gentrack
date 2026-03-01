@@ -22,20 +22,45 @@ export async function fetchCompanyStats(
 
   if (error || !data) return null;
 
+  return mapRow(data);
+}
+
+// ── fetchAllCompanyStats ──────────────────────────────────────────────────────
+
+/**
+ * Returns all company_stats rows for the Prospecting Dashboard.
+ * Only fetches the columns needed for the screening table to keep payload small.
+ */
+export async function fetchAllCompanyStats(): Promise<CompanyStats[]> {
+  const { data, error } = await supabase
+    .from('company_stats')
+    .select('*')
+    .order('computed_at', { ascending: false });
+
+  if (error || !data) {
+    console.error('fetchAllCompanyStats error:', error?.message);
+    return [];
+  }
+
+  return data.map(mapRow);
+}
+
+// ── mapRow helper ─────────────────────────────────────────────────────────────
+
+function mapRow(data: Record<string, unknown>): CompanyStats {
   return {
-    ultParentName:    data.ult_parent_name,
-    totalMw:          Number(data.total_mw)   || 0,
-    plantCount:       Number(data.plant_count) || 0,
-    avgCf:            Number(data.avg_cf)      || 0,
-    techBreakdown:    (data.tech_breakdown    as Record<string, number>) ?? {},
-    stateBreakdown:   (data.state_breakdown   as Record<string, number>) ?? {},
-    eventCounts:      (data.event_counts      as Record<string, number>) ?? {},
-    relevanceScores:  (data.relevance_scores  as Record<string, number>) ?? {},
-    computedAt:       data.computed_at,
-    // Analysis fields (Day 4 columns — may be null if not yet generated)
-    analysisText:          data.analysis_text          ?? null,
-    analysisAngleBullets:  data.analysis_angle_bullets ?? [],
-    analysisUpdatedAt:     data.analysis_updated_at    ?? null,
+    ultParentName:         data.ult_parent_name as string,
+    totalMw:               Number(data.total_mw)    || 0,
+    plantCount:            Number(data.plant_count)  || 0,
+    avgCf:                 Number(data.avg_cf)       || 0,
+    techBreakdown:         (data.tech_breakdown    as Record<string, number>) ?? {},
+    stateBreakdown:        (data.state_breakdown   as Record<string, number>) ?? {},
+    eventCounts:           (data.event_counts      as Record<string, number>) ?? {},
+    relevanceScores:       (data.relevance_scores  as Record<string, number>) ?? {},
+    computedAt:            data.computed_at as string,
+    analysisText:          (data.analysis_text          as string | null) ?? null,
+    analysisAngleBullets:  (data.analysis_angle_bullets as string[])     ?? [],
+    analysisUpdatedAt:     (data.analysis_updated_at    as string | null) ?? null,
   };
 }
 
