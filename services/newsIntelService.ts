@@ -14,7 +14,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { supabase } from './supabaseClient';
-import { NewsArticle, PlantNewsRating } from '../types';
+import { NewsArticle, PlantNewsRating, PlantNewsState } from '../types';
 
 // ── Gemini embedding (client-side, free tier) ─────────────────────────────────
 
@@ -54,7 +54,8 @@ export async function fetchPlantNewsArticles(
     .from('news_articles')
     .select(`
       id, title, description, url, source_name,
-      published_at, topics, sentiment_label, plant_codes
+      published_at, topics, sentiment_label, plant_codes,
+      event_type, impact_tags, fti_relevance_tags, importance, entity_company_names
     `)
     .contains('plant_codes', [eiaPlantCode])
     .gte('published_at', cutoff)
@@ -73,14 +74,19 @@ export async function fetchPlantNewsArticles(
   }
 
   return (data ?? []).map((row: Record<string, unknown>) => ({
-    id:             row.id as string,
-    title:          row.title as string,
-    description:    row.description as string | null,
-    url:            row.url as string,
-    sourceName:     row.source_name as string | null,
-    publishedAt:    row.published_at as string,
-    topics:         row.topics as string[],
-    sentimentLabel: row.sentiment_label as 'positive' | 'negative' | 'neutral' | null,
+    id:                 row.id as string,
+    title:              row.title as string,
+    description:        row.description as string | null,
+    url:                row.url as string,
+    sourceName:         row.source_name as string | null,
+    publishedAt:        row.published_at as string,
+    topics:             (row.topics as string[]) ?? [],
+    sentimentLabel:     row.sentiment_label as 'positive' | 'negative' | 'neutral' | null,
+    eventType:          row.event_type as string | null,
+    impactTags:         (row.impact_tags as string[]) ?? [],
+    ftiRelevanceTags:   (row.fti_relevance_tags as string[]) ?? [],
+    importance:         row.importance as 'low' | 'medium' | 'high' | null,
+    entityCompanyNames: (row.entity_company_names as string[]) ?? [],
   }));
 }
 
@@ -115,6 +121,34 @@ export async function fetchPlantNewsRating(
     newsRiskScore:   parseFloat(data.news_risk_score),
     topArticleIds:   data.top_article_ids ?? [],
     computedAt:      data.computed_at,
+  };
+}
+
+// ── fetchPlantNewsState ─────────────────────────────────────────────
+
+/**
+ * Returns the cached LLM summary and FTI advisory bullets for a plant.
+ * Returns null if no summary has been generated yet.
+ */
+export async function fetchPlantNewsState(
+  eiaPlantCode: string
+): Promise<PlantNewsState | null> {
+  const { data, error } = await supabase
+    .from('plant_news_state')
+    .select('*')
+    .eq('eia_plant_code', eiaPlantCode)
+    .single();
+
+  if (error || !data) return null;
+
+  return {
+    eiaPlantCode:         data.eia_plant_code,
+    lastCheckedAt:        data.last_checked_at,
+    summaryText:          data.summary_text,
+    ftiAngleBullets:      data.fti_angle_bullets ?? [],
+    summaryLastUpdatedAt: data.summary_last_updated_at,
+    lastEventTypes:       data.last_event_types ?? [],
+    lastSentiment:        data.last_sentiment,
   };
 }
 
@@ -157,14 +191,19 @@ export async function semanticSearchPlantNews(
   }
 
   return (data ?? []).map((row: Record<string, unknown>) => ({
-    id:             row.id as string,
-    title:          row.title as string,
-    description:    row.description as string | null,
-    url:            row.url as string,
-    sourceName:     row.source_name as string | null,
-    publishedAt:    row.published_at as string,
-    topics:         row.topics as string[],
-    sentimentLabel: row.sentiment_label as 'positive' | 'negative' | 'neutral' | null,
-    similarity:     row.similarity as number,
+    id:                 row.id as string,
+    title:              row.title as string,
+    description:        row.description as string | null,
+    url:                row.url as string,
+    sourceName:         row.source_name as string | null,
+    publishedAt:        row.published_at as string,
+    topics:             (row.topics as string[]) ?? [],
+    sentimentLabel:     row.sentiment_label as 'positive' | 'negative' | 'neutral' | null,
+    eventType:          row.event_type as string | null,
+    impactTags:         (row.impact_tags as string[]) ?? [],
+    ftiRelevanceTags:   (row.fti_relevance_tags as string[]) ?? [],
+    importance:         row.importance as 'low' | 'medium' | 'high' | null,
+    entityCompanyNames: (row.entity_company_names as string[]) ?? [],
+    similarity:         row.similarity as number,
   }));
 }

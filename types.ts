@@ -84,14 +84,20 @@ export interface NewsAnalysis {
 
 /** A single stored news article from the news_articles Supabase table. */
 export interface NewsArticle {
-  id:             string;
-  title:          string;
-  description:    string | null;
-  url:            string;
-  sourceName:     string | null;
-  publishedAt:    string;           // ISO-8601 timestamp
-  topics:         string[];         // outage | regulatory | financial | weather | construction | other
-  sentimentLabel: 'positive' | 'negative' | 'neutral' | null;
+  id:                   string;
+  title:                string;
+  description:          string | null;
+  url:                  string;
+  sourceName:           string | null;
+  publishedAt:          string;           // ISO-8601 timestamp
+  topics:               string[];         // outage | regulatory | financial | weather | construction | other
+  sentimentLabel:       'positive' | 'negative' | 'neutral' | null;
+  // LLM-generated classification (Day 1)
+  eventType:            string | null;    // outage|regulatory|financial|m_and_a|dispute|construction|policy|restructuring|none
+  impactTags:           string[];         // distress|asset_sale|capacity_addition|curtailment|ppa_dispute|…
+  ftiRelevanceTags:     string[];         // restructuring|transactions|disputes|market_strategy
+  importance:           'low' | 'medium' | 'high' | null;
+  entityCompanyNames:   string[];         // ult_parent names mentioned in article
 }
 
 /** Precomputed risk rating from the plant_news_ratings Supabase table. */
@@ -109,6 +115,30 @@ export interface PlantNewsRating {
   newsRiskScore: number;   // 0–100 composite score
   topArticleIds: string[];
   computedAt:    string;   // ISO-8601 timestamp
+}
+
+/** Cached per-plant LLM summary from plant_news_state table. */
+export interface PlantNewsState {
+  eiaPlantCode:           string;
+  lastCheckedAt:          string | null;    // ISO-8601
+  summaryText:            string | null;    // 1-2 paragraph situation summary
+  ftiAngleBullets:        string[];         // 3-5 advisory bullets
+  summaryLastUpdatedAt:   string | null;
+  lastEventTypes:         string[];         // event_types seen recently
+  lastSentiment:          string | null;
+}
+
+/** Per-ult_parent nightly-computed metrics from company_stats table. */
+export interface CompanyStats {
+  ultParentName:    string;
+  totalMw:          number;
+  plantCount:       number;
+  avgCf:            number;
+  techBreakdown:    Record<string, number>;   // { Solar: 1200, Wind: 450 }
+  stateBreakdown:   Record<string, number>;   // { CA: 800, TX: 850 }
+  eventCounts:      Record<string, number>;   // { restructuring: 3, m_and_a: 1 }
+  relevanceScores:  Record<string, number>;   // { restructuring: 72, transactions: 45 }
+  computedAt:       string;
 }
 
 export interface PlantOwnership {

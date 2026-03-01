@@ -16,10 +16,12 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const NEWSAPI_BASE = 'https://newsapi.org/v2/everything';
-const PAGE_SIZE    = 30;   // max per NewsAPI free-tier request
-const BATCH_SIZE   = 50;   // rows per Supabase upsert batch
-const LOOKBACK_DAYS = 7;   // fetch articles from the past N days per run
+const NEWSAPI_BASE   = 'https://newsapi.org/v2/everything';
+const GEMINI_BASE    = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent';
+const PAGE_SIZE      = 30;   // max per NewsAPI free-tier request
+const BATCH_SIZE     = 50;   // rows per Supabase upsert batch
+const LLM_BATCH_SIZE = 10;   // articles per Gemini classification call
+const LOOKBACK_DAYS  = 7;    // fetch articles from the past N days per run
 
 // Keyword lists for topic classification (energy domain—no LLM needed)
 const TOPIC_KEYWORDS: Record<string, string[]> = {
@@ -324,6 +326,76 @@ function matchPlants(
   };
 }
 
+// ── LLM classification (Gemini Flash) ───────────────────────────────────────
+
+interface LLMClassification {
+  event_type:           string;
+  impact_tags:          string[];
+  fti_relevance_tags:   string[];
+  importance:           string;
+  entity_company_names: string[];
+}
+
+function defaultClassification(): LLMClassification {
+  return { event_type: 'none', impact_tags: [], fti_relevance_tags: [], importance: 'low', entity_company_names: [] };
+}
+
+async function classifyArticlesWithGemini(
+  articles: Array<{ title: string; description: string | null }>,
+  geminiKey: string,
+  knownCompanies: string[],
+): Promise<LLMClassification[]> {
+  const companyList = knownCompanies.slice(0, 80).join(', ');
+  const articlesText = articles
+    .map((a, i) => `${i + 1}. Title: ${a.title}\n   Desc: ${a.description ?? 'N/A'}`)
+    .join('\n');
+
+  const prompt = `You are classifying energy sector news articles for a power generation analytics platform.
+For each article return a JSON object with these exact fields:
+- event_type: one of outage|regulatory|financial|m_and_a|dispute|construction|policy|restructuring|none
+- impact_tags: array (can be empty), each item from: distress|asset_sale|capacity_addition|curtailment|ppa_dispute|litigation|rate_case|community_opposition|environmental|market_entry
+- fti_relevance_tags: array (can be empty), each item from: restructuring|transactions|disputes|market_strategy
+- importance: low|medium|high
+- entity_company_names: array of company/sponsor names found in this article, only from this list: ${companyList}
+
+Articles:
+${articlesText}
+
+Return ONLY a valid JSON array with exactly ${articles.length} objects in order. No markdown, no explanation.`;
+
+  try {
+    const res = await fetch(`${GEMINI_BASE}?key=${geminiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 1500 },
+      }),
+    });
+    if (!res.ok) {
+      console.warn(`Gemini classify HTTP error: ${res.status}`);
+      return articles.map(() => defaultClassification());
+    }
+    const data = await res.json();
+    const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed) && parsed.length === articles.length) {
+      return parsed.map((r: Record<string, unknown>) => ({
+        event_type:           typeof r.event_type === 'string' ? r.event_type : 'none',
+        impact_tags:          Array.isArray(r.impact_tags) ? r.impact_tags : [],
+        fti_relevance_tags:   Array.isArray(r.fti_relevance_tags) ? r.fti_relevance_tags : [],
+        importance:           typeof r.importance === 'string' ? r.importance : 'low',
+        entity_company_names: Array.isArray(r.entity_company_names) ? r.entity_company_names : [],
+      }));
+    }
+    console.warn(`Gemini returned unexpected array length: ${Array.isArray(parsed) ? parsed.length : 'non-array'}`);
+  } catch (e) {
+    console.warn('Gemini JSON parse / network error:', e);
+  }
+  return articles.map(() => defaultClassification());
+}
+
 const STATE_NAMES: Record<string, string> = {
   AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',
   CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',
@@ -347,9 +419,13 @@ Deno.serve(async (_req) => {
     const supabaseUrl     = Deno.env.get('SUPABASE_URL')!;
     const serviceRoleKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const newsApiKey      = Deno.env.get('NEWSAPI_KEY');
+    const geminiApiKey    = Deno.env.get('GEMINI_API_KEY') ?? null;
 
     if (!newsApiKey) {
       return new Response(JSON.stringify({ error: 'NEWSAPI_KEY secret not set' }), { status: 500 });
+    }
+    if (!geminiApiKey) {
+      console.warn('GEMINI_API_KEY not set — LLM classification will be skipped');
     }
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
@@ -379,6 +455,13 @@ Deno.serve(async (_req) => {
       .from('plant_ownership')
       .select('eia_plant_code, owner, ult_parent, plant_operator, operator_ult_parent');
     const ownerMeta: OwnerMeta[] = ownerData ?? [];
+
+    // ── Extract known ult_parent names for Gemini entity linking ───────────
+    const knownUltParents = [...new Set(
+      ownerMeta
+        .map(o => o.ult_parent ?? o.owner)
+        .filter((n): n is string => !!n && n.length >= 5)
+    )].sort();
 
     // ── Build plant lookup index ───────────────────────────────────────────
     const plantIdx = buildPlantIndex(plants);
@@ -432,43 +515,76 @@ Deno.serve(async (_req) => {
         const sentiment = classifySentiment(searchText);
 
         toInsert.push({
-          external_id:     externalId,
-          title:           article.title ?? '',
-          description:     article.description ?? null,
-          content:         article.content ?? null,
-          source_name:     article.source?.name ?? null,
-          url:             article.url,
-          published_at:    article.publishedAt,
-          query_tag:       tag,
+          external_id:          externalId,
+          title:                article.title ?? '',
+          description:          article.description ?? null,
+          content:              article.content ?? null,
+          source_name:          article.source?.name ?? null,
+          url:                  article.url,
+          published_at:         article.publishedAt,
+          query_tag:            tag,
           plant_codes,
           owner_names,
           states,
           fuel_types,
           topics,
-          sentiment_label: sentiment,
+          sentiment_label:      sentiment,
+          // LLM fields — populated after the collection loop
+          event_type:           null as string | null,
+          impact_tags:          [] as string[],
+          fti_relevance_tags:   [] as string[],
+          importance:           'low',
+          entity_company_names: [] as string[],
+          llm_classified_at:    null as string | null,
         });
 
         totalNew++;
-
-        // Flush batch
-        if (toInsert.length >= BATCH_SIZE) {
-          const batch = toInsert.splice(0, BATCH_SIZE);
-          const { error } = await supabase.from('news_articles').upsert(batch, { onConflict: 'external_id', ignoreDuplicates: true });
-          if (error) console.error('Upsert batch error:', error.message);
-        }
       }
 
       // Small delay between queries to be polite to NewsAPI rate limits
       await new Promise(r => setTimeout(r, 300));
     }
 
-    // Flush remainder
-    if (toInsert.length > 0) {
-      const { error } = await supabase.from('news_articles').upsert(toInsert, { onConflict: 'external_id', ignoreDuplicates: true });
-      if (error) console.error('Final upsert error:', error.message);
+    // ── LLM batch classification ───────────────────────────────────────────
+    // Classify collected articles with Gemini Flash before persisting.
+    // Only runs if GEMINI_API_KEY is set; gracefully degrades otherwise.
+    let llmCallCount = 0;
+    if (geminiApiKey && toInsert.length > 0) {
+      console.log(`Classifying ${toInsert.length} articles with Gemini Flash (batches of ${LLM_BATCH_SIZE})...`);
+      const now = new Date().toISOString();
+      for (let i = 0; i < toInsert.length; i += LLM_BATCH_SIZE) {
+        const batch = toInsert.slice(i, i + LLM_BATCH_SIZE);
+        const classifications = await classifyArticlesWithGemini(
+          batch.map(r => ({ title: String(r.title), description: r.description as string | null })),
+          geminiApiKey,
+          knownUltParents,
+        );
+        for (let j = 0; j < batch.length; j++) {
+          const c = classifications[j];
+          batch[j].event_type           = c.event_type;
+          batch[j].impact_tags          = c.impact_tags;
+          batch[j].fti_relevance_tags   = c.fti_relevance_tags;
+          batch[j].importance           = c.importance;
+          batch[j].entity_company_names = c.entity_company_names;
+          batch[j].llm_classified_at    = now;
+        }
+        llmCallCount++;
+        // Polite delay between Gemini calls
+        if (i + LLM_BATCH_SIZE < toInsert.length) {
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+      console.log(`Gemini classification complete: ${llmCallCount} calls for ${toInsert.length} articles`);
     }
 
-    const result = { ok: true, queriesRun: queries.length, newArticles: totalNew };
+    // ── Flush all collected + classified articles ─────────────────────────
+    for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
+      const batch = toInsert.slice(i, i + BATCH_SIZE);
+      const { error } = await supabase.from('news_articles').upsert(batch, { onConflict: 'external_id', ignoreDuplicates: true });
+      if (error) console.error(`Upsert batch ${i}–${i + batch.length} error:`, error.message);
+    }
+
+    const result = { ok: true, queriesRun: queries.length, newArticles: totalNew, llmCallsMade: llmCallCount };
     console.log('news-ingest complete:', result);
     return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
 
