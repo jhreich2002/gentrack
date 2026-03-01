@@ -131,14 +131,18 @@ function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ quer
   const genericQueries:   Array<{ query: string; tag: string; plantCode?: string }> = [];
 
   // 1. Unique ultimate parent companies (top 25 by plant count)
+  // Filter out bare corporate suffixes that make useless queries
+  const JUNK_OWNER_TERMS = new Set(['inc.', 'llc', 'llc.', 'lp', 'l.p.', 'corp.', 'corp', 'ltd', 'ltd.', 'n/a', 'na', '']);
   const parentCount: Record<string, number> = {};
   for (const o of ownerMeta) {
-    const parent = o.ult_parent || o.owner;
-    if (parent) parentCount[parent] = (parentCount[parent] ?? 0) + 1;
+    const parent = (o.ult_parent || o.owner || '').trim();
+    if (parent && parent.length >= 4 && !JUNK_OWNER_TERMS.has(parent.toLowerCase())) {
+      parentCount[parent] = (parentCount[parent] ?? 0) + 1;
+    }
   }
   const topParents = Object.entries(parentCount)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 25)
+    .slice(0, 20)
     .map(([name]) => name);
 
   for (const parent of topParents) {
@@ -191,7 +195,8 @@ function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ quer
 
   for (const p of topPlants) {
     const fuelWord = p.fuelSource === 'Nuclear' ? 'nuclear' : p.fuelSource === 'Wind' ? 'wind' : p.fuelSource === 'Solar' ? 'solar' : 'power';
-    plantNameQueries.push({ query: `"${p.name}" ${fuelWord} plant`, tag: `plant:${p.eiaPlantCode}`, plantCode: p.eiaPlantCode });
+    // No quotes — NewsAPI free tier searches titles only; exact quoted phrases rarely match headlines
+    plantNameQueries.push({ query: `${p.name} ${fuelWord}`, tag: `plant:${p.eiaPlantCode}`, plantCode: p.eiaPlantCode });
   }
 
   // Plant-name queries run first to ensure they get plant_codes before generic queries dedup them
