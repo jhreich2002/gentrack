@@ -95,16 +95,29 @@ interface GeneratedArticle {
 
 async function generatePlantNews(plant: {
   code: string; name: string; owner: string; fuel: string; state: string; mw: number;
+  isCurtailed: boolean;
 }, today: string): Promise<GeneratedArticle[]> {
-  const stateName = STATE_NAMES[plant.state] ?? plant.state;
-  const fuelLabel = plant.fuel === 'Solar' ? 'solar farm'
+  const articleCount = plant.isCurtailed ? 6 : ARTICLES_PER_PLANT;
+  const stateName    = STATE_NAMES[plant.state] ?? plant.state;
+  const fuelLabel    = plant.fuel === 'Solar' ? 'solar farm'
     : plant.fuel === 'Wind'    ? 'wind farm'
     : plant.fuel === 'Nuclear' ? 'nuclear generating station'
     : `${plant.fuel.toLowerCase()} power plant`;
+  const curtailmentBlock = plant.isCurtailed ? `
+
+⚠️  CURTAILMENT CONTEXT: This plant has been identified as likely curtailed — its capacity factor
+consistently underperforms regional peers. At least 3 of the ${articleCount} articles MUST focus on:
+  - Grid congestion or negative LMP pricing forcing dispatch curtailment
+  - ISO/RTO curtailment orders or economic dispatch displacement
+  - Owner/lender concerns about debt service coverage or covenant compliance
+  - Potential PPA dispute, force majeure claim, or contract renegotiation
+  - Asset sale, decommissioning consideration, or strategic review announcement
+  - Transmission upgrade or battery co-location proposal to remediate curtailment
+Articles should surface financial distress signals and M&A/advisory-relevant angles.` : '';
 
   const prompt = `You are a financial journalist specialising in US power generation and energy M&A advisory.
 
-Generate exactly ${ARTICLES_PER_PLANT} realistic, distinct news articles about the following power plant.
+Generate exactly ${articleCount} realistic, distinct news articles about the following power plant.
 Each article must be a plausible energy-sector news story that could appear in trade publications like
 S&P Global Platts, Bloomberg NEF, Reuters Energy, or Utility Dive.
 
@@ -115,10 +128,13 @@ Plant details:
   State: ${stateName} (${plant.state})
   EIA Plant Code: ${plant.code}
 
-Cover a MIX of story types — e.g. outage/maintenance, regulatory/permitting, financial/M&A,
-community/environmental, capacity expansion. Make dates realistic: within the last 30 days before ${today}.
+Cover a MIX of story types across the ${articleCount} articles — including: outage/maintenance,
+regulatory/permitting, financial/M&A, grid congestion/transmission constraints,
+ISO/RTO dispatch & negative pricing events, PPA early termination or renegotiation,
+debt/credit covenant stress signals, interconnection queue delays, community/environmental,
+and capacity expansion. Make dates realistic: within the last 30 days before ${today}.${curtailmentBlock}
 
-Return ONLY a valid JSON array of exactly ${ARTICLES_PER_PLANT} objects. No markdown, no explanation.
+Return ONLY a valid JSON array of exactly ${articleCount} objects. No markdown, no explanation.
 Each object must have these exact keys:
   title                 string   — headline (max 120 chars)
   description           string   — 2-sentence summary (max 300 chars)
@@ -138,7 +154,7 @@ Each object must have these exact keys:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.85, maxOutputTokens: 1800 },
+        generationConfig: { temperature: 0.85, maxOutputTokens: plant.isCurtailed ? 3600 : 1800 },
       }),
     });
 
@@ -183,7 +199,7 @@ async function main() {
   console.log('Loading plants from Supabase...');
   const { data: plantsData, error: plantsErr } = await supabase
     .from('plants')
-    .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw')
+    .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw, is_likely_curtailed')
     .neq('eia_plant_code', '99999')
     .order('nameplate_capacity_mw', { ascending: false });
 
@@ -193,12 +209,13 @@ async function main() {
   }
 
   const plants = plantsData.map((p: Record<string, unknown>) => ({
-    code:  p.eia_plant_code as string,
-    name:  (p.name as string) || '',
-    owner: (p.owner as string) || '',
-    fuel:  (p.fuel_source as string) || '',
-    state: (p.state as string) || '',
-    mw:    Number(p.nameplate_capacity_mw) || 0,
+    code:        p.eia_plant_code as string,
+    name:        (p.name as string) || '',
+    owner:       (p.owner as string) || '',
+    fuel:        (p.fuel_source as string) || '',
+    state:       (p.state as string) || '',
+    mw:          Number(p.nameplate_capacity_mw) || 0,
+    isCurtailed: !!(p.is_likely_curtailed as boolean),
   }));
 
   // Find already-seeded plant codes (skip them)
