@@ -4,9 +4,15 @@ import { FALLBACK_PLANTS } from './fallbackData';
 import { supabase } from './supabaseClient';
 
 let _dataTimestamp: string | null = null;
+let _globalLatestMonth: string = EIA_START_MONTH;
 
 export function getDataTimestamp(): string | null {
   return _dataTimestamp;
+}
+
+/** The latest month with EIA data across all loaded plants — used to align chart X-axes. */
+export function getGlobalLatestMonth(): string {
+  return _globalLatestMonth;
 }
 
 interface PlantRow {
@@ -99,6 +105,18 @@ export const fetchPowerPlants = async (): Promise<FetchPlantsResult> => {
 
     _dataTimestamp = allRows[0]?.last_updated ?? new Date().toISOString();
     console.log(`[GenTrack] Loaded ${allRows.length} plants from Supabase`);
+
+    // Determine global latest month so all charts share the same X-axis end
+    try {
+      const { data: maxRow } = await supabase
+        .from('monthly_generation')
+        .select('month')
+        .order('month', { ascending: false })
+        .limit(1);
+      if (maxRow?.[0]?.month && maxRow[0].month > _globalLatestMonth) {
+        _globalLatestMonth = maxRow[0].month;
+      }
+    } catch { /* non-fatal — fallback to EIA_START_MONTH */ }
 
     const plants = allRows.map(rowToPlant);
     const statsMap: Record<string, CapacityFactorStats> = {};
@@ -217,6 +235,16 @@ export function computeRegionalMonthlyAverages(
  * the full plant list available (static JSON / fallback data paths).
  */
 export function computeAllStats(plants: PowerPlant[]): Record<string, CapacityFactorStats> {
+  // Compute the global latest month so all chart X-axes share the same end
+  let globalLatest = EIA_START_MONTH;
+  for (const p of plants) {
+    if (p.generationHistory.length > 0) {
+      const last = p.generationHistory[p.generationHistory.length - 1].month;
+      if (last > globalLatest) globalLatest = last;
+    }
+  }
+  _globalLatestMonth = globalLatest;
+
   const regionalAvgMaps = computeRegionalMonthlyAverages(plants);
   const map: Record<string, CapacityFactorStats> = {};
   for (const plant of plants) {
@@ -249,13 +277,15 @@ export const calculateCapacityFactorStats = (
     return { month: h.month, factor: Math.min(Math.max(factor, 0), 1) };
   });
 
-  // Expand to full EIA range (EIA_START_MONTH → latest month in data),
+  // Expand to full EIA range (EIA_START_MONTH → global latest month),
   // filling any missing months as null (not reported / not in EIA database).
+  // Using the global latest ensures all plants share the same X-axis end.
   const rawFactorMap = new Map(rawFactors.map(f => [f.month, f]));
-  const latestMonth = rawFactors.length > 0 ? rawFactors[rawFactors.length - 1].month : EIA_START_MONTH;
+  const plantLatestMonth = rawFactors.length > 0 ? rawFactors[rawFactors.length - 1].month : EIA_START_MONTH;
+  const endMonth = plantLatestMonth > _globalLatestMonth ? plantLatestMonth : _globalLatestMonth;
   const monthlyFactors: { month: string; factor: number | null }[] = [];
   let cursor = EIA_START_MONTH;
-  while (cursor <= latestMonth) {
+  while (cursor <= endMonth) {
     monthlyFactors.push(rawFactorMap.get(cursor) ?? { month: cursor, factor: null });
     const [cy, cm] = cursor.split('-').map(Number);
     cursor = cm === 12 ? `${cy + 1}-01` : `${cy}-${String(cm + 1).padStart(2, '0')}`;

@@ -7,6 +7,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { getPlantNews } from '../services/geminiService';
 import { fetchPlantOwnership } from '../services/ownershipService';
 import { fetchPlantNewsArticles, fetchPlantNewsRating } from '../services/newsIntelService';
+import { getGlobalLatestMonth } from '../services/dataService';
 
 interface Props {
   plant: PowerPlant;
@@ -453,15 +454,13 @@ const PlantDetailView: React.FC<Props> = ({
         )}
 
         {activeTab === 'generation' && (() => {
-          // Expand to full EIA range (Jan 2024 → latest reported month), null = not in EIA database
-          const genHistMap = new Map(plant.generationHistory.map(g => [g.month, g.mwh]));
-          const latestGenMonth = plant.generationHistory.length > 0
-            ? plant.generationHistory[plant.generationHistory.length - 1].month
-            : EIA_START_MONTH;
+          // Expand to full EIA range (EIA_START_MONTH → global latest month), null = not in EIA database
+          const genHistMap = new Map<string, number | null>(plant.generationHistory.map(g => [g.month, g.mwh]));
+          const globalLatest = getGlobalLatestMonth();
           const genData: { name: string; mwh: number | null }[] = [];
           let genCursor = EIA_START_MONTH;
-          while (genCursor <= latestGenMonth) {
-            genData.push({ name: genCursor, mwh: genHistMap.has(genCursor) ? (genHistMap.get(genCursor) ?? null) : null });
+          while (genCursor <= globalLatest) {
+            genData.push({ name: genCursor, mwh: genHistMap.get(genCursor) ?? null });
             const [gy, gm] = genCursor.split('-').map(Number);
             genCursor = gm === 12 ? `${gy + 1}-01` : `${gy}-${String(gm + 1).padStart(2, '0')}`;
           }
