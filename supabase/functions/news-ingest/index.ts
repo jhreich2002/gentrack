@@ -29,7 +29,7 @@ const TARGET        = 100;  // plants per nightly run (~$0.044/run → ~$1.30/mo
 const WATCHLIST_CAP = 15;   // max watchlist plants (always covered first)
 const ARTICLES_PER_PLANT = 3;  // articles Gemini generates per plant
 const UPSERT_BATCH  = 50;   // rows per Supabase upsert call
-const GEMINI_URL    = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent';
+const GEMINI_URL    = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
