@@ -95,6 +95,7 @@ async function fetchNewsApiArticles(query: string, apiKey: string, fromDate: str
   url.searchParams.set('q', query);
   url.searchParams.set('language', 'en');
   url.searchParams.set('sortBy', 'publishedAt');
+  url.searchParams.set('searchIn', 'title,description'); // restrict to headline+lede only — eliminates body-text false positives
   url.searchParams.set('from', fromDate);
   url.searchParams.set('pageSize', String(PAGE_SIZE));
   url.searchParams.set('apiKey', apiKey);
@@ -119,43 +120,96 @@ interface PlantMeta {
   fuelSource: string;
   state: string;
   nameplateCapacityMw: number;
+  curtailmentScore: number;
 }
 
 interface OwnerMeta {
+  eia_plant_code: string | null;
   owner: string | null;
   ult_parent: string | null;
+  plant_operator: string | null;
+  operator_ult_parent: string | null;
 }
 
 function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ query: string; tag: string; plantCode?: string }> {
   const plantNameQueries: Array<{ query: string; tag: string; plantCode?: string }> = [];
   const genericQueries:   Array<{ query: string; tag: string; plantCode?: string }> = [];
 
-  // 1. Unique ultimate parent companies (top 25 by plant count)
-  // Filter out bare corporate suffixes that make useless queries
-  const JUNK_OWNER_TERMS = new Set(['inc.', 'llc', 'llc.', 'lp', 'l.p.', 'corp.', 'corp', 'ltd', 'ltd.', 'n/a', 'na', '']);
-  const parentCount: Record<string, number> = {};
+  // Build a per-plant map of owner/operator from plant_ownership records
+  const ownerByPlant = new Map<string, { ultParent: string | null; operator: string | null; operatorUltParent: string | null }>();
   for (const o of ownerMeta) {
-    const parent = (o.ult_parent || o.owner || '').trim();
-    if (parent && parent.length >= 4 && !JUNK_OWNER_TERMS.has(parent.toLowerCase())) {
-      parentCount[parent] = (parentCount[parent] ?? 0) + 1;
+    if (!o.eia_plant_code) continue;
+    if (!ownerByPlant.has(o.eia_plant_code)) {
+      ownerByPlant.set(o.eia_plant_code, {
+        ultParent:        o.ult_parent ?? o.owner ?? null,
+        operator:         o.plant_operator ?? null,
+        operatorUltParent: o.operator_ult_parent ?? null,
+      });
     }
   }
-  const topParents = Object.entries(parentCount)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 20)
-    .map(([name]) => name);
 
-  for (const parent of topParents) {
-    genericQueries.push({ query: `"${parent}" power plant`, tag: parent });
+  const JUNK_OWNER_TERMS   = new Set(['inc.', 'llc', 'llc.', 'lp', 'l.p.', 'corp.', 'corp', 'ltd', 'ltd.', 'n/a', 'na', '']);
+  const SKIP_GENERIC_NAMES = new Set(['energy', 'power', 'solar', 'wind', 'unit', 'plant', 'station', 'farm', 'gen']);
+  const SKIP_NAME_FRAGMENTS = ['increment', 'state-fuel', 'level', 'aggregate'];
+
+  // ── 1. Plant-name queries sorted by curtailment score DESC ─────────────────
+  // Most impaired plants consume quota first. Quoted name forces exact phrase match
+  // in title+description (searchIn=title,description set on the API call).
+  const eligiblePlants = [...plants]
+    .filter(p =>
+      p.name.length >= 6 &&
+      !SKIP_GENERIC_NAMES.has(p.name.toLowerCase()) &&
+      !SKIP_NAME_FRAGMENTS.some(f => p.name.toLowerCase().includes(f)) &&
+      p.eiaPlantCode !== '99999'
+    )
+    .sort((a, b) => b.curtailmentScore - a.curtailmentScore)
+    .slice(0, 20);
+
+  for (const p of eligiblePlants) {
+    const fuelSuffix = p.fuelSource === 'Nuclear' ? 'nuclear plant'
+      : p.fuelSource === 'Wind' ? 'wind farm'
+      : 'solar plant';
+    plantNameQueries.push({
+      query:     `"${p.name}" ${fuelSuffix}`,
+      tag:       `plant:${p.eiaPlantCode}`,
+      plantCode: p.eiaPlantCode,
+    });
   }
 
-  // 2. Fuel-type + state combos for the 6 highest-capacity states
+  // ── 2. Owner / operator queries for top 10 most curtailed plants ────────────
+  // Each query is keyed to the plant so articles get attributed even when the
+  // plant name doesn't appear (e.g. a corporate earnings piece about curtailment).
+  const top10 = eligiblePlants.slice(0, 10);
+  const seenOwnerQueries = new Set<string>();
+  for (const p of top10) {
+    const ownerInfo = ownerByPlant.get(p.eiaPlantCode);
+    const fuelSuffix = p.fuelSource === 'Nuclear' ? 'nuclear plant'
+      : p.fuelSource === 'Wind' ? 'wind farm'
+      : 'solar plant';
+
+    const candidates = [
+      ownerInfo?.ultParent ?? null,
+      ownerInfo?.operator ?? null,
+      ownerInfo?.operatorUltParent ?? null,
+    ];
+
+    for (const ownerName of candidates) {
+      if (!ownerName) continue;
+      const ownerKey = ownerName.toLowerCase().trim();
+      if (ownerKey.length < 5 || JUNK_OWNER_TERMS.has(ownerKey)) continue;
+      const queryStr = `"${ownerName}" ${fuelSuffix} ${p.state}`;
+      if (seenOwnerQueries.has(queryStr)) continue;
+      seenOwnerQueries.add(queryStr);
+      plantNameQueries.push({ query: queryStr, tag: `owner:${p.eiaPlantCode}`, plantCode: p.eiaPlantCode });
+    }
+  }
+
+  // ── 3. Fuel-type + state combos for the 6 highest-diversity states ──────────
   const stateFuelCombos = new Map<string, Set<string>>();
   for (const p of plants) {
     if (!stateFuelCombos.has(p.state)) stateFuelCombos.set(p.state, new Set());
     stateFuelCombos.get(p.state)!.add(p.fuelSource);
   }
-  // Sort states by plant count, take top 6
   const topStates = [...stateFuelCombos.entries()]
     .sort((a, b) => b[1].size - a[1].size)
     .slice(0, 6);
@@ -167,11 +221,11 @@ function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ quer
     }
   }
 
-  // 3. Generic high-signal topic queries
+  // ── 4. Generic high-signal topic queries ────────────────────────────────────
   const generic = [
-    'US power plant outage 2025',
+    'US solar farm curtailment 2025',
     'wind farm fire damage United States',
-    'solar farm FERC interconnection',
+    'solar farm FERC interconnection curtailment',
     'nuclear power plant shutdown NRC',
     'power plant acquisition merger United States',
   ];
@@ -179,27 +233,7 @@ function buildQueries(plants: PlantMeta[], ownerMeta: OwnerMeta[]): Array<{ quer
     genericQueries.push({ query: q, tag: 'generic' });
   }
 
-  // 4. Plant-name specific queries for top plants by capacity (up to 20 queries)
-  // Run FIRST so their plant_codes are recorded before generic queries dedup the same URLs.
-  const SKIP_GENERIC_NAMES = new Set(['energy', 'power', 'solar', 'wind', 'unit', 'plant', 'station', 'farm', 'gen']);
-  const SKIP_NAME_FRAGMENTS = ['increment', 'state-fuel', 'level', 'aggregate'];
-  const topPlants = [...plants]
-    .filter(p =>
-      p.name.length >= 6 &&
-      !SKIP_GENERIC_NAMES.has(p.name.toLowerCase()) &&
-      !SKIP_NAME_FRAGMENTS.some(f => p.name.toLowerCase().includes(f)) &&
-      p.eiaPlantCode !== '99999'
-    )
-    .sort((a, b) => b.nameplateCapacityMw - a.nameplateCapacityMw)
-    .slice(0, 20);
-
-  for (const p of topPlants) {
-    const fuelWord = p.fuelSource === 'Nuclear' ? 'nuclear' : p.fuelSource === 'Wind' ? 'wind' : p.fuelSource === 'Solar' ? 'solar' : 'power';
-    // No quotes — NewsAPI free tier searches titles only; exact quoted phrases rarely match headlines
-    plantNameQueries.push({ query: `${p.name} ${fuelWord}`, tag: `plant:${p.eiaPlantCode}`, plantCode: p.eiaPlantCode });
-  }
-
-  // Plant-name queries run first to ensure they get plant_codes before generic queries dedup them
+  // Plant-name + owner queries run first to claim attribution before state/generic dedup them
   return [...plantNameQueries, ...genericQueries];
 }
 
@@ -323,7 +357,7 @@ Deno.serve(async (_req) => {
     // ── Load plant metadata for query building + matching ──────────────────
     const { data: plantsData, error: plantsErr } = await supabase
       .from('plants')
-      .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw');
+      .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw, curtailment_score');
 
     if (plantsErr || !plantsData) {
       console.error('Failed to load plants:', plantsErr?.message);
@@ -331,18 +365,19 @@ Deno.serve(async (_req) => {
     }
 
     const plants: PlantMeta[] = plantsData.map((p: Record<string, string>) => ({
-      eiaPlantCode:       p.eia_plant_code,
-      name:               p.name,
-      owner:              p.owner ?? '',
-      fuelSource:         p.fuel_source ?? '',
-      state:              p.state ?? '',
+      eiaPlantCode:        p.eia_plant_code,
+      name:                p.name,
+      owner:               p.owner ?? '',
+      fuelSource:          p.fuel_source ?? '',
+      state:               p.state ?? '',
       nameplateCapacityMw: Number(p.nameplate_capacity_mw ?? 0),
+      curtailmentScore:    Number(p.curtailment_score ?? 0),
     }));
 
     // ── Load owner metadata from plant_ownership for query enrichment ──────
     const { data: ownerData } = await supabase
       .from('plant_ownership')
-      .select('owner, ult_parent');
+      .select('eia_plant_code, owner, ult_parent, plant_operator, operator_ult_parent');
     const ownerMeta: OwnerMeta[] = ownerData ?? [];
 
     // ── Build plant lookup index ───────────────────────────────────────────
@@ -376,8 +411,23 @@ Deno.serve(async (_req) => {
 
         const searchText = `${article.title ?? ''} ${article.description ?? ''} ${article.content ?? ''}`;
         const { plant_codes, owner_names, states, fuel_types } = matchPlants(searchText, plantIdx, plants);
-        // If this query was plant-specific, always attribute the article to that plant
-        if (plantCode && !plant_codes.includes(plantCode)) plant_codes.push(plantCode);
+        // Auto-attribute to the queried plant if not already matched:
+        // - For plant-name queries (tag=plant:XXX): verify the plant name appears in title+description
+        //   (with searchIn=title,description + quoted name this should always pass for real matches)
+        // - For owner/operator queries (tag=owner:XXX): trust attribution unconditionally since
+        //   the article may not name the plant but is clearly about its owner
+        if (plantCode && !plant_codes.includes(plantCode)) {
+          const isOwnerQuery = tag.startsWith('owner:');
+          if (isOwnerQuery) {
+            plant_codes.push(plantCode);
+          } else {
+            const titleDesc = `${article.title ?? ''} ${article.description ?? ''}`.toLowerCase();
+            const plantName = plants.find(p => p.eiaPlantCode === plantCode)?.name ?? '';
+            if (plantName.length >= 6 && titleDesc.includes(plantName.toLowerCase())) {
+              plant_codes.push(plantCode);
+            }
+          }
+        }
         const topics    = classifyTopics(searchText);
         const sentiment = classifySentiment(searchText);
 
