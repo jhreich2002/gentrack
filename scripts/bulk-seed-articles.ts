@@ -28,10 +28,16 @@ import { resolve } from 'path';
 function loadEnv() {
   try {
     const envPath = resolve(process.cwd(), '.env');
-    const lines = readFileSync(envPath, 'utf-8').split('\n');
+    // Handle both Unix (LF) and Windows (CRLF) line endings
+    const lines = readFileSync(envPath, 'utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     for (const line of lines) {
-      const match = line.match(/^([^#=]+)=(.*)$/);
-      if (match) process.env[match[1].trim()] = match[2].trim();
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+      if (key) process.env[key] = val;
     }
   } catch { /* .env not found — rely on process.env */ }
 }
@@ -195,18 +201,27 @@ Each object must have these exact keys:
 async function main() {
   const today = new Date().toISOString().split('T')[0];
 
-  // Load all plants
+  // Load all plants — paginate to get past Supabase's 1,000-row default limit
   console.log('Loading plants from Supabase...');
-  const { data: plantsData, error: plantsErr } = await supabase
-    .from('plants')
-    .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw, is_likely_curtailed, ttm_avg_factor')
-    .neq('eia_plant_code', '99999')
-    .order('nameplate_capacity_mw', { ascending: false });
-
-  if (plantsErr || !plantsData?.length) {
-    console.error('Failed to load plants:', plantsErr?.message);
-    process.exit(1);
+  const PAGE = 1000;
+  let allPlantsRaw: Record<string, unknown>[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('plants')
+      .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw, is_likely_curtailed, ttm_avg_factor')
+      .neq('eia_plant_code', '99999')
+      .order('nameplate_capacity_mw', { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) { console.error('Failed to load plants:', error.message); process.exit(1); }
+    if (!data || data.length === 0) break;
+    allPlantsRaw = allPlantsRaw.concat(data as Record<string, unknown>[]);
+    if (data.length < PAGE) break;
+    from += PAGE;
   }
+
+  if (!allPlantsRaw.length) { console.error('No plants found in DB.'); process.exit(1); }
+  const plantsData = allPlantsRaw;
 
   const plants = plantsData.map((p: Record<string, unknown>) => ({
     code:        p.eia_plant_code as string,
