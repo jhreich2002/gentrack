@@ -8,11 +8,12 @@ import { supabase } from './services/supabaseClient';
 import CapacityChart from './components/CapacityChart';
 import RegionalComparison from './components/RegionalComparison';
 import PlantDetailView from './components/PlantDetailView';
+import CompanyDetailView from './components/CompanyDetailView';
 import FilterControls from './components/FilterControls';
 import CoverPage from './components/CoverPage';
 import AdminPage from './components/AdminPage';
 
-type View = 'dashboard' | 'detail' | 'admin';
+type View = 'dashboard' | 'detail' | 'admin' | 'company';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor';
 
@@ -53,10 +54,17 @@ const App: React.FC = () => {
   const [sortDesc, setSortDesc] = useState(true);
   
   // Selection
-  const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
+  const [selectedPlantId, setSelectedPlantId]       = useState<string | null>(null);
+  const [selectedUltParent, setSelectedUltParent]   = useState<string | null>(null);
   const [generationLoading, setGenerationLoading] = useState(false);
   const [regionalTrend, setRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
   const [subRegionalTrend, setSubRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
+
+  // Navigate to company detail view
+  const handleCompanyClick = (ultParentName: string) => {
+    setSelectedUltParent(ultParentName);
+    setView('company');
+  };
 
   // Handle row click to view plant details
   const handlePlantClick = async (id: string) => {
@@ -622,7 +630,9 @@ const App: React.FC = () => {
             </div>
           </>
         ) : (
-          selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => setView('dashboard')} />
+          view === 'company' && selectedUltParent
+            ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} />
+            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => setView('dashboard')} onCompanyClick={handleCompanyClick} />
         )}
       </main>
 

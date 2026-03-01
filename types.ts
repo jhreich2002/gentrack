@@ -139,6 +139,10 @@ export interface CompanyStats {
   eventCounts:      Record<string, number>;   // { restructuring: 3, m_and_a: 1 }
   relevanceScores:  Record<string, number>;   // { restructuring: 72, transactions: 45 }
   computedAt:       string;
+  // Day 4 — on-demand LLM advisory analysis
+  analysisText:          string | null;
+  analysisAngleBullets:  string[];
+  analysisUpdatedAt:     string | null;
 }
 
 export interface PlantOwnership {

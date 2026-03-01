@@ -19,6 +19,7 @@ interface Props {
   isWatched: boolean;
   onToggleWatch: (e: React.MouseEvent) => void;
   onBack: () => void;
+  onCompanyClick?: (ultParentName: string) => void;
 }
 
 type DetailTab = 'overview' | 'monthly' | 'generation' | 'ownership' | 'news';
@@ -33,7 +34,8 @@ const PlantDetailView: React.FC<Props> = ({
   generationLoading = false,
   isWatched,
   onToggleWatch,
-  onBack 
+  onBack,
+  onCompanyClick,
 }) => {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
 
@@ -599,19 +601,22 @@ const PlantDetailView: React.FC<Props> = ({
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {([
                       { label: 'Owner',                        value: ownership.owner },
-                      { label: 'Ultimate Parent',              value: ownership.ultParent },
+                      { label: 'Ultimate Parent',              value: ownership.ultParent, isCompany: true },
                       { label: 'Operator',                     value: ownership.plantOperator },
-                      { label: 'Operator Ultimate Parent',     value: ownership.operatorUltParent },
+                      { label: 'Operator Ultimate Parent',     value: ownership.operatorUltParent, isCompany: true },
                       { label: 'Technology Type',              value: ownership.techType },
                       { label: 'Operating Ownership',          value: ownership.operOwnPct != null ? `${ownership.operOwnPct}%` : null },
                       { label: 'Ownership Status',             value: ownership.ownStatus },
                       { label: 'Planned Ownership',            value: ownership.plannedOwn },
                       { label: 'Owner EIA Utility Code',       value: ownership.ownerEiaUtilityCode },
                       { label: 'Parent EIA Utility Code',      value: ownership.parentEiaUtilityCode },
-                    ] as { label: string; value: string | null }[]).map(({ label, value }) => (
+                    ] as { label: string; value: string | null; isCompany?: boolean }[]).map(({ label, value, isCompany }) => (
                       <div key={label} className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
                         <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">{label}</div>
-                        <div className="text-sm font-bold text-white">{value ?? <span className="text-slate-600 font-normal italic">N/A</span>}</div>
+                        {value && isCompany && onCompanyClick
+                          ? <button onClick={() => onCompanyClick(value)} className="text-sm font-bold text-blue-400 hover:text-blue-300 hover:underline text-left transition-colors">{value}</button>
+                          : <div className="text-sm font-bold text-white">{value ?? <span className="text-slate-600 font-normal italic">N/A</span>}</div>
+                        }
                       </div>
                     ))}
                   </div>
