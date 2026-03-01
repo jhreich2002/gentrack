@@ -42,7 +42,7 @@ const App: React.FC = () => {
   const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
   const [selectedSubRegions, setSelectedSubRegions] = useState<string[]>([]);
   const [search, setSearch] = useState('');
-  const [dataGapThreshold, setDataGapThreshold] = useState<number | null>(null);
+  const [hideInactive, setHideInactive] = useState<'off' | 'no-data' | 'offline'>('off');
   const [minCurtailmentLag, setMinCurtailmentLag] = useState<number>(0);
   const [maxCFThreshold, setMaxCFThreshold] = useState<number | null>(null);
 
@@ -173,9 +173,10 @@ const App: React.FC = () => {
         p.location?.state?.toLowerCase().includes(search.toLowerCase()) ||
         p.county?.toLowerCase().includes(search.toLowerCase());
       const stats = statsMap[p.id];
-      const gapMatch = dataGapThreshold === null
-        ? true
-        : (stats?.trailingZeroMonths ?? 0) < dataGapThreshold;
+      const gapMatch =
+        hideInactive === 'off'     ? true
+        : hideInactive === 'no-data' ? !stats?.hasNoRecentData
+        : /* 'offline' */             !(stats?.hasNoRecentData || stats?.isMaintenanceOffline);
       const lagMatch = minCurtailmentLag === 0
         ? true
         : (stats?.isLikelyCurtailed && (stats?.curtailmentScore ?? 0) >= minCurtailmentLag);
@@ -200,12 +201,12 @@ const App: React.FC = () => {
     });
 
     return result;
-  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, dataGapThreshold, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
+  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, hideInactive, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, selectedFuels, selectedSubRegions, search, dataGapThreshold, minCurtailmentLag, maxCFThreshold, sortKey, sortDesc]);
+  }, [activeTab, selectedFuels, selectedSubRegions, search, hideInactive, minCurtailmentLag, maxCFThreshold, sortKey, sortDesc]);
 
   // Paginated slice
   const totalPages = Math.max(1, Math.ceil(filteredPlants.length / PAGE_SIZE));
@@ -453,8 +454,8 @@ const App: React.FC = () => {
               setSelectedSubRegions={setSelectedSubRegions}
               search={search}
               setSearch={setSearch}
-              dataGapThreshold={dataGapThreshold}
-              setDataGapThreshold={setDataGapThreshold}
+              hideInactive={hideInactive}
+              setHideInactive={setHideInactive}
               minCurtailmentLag={minCurtailmentLag}
               setMinCurtailmentLag={setMinCurtailmentLag}
               maxCFThreshold={maxCFThreshold}

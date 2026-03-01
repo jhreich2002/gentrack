@@ -11,20 +11,18 @@ interface Props {
   setSelectedSubRegions: (subs: string[]) => void;
   search: string;
   setSearch: (s: string) => void;
-  dataGapThreshold: number | null;
-  setDataGapThreshold: (n: number | null) => void;
+  hideInactive: 'off' | 'no-data' | 'offline';
+  setHideInactive: (v: 'off' | 'no-data' | 'offline') => void;
   minCurtailmentLag: number;
   setMinCurtailmentLag: (n: number) => void;
   maxCFThreshold: number | null;
   setMaxCFThreshold: (n: number | null) => void;
 }
 
-const GAP_OPTIONS: { label: string; value: number | null }[] = [
-  { label: 'Off', value: null },
-  { label: '≥3 mo', value: 3 },
-  { label: '≥6 mo', value: 6 },
-  { label: '≥9 mo', value: 9 },
-  { label: '≥12 mo', value: 12 },
+const GAP_OPTIONS: { label: string; value: 'off' | 'no-data' | 'offline'; desc: string }[] = [
+  { label: 'Off',          value: 'off',      desc: 'Show all plants' },
+  { label: 'Hide No-Data', value: 'no-data',  desc: 'Hide plants with 0 TTM generation (never active / retired)' },
+  { label: 'Hide Offline', value: 'offline',  desc: 'Also hide maintenance / forced-outage plants' },
 ];
 
 const LAG_OPTIONS: { label: string; value: number }[] = [
@@ -50,8 +48,8 @@ const FilterControls: React.FC<Props> = ({
   setSelectedSubRegions,
   search,
   setSearch,
-  dataGapThreshold,
-  setDataGapThreshold,
+  hideInactive,
+  setHideInactive,
   minCurtailmentLag,
   setMinCurtailmentLag,
   maxCFThreshold,
@@ -86,7 +84,7 @@ const FilterControls: React.FC<Props> = ({
   const isRegionalTab = activeRegion !== 'Overview' && activeRegion !== 'Watchlist';
 
   const activeFiltersCount = [
-    dataGapThreshold !== null,
+    hideInactive !== 'off',
     minCurtailmentLag > 0,
     maxCFThreshold !== null,
   ].filter(Boolean).length;
@@ -149,7 +147,7 @@ const FilterControls: React.FC<Props> = ({
 
         {activeFiltersCount > 0 && (
           <button
-            onClick={() => { setDataGapThreshold(null); setMinCurtailmentLag(0); setMaxCFThreshold(null); setCfInput(''); }}
+            onClick={() => { setHideInactive('off'); setMinCurtailmentLag(0); setMaxCFThreshold(null); setCfInput(''); }}
             className="px-3 py-2 rounded-lg text-xs font-bold border border-slate-600 bg-slate-800 text-slate-400 hover:text-white hover:border-slate-400 transition-all self-end"
           >
             ✕ Clear Filters ({activeFiltersCount})
@@ -160,19 +158,20 @@ const FilterControls: React.FC<Props> = ({
       {/* Row 2: Advanced Filters */}
       <div className="flex flex-wrap items-start gap-6 pt-3 border-t border-slate-800">
 
-        {/* Data Gap */}
+        {/* Inactive Plant Filter */}
         <div>
           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-2">
-            Data Gap
-            <span className="text-slate-600 normal-case font-normal">hide plants offline ≥N months</span>
+            Inactive Plants
+            <span className="text-slate-600 normal-case font-normal">filter by generation status</span>
           </label>
           <div className="flex gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700">
             {GAP_OPTIONS.map(opt => (
               <button
-                key={String(opt.value)}
-                onClick={() => setDataGapThreshold(opt.value)}
+                key={opt.value}
+                onClick={() => setHideInactive(opt.value)}
+                title={opt.desc}
                 className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${
-                  dataGapThreshold === opt.value
+                  hideInactive === opt.value
                     ? 'bg-amber-600/80 text-white shadow-md'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
@@ -181,6 +180,13 @@ const FilterControls: React.FC<Props> = ({
               </button>
             ))}
           </div>
+          {hideInactive !== 'off' && (
+            <p className="text-[10px] text-amber-500/70 mt-1.5">
+              {hideInactive === 'no-data'
+                ? 'Hiding plants with zero TTM generation (retired / no EIA reporting)'
+                : 'Hiding plants with zero TTM generation and maintenance/forced-outage plants'}
+            </p>
+          )}
         </div>
 
         {/* Curtailment Lag */}

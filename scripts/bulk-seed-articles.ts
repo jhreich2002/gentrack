@@ -199,7 +199,7 @@ async function main() {
   console.log('Loading plants from Supabase...');
   const { data: plantsData, error: plantsErr } = await supabase
     .from('plants')
-    .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw, is_likely_curtailed')
+    .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw, is_likely_curtailed, ttm_avg_factor')
     .neq('eia_plant_code', '99999')
     .order('nameplate_capacity_mw', { ascending: false });
 
@@ -216,7 +216,14 @@ async function main() {
     state:       (p.state as string) || '',
     mw:          Number(p.nameplate_capacity_mw) || 0,
     isCurtailed: !!(p.is_likely_curtailed as boolean),
+    ttmAvg:      Number(p.ttm_avg_factor) || 0,
   }));
+
+  // Skip plants with zero TTM generation — retired, not EIA-reporting, or fully dark.
+  // These plants have no active operations to generate meaningful news about.
+  const activePlants = plants.filter(p => p.ttmAvg > 0);
+  const skippedInactive = plants.length - activePlants.length;
+  console.log(`Skipping ${skippedInactive} plants with 0 TTM generation (inactive/retired).`);
 
   // Find already-seeded plant codes (skip them)
   console.log('Checking already-seeded plants...');
@@ -230,14 +237,16 @@ async function main() {
     for (const code of (row.plant_codes ?? [])) seededCodes.add(code);
   }
 
-  const toProcess = plants.filter(p => !seededCodes.has(p.code));
+  const toProcess = activePlants.filter(p => !seededCodes.has(p.code));
   const estimatedCost = (toProcess.length * 0.00044).toFixed(2);
 
-  console.log(`\nTotal plants: ${plants.length}`);
-  console.log(`Already seeded: ${seededCodes.size}`);
-  console.log(`To process: ${toProcess.length}`);
-  console.log(`Estimated cost: ~$${estimatedCost}`);
-  console.log(`Estimated time: ~${Math.ceil(toProcess.length * DELAY_MS / 60000)} minutes\n`);
+  console.log(`\nTotal plants in DB:  ${plants.length}`);
+  console.log(`Inactive (skipped):  ${skippedInactive}`);
+  console.log(`Active plants:       ${activePlants.length}`);
+  console.log(`Already seeded:      ${seededCodes.size}`);
+  console.log(`To process:          ${toProcess.length}`);
+  console.log(`Estimated cost:      ~$${estimatedCost}`);
+  console.log(`Estimated time:      ~${Math.ceil(toProcess.length * DELAY_MS / 60000)} minutes\n`);
 
   let totalArticles = 0;
   let errors = 0;
