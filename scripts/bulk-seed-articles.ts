@@ -190,8 +190,38 @@ Each object must have these exact keys:
       typeof a.title === 'string' && typeof a.description === 'string'
     ) as GeneratedArticle[];
 
-  } catch (e) {
-    console.warn(`  [error] Plant ${plant.code}:`, e);
+  } catch (e: unknown) {
+    // Retry once on transient network errors (DNS failure, connection reset, etc.)
+    const msg = String(e);
+    const isNetwork = msg.includes('ENOTFOUND') || msg.includes('ECONNRESET') || msg.includes('fetch failed');
+    if (isNetwork) {
+      console.warn(`  [network-err] Waiting 15s before retrying ${plant.code}...`);
+      await sleep(15000);
+      try {
+        const res2 = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.85, maxOutputTokens: plant.isCurtailed ? 3600 : 1800 },
+          }),
+        });
+        if (res2.ok) {
+          const data2 = await res2.json();
+          const raw2: string = data2?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+          if (!raw2) return [];
+          const s2 = raw2.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+          const a2 = s2.indexOf('['); const b2 = s2.lastIndexOf(']');
+          if (a2 === -1 || b2 === -1) return [];
+          const p2 = JSON.parse(s2.slice(a2, b2 + 1));
+          return Array.isArray(p2) ? p2.filter((a: Record<string, unknown>) => typeof a.title === 'string') as GeneratedArticle[] : [];
+        }
+      } catch {
+        console.warn(`  [network-err] Retry also failed for ${plant.code}, skipping.`);
+      }
+    } else {
+      console.warn(`  [error] Plant ${plant.code}:`, e);
+    }
     return [];
   }
 }
@@ -240,16 +270,22 @@ async function main() {
   const skippedInactive = plants.length - activePlants.length;
   console.log(`Skipping ${skippedInactive} plants with 0 TTM generation (inactive/retired).`);
 
-  // Find already-seeded plant codes (skip them)
+  // Find already-seeded plant codes — paginate to handle large counts
   console.log('Checking already-seeded plants...');
-  const { data: seededData } = await supabase
-    .from('news_articles')
-    .select('plant_codes')
-    .like('query_tag', 'gemini:%');
-
   const seededCodes = new Set<string>();
-  for (const row of seededData ?? []) {
-    for (const code of (row.plant_codes ?? [])) seededCodes.add(code);
+  let seedFrom = 0;
+  while (true) {
+    const { data: seededData, error: seededErr } = await supabase
+      .from('news_articles')
+      .select('plant_codes')
+      .like('query_tag', 'gemini:%')
+      .range(seedFrom, seedFrom + 999);
+    if (seededErr || !seededData?.length) break;
+    for (const row of seededData) {
+      for (const code of (row.plant_codes ?? [])) seededCodes.add(code as string);
+    }
+    if (seededData.length < 1000) break;
+    seedFrom += 1000;
   }
 
   const toProcess = activePlants.filter(p => !seededCodes.has(p.code));
