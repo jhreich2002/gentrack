@@ -102,26 +102,28 @@ async function fetchPage(sb: SupabaseClient, offset: number): Promise<ArticleRow
   return (data ?? []) as ArticleRow[];
 }
 
-// ── DB: update embeddings in one batch ───────────────────────────────────────
+// ── DB: update embeddings — parallel individual updates (10 concurrent) ──────
 async function updateBatch(
   sb: SupabaseClient,
   batch: ArticleRow[],
   vectors: number[][],
 ): Promise<number> {
+  const now = new Date().toISOString();
+  const CONCURRENCY = 10;
   let saved = 0;
-  for (let j = 0; j < batch.length; j++) {
-    const { error } = await sb
-      .from('news_articles')
-      .update({
-        embedding:   `[${vectors[j].join(',')}]`,
-        embedded_at: new Date().toISOString(),
-      })
-      .eq('id', batch[j].id);
 
-    if (error) {
-      console.error(`  [db-err] ${batch[j].id}: ${error.message}`);
-    } else {
-      saved++;
+  for (let k = 0; k < batch.length; k += CONCURRENCY) {
+    const slice = batch.slice(k, k + CONCURRENCY);
+    const results = await Promise.all(
+      slice.map((article, j) =>
+        sb.from('news_articles')
+          .update({ embedding: `[${vectors[k + j].join(',')}]`, embedded_at: now })
+          .eq('id', article.id)
+      )
+    );
+    for (const { error } of results) {
+      if (error) { console.error(`  [db-err] ${error.message}`); }
+      else { saved++; }
     }
   }
   return saved;
