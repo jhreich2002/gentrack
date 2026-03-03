@@ -170,6 +170,12 @@ Each object must have these exact keys:
       return generatePlantNews(plant, today); // retry once
     }
 
+    if (res.status === 503 || res.status === 502) {
+      console.warn(`  [HTTP ${res.status}] Service busy — waiting 30s before retrying ${plant.code}...`);
+      await sleep(30000);
+      return generatePlantNews(plant, today); // retry once
+    }
+
     if (!res.ok) {
       console.warn(`  [HTTP ${res.status}] Skipping plant ${plant.code}`);
       return [];
