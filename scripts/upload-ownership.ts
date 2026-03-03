@@ -46,7 +46,42 @@ const NUMERIC_COLS = new Set(['oper_own', 'largest_ppa_contracted_capacity']);
 const DATE_COLS    = new Set(['largest_ppa_contracted_start_date', 'largest_ppa_contracted_expiration_date']);
 const BATCH_SIZE   = 500;
 
-// ── CSV parser (handles quoted fields, Windows line endings, and junk header rows) ──
+// ── RFC-4180 compliant CSV tokenizer ────────────────────────────────────────
+// Correctly handles quoted fields that contain commas and escaped quotes ("").
+function tokenizeLine(line: string): string[] {
+  const fields: string[] = [];
+  let i = 0;
+  while (i <= line.length) {
+    if (line[i] === '"') {
+      // Quoted field — consume until closing unescaped quote
+      let val = '';
+      i++; // skip opening quote
+      while (i < line.length) {
+        if (line[i] === '"' && line[i + 1] === '"') {
+          val += '"'; i += 2; // escaped quote ""
+        } else if (line[i] === '"') {
+          i++; break; // closing quote
+        } else {
+          val += line[i++];
+        }
+      }
+      fields.push(val.trim());
+      if (line[i] === ',') i++; // skip comma after closing quote
+    } else {
+      // Unquoted field — consume until next comma
+      const end = line.indexOf(',', i);
+      if (end === -1) {
+        fields.push(line.slice(i).trim());
+        break;
+      }
+      fields.push(line.slice(i, end).trim());
+      i = end + 1;
+    }
+  }
+  return fields;
+}
+
+// ── CSV parser (RFC-4180: handles quoted fields with commas, Windows line endings) ──
 function parseCSV(content: string): Record<string, string>[] {
   const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
 
@@ -56,20 +91,20 @@ function parseCSV(content: string): Record<string, string>[] {
   );
   if (headerLineIdx === -1) throw new Error('Could not find a header row containing EIA_SITE_CODE');
 
-  const headers = lines[headerLineIdx]
-    .replace(/^\uFEFF/, '') // strip UTF-8 BOM if present
-    .split(',')
-    .map(h => h.trim().replace(/^"|"$/g, '').toUpperCase());
+  const headerLine = lines[headerLineIdx].replace(/^\uFEFF/, ''); // strip UTF-8 BOM
+  const headers = tokenizeLine(headerLine).map(h => h.toUpperCase());
 
   console.log(`  Header row found on line ${headerLineIdx + 1}: ${headers.slice(0, 5).join(', ')}...`);
+  console.log(`  Total columns detected: ${headers.length}`);
 
   return lines
     .slice(headerLineIdx + 1)
-    .filter(l => l.trim() && !l.split(',').every(v => !v.trim())) // skip blank rows
+    .filter(l => l.trim())
     .map(line => {
-      const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+      const vals = tokenizeLine(line);
       return Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? '']));
-    });
+    })
+    .filter(row => Object.values(row).some(v => v.trim())); // skip fully blank rows
 }
 
 // ── Map one CSV row to a Supabase row ───────────────────────────────────────
