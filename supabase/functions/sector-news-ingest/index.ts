@@ -253,7 +253,7 @@ Deno.serve(async (_req) => {
       .from('plant_ownership')
       .select('ult_parent, owner');
 
-    const knownUltParents = [...new Set(
+    const knownUltParents: string[] = [...new Set(
       (ownerData ?? [])
         .map((o: { ult_parent: string | null; owner: string | null }) => o.ult_parent ?? o.owner)
         .filter((n): n is string => !!n && n.length >= 5)
