@@ -42,7 +42,7 @@ const App: React.FC = () => {
   const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
   const [selectedSubRegions, setSelectedSubRegions] = useState<string[]>([]);
   const [search, setSearch] = useState('');
-  const [hideInactive, setHideInactive] = useState<'off' | 'no-data' | 'offline'>('off');
+  const [hideNoGeneration, setHideNoGeneration] = useState(false);
   const [minCurtailmentLag, setMinCurtailmentLag] = useState<number>(0);
   const [maxCFThreshold, setMaxCFThreshold] = useState<number | null>(null);
 
@@ -57,6 +57,8 @@ const App: React.FC = () => {
   // Selection
   const [selectedPlantId, setSelectedPlantId]       = useState<string | null>(null);
   const [selectedUltParent, setSelectedUltParent]   = useState<string | null>(null);
+  const [cameFromCompany, setCameFromCompany]       = useState(false);
+  const [companyActiveTab, setCompanyActiveTab]     = useState<'overview' | 'portfolio'>('overview');
   const [generationLoading, setGenerationLoading] = useState(false);
   const [regionalTrend, setRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
   const [subRegionalTrend, setSubRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
@@ -64,13 +66,23 @@ const App: React.FC = () => {
   // Navigate to company detail view
   const handleCompanyClick = (ultParentName: string) => {
     setSelectedUltParent(ultParentName);
+    setCompanyActiveTab('overview');
     setView('company');
   };
 
+  // Navigate to plant detail from company portfolio (by EIA code)
+  const handlePlantClickFromCompany = (eiaPlantCode: string) => {
+    const plant = plants.find(p => p.eiaPlantCode === eiaPlantCode);
+    if (plant) {
+      handlePlantClick(plant.id, true);
+    }
+  };
+
   // Handle row click to view plant details
-  const handlePlantClick = async (id: string) => {
+  const handlePlantClick = async (id: string, fromCompany = false) => {
     setSelectedPlantId(id);
     setView('detail');
+    setCameFromCompany(fromCompany);
     setGenerationLoading(true);
     setRegionalTrend([]);
     setSubRegionalTrend([]);
@@ -173,10 +185,7 @@ const App: React.FC = () => {
         p.location?.state?.toLowerCase().includes(search.toLowerCase()) ||
         p.county?.toLowerCase().includes(search.toLowerCase());
       const stats = statsMap[p.id];
-      const gapMatch =
-        hideInactive === 'off'     ? true
-        : hideInactive === 'no-data' ? !stats?.hasNoRecentData
-        : /* 'offline' */             !(stats?.hasNoRecentData || stats?.isMaintenanceOffline);
+      const gapMatch = !hideNoGeneration || (stats?.ttmAverage ?? 0) > 0;
       const lagMatch = minCurtailmentLag === 0
         ? true
         : (stats?.isLikelyCurtailed && (stats?.curtailmentScore ?? 0) >= minCurtailmentLag);
@@ -201,12 +210,12 @@ const App: React.FC = () => {
     });
 
     return result;
-  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, hideInactive, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
+  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, hideNoGeneration, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, selectedFuels, selectedSubRegions, search, hideInactive, minCurtailmentLag, maxCFThreshold, sortKey, sortDesc]);
+  }, [activeTab, selectedFuels, selectedSubRegions, search, hideNoGeneration, minCurtailmentLag, maxCFThreshold, sortKey, sortDesc]);
 
   // Paginated slice
   const totalPages = Math.max(1, Math.ceil(filteredPlants.length / PAGE_SIZE));
@@ -454,8 +463,8 @@ const App: React.FC = () => {
               setSelectedSubRegions={setSelectedSubRegions}
               search={search}
               setSearch={setSearch}
-              hideInactive={hideInactive}
-              setHideInactive={setHideInactive}
+              hideNoGeneration={hideNoGeneration}
+              setHideNoGeneration={setHideNoGeneration}
               minCurtailmentLag={minCurtailmentLag}
               setMinCurtailmentLag={setMinCurtailmentLag}
               maxCFThreshold={maxCFThreshold}
@@ -645,10 +654,10 @@ const App: React.FC = () => {
           </>
         ) : (
           view === 'company' && selectedUltParent
-            ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} />
+            ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} onPlantClick={handlePlantClickFromCompany} initialTab={companyActiveTab} onTabChange={setCompanyActiveTab} />
             : view === 'prospecting'
             ? <ProspectingDashboard onCompanyClick={handleCompanyClick} />
-            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => setView('dashboard')} onCompanyClick={handleCompanyClick} />
+            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
         )}
       </main>
 

@@ -11,19 +11,15 @@ interface Props {
   setSelectedSubRegions: (subs: string[]) => void;
   search: string;
   setSearch: (s: string) => void;
-  hideInactive: 'off' | 'no-data' | 'offline';
-  setHideInactive: (v: 'off' | 'no-data' | 'offline') => void;
+  hideNoGeneration: boolean;
+  setHideNoGeneration: (v: boolean) => void;
   minCurtailmentLag: number;
   setMinCurtailmentLag: (n: number) => void;
   maxCFThreshold: number | null;
   setMaxCFThreshold: (n: number | null) => void;
 }
 
-const GAP_OPTIONS: { label: string; value: 'off' | 'no-data' | 'offline'; desc: string }[] = [
-  { label: 'Off',          value: 'off',      desc: 'Show all plants' },
-  { label: 'Hide No-Data', value: 'no-data',  desc: 'Hide plants with 0 TTM generation (never active / retired)' },
-  { label: 'Hide Offline', value: 'offline',  desc: 'Also hide maintenance / forced-outage plants' },
-];
+
 
 const LAG_OPTIONS: { label: string; value: number }[] = [
   { label: 'Off', value: 0 },
@@ -48,8 +44,8 @@ const FilterControls: React.FC<Props> = ({
   setSelectedSubRegions,
   search,
   setSearch,
-  hideInactive,
-  setHideInactive,
+  hideNoGeneration,
+  setHideNoGeneration,
   minCurtailmentLag,
   setMinCurtailmentLag,
   maxCFThreshold,
@@ -84,7 +80,7 @@ const FilterControls: React.FC<Props> = ({
   const isRegionalTab = activeRegion !== 'Overview' && activeRegion !== 'Watchlist';
 
   const activeFiltersCount = [
-    hideInactive !== 'off',
+    hideNoGeneration,
     minCurtailmentLag > 0,
     maxCFThreshold !== null,
   ].filter(Boolean).length;
@@ -147,7 +143,7 @@ const FilterControls: React.FC<Props> = ({
 
         {activeFiltersCount > 0 && (
           <button
-            onClick={() => { setHideInactive('off'); setMinCurtailmentLag(0); setMaxCFThreshold(null); setCfInput(''); }}
+            onClick={() => { setHideNoGeneration(false); setMinCurtailmentLag(0); setMaxCFThreshold(null); setCfInput(''); }}
             className="px-3 py-2 rounded-lg text-xs font-bold border border-slate-600 bg-slate-800 text-slate-400 hover:text-white hover:border-slate-400 transition-all self-end"
           >
             ✕ Clear Filters ({activeFiltersCount})
@@ -158,33 +154,27 @@ const FilterControls: React.FC<Props> = ({
       {/* Row 2: Advanced Filters */}
       <div className="flex flex-wrap items-start gap-6 pt-3 border-t border-slate-800">
 
-        {/* Inactive Plant Filter */}
+        {/* Hide No-Generation Toggle */}
         <div>
-          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-2">
-            Inactive Plants
-            <span className="text-slate-600 normal-case font-normal">filter by generation status</span>
+          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 block">
+            No Generation (Last 12 Mo)
           </label>
-          <div className="flex gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700">
-            {GAP_OPTIONS.map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setHideInactive(opt.value)}
-                title={opt.desc}
-                className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${
-                  hideInactive === opt.value
-                    ? 'bg-amber-600/80 text-white shadow-md'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-          {hideInactive !== 'off' && (
+          <button
+            onClick={() => setHideNoGeneration(!hideNoGeneration)}
+            className={`flex items-center gap-2.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
+              hideNoGeneration
+                ? 'bg-amber-600/80 border-amber-500 text-white shadow-md'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500'
+            }`}
+          >
+            <span className={`relative inline-block w-7 h-4 rounded-full transition-colors ${hideNoGeneration ? 'bg-amber-400' : 'bg-slate-600'}`}>
+              <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${hideNoGeneration ? 'translate-x-3' : ''}`} />
+            </span>
+            {hideNoGeneration ? 'Hidden' : 'Shown'}
+          </button>
+          {hideNoGeneration && (
             <p className="text-[10px] text-amber-500/70 mt-1.5">
-              {hideInactive === 'no-data'
-                ? 'Hiding plants with zero TTM generation (retired / no EIA reporting)'
-                : 'Hiding plants with zero TTM generation and maintenance/forced-outage plants'}
+              Hiding plants with zero generation in the trailing 12 months
             </p>
           )}
         </div>

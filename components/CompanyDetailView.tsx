@@ -1,10 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { CompanyStats } from '../types';
-import { fetchCompanyStats, callCompanyAnalyze, CompanyAnalysisResponse } from '../services/companyService';
+import { fetchCompanyStats, callCompanyAnalyze, CompanyAnalysisResponse, fetchCompanyPlants, CompanyPlant } from '../services/companyService';
+
+type CompanyTab = 'overview' | 'portfolio';
 
 interface Props {
   ultParentName: string;
   onBack: () => void;
+  onPlantClick?: (eiaPlantCode: string) => void;
+  initialTab?: CompanyTab;
+  onTabChange?: (tab: CompanyTab) => void;
 }
 
 // ── Colour palette for tech/state bars ────────────────────────────────────────
@@ -42,16 +47,25 @@ const EVENT_LABELS: Record<string, string> = {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack }) => {
+const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack, onPlantClick, initialTab, onTabChange }) => {
+  const [activeTab, setActiveTab] = useState<CompanyTab>(initialTab ?? 'overview');
   const [stats, setStats]       = useState<CompanyStats | null>(null);
   const [loading, setLoading]   = useState(true);
   const [analysis, setAnalysis] = useState<CompanyAnalysisResponse | null>(null);
   const [loadingAnalysis, setLoadingAnalysis] = useState(false);
 
+  // Portfolio state
+  const [plants, setPlants]         = useState<CompanyPlant[]>([]);
+  const [loadingPlants, setLoadingPlants] = useState(false);
+  const [plantsFetched, setPlantsFetched] = useState(false);
+
   useEffect(() => {
     setStats(null);
     setLoading(true);
     setAnalysis(null);
+    setActiveTab(initialTab ?? 'overview');
+    setPlants([]);
+    setPlantsFetched(false);
 
     fetchCompanyStats(ultParentName).then(s => {
       setStats(s);
@@ -67,6 +81,15 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack }) => {
       }
     });
   }, [ultParentName]);
+
+  const handleLoadPlants = async () => {
+    if (loadingPlants || plantsFetched) return;
+    setLoadingPlants(true);
+    const data = await fetchCompanyPlants(ultParentName);
+    setPlants(data);
+    setLoadingPlants(false);
+    setPlantsFetched(true);
+  };
 
   const handleAnalyze = async () => {
     if (loadingAnalysis) return;
@@ -107,6 +130,24 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack }) => {
         </div>
       </div>
 
+      {/* ── Tab Navigation ─────────────────────────────────────────────────── */}
+      <div className="flex gap-2 mb-6 bg-slate-900/50 p-1.5 rounded-xl border border-slate-800 w-fit">
+        <button
+          onClick={() => { setActiveTab('overview'); onTabChange?.('overview'); }}
+          className={`px-6 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'overview' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+          OVERVIEW
+        </button>
+        <button
+          onClick={() => { setActiveTab('portfolio'); onTabChange?.('portfolio'); handleLoadPlants(); }}
+          className={`px-6 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'portfolio' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+          PORTFOLIO ({stats?.plantCount ?? 0})
+        </button>
+      </div>
+
       {/* ── Loading ────────────────────────────────────────────────────────── */}
       {loading && (
         <div className="py-24 flex flex-col items-center justify-center space-y-4">
@@ -124,6 +165,8 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack }) => {
       )}
 
       {!loading && stats && (
+        <>
+        {activeTab === 'overview' && (
         <div className="space-y-8 animate-in fade-in duration-500">
 
           {/* ── Portfolio Overview ──────────────────────────────────────────── */}
@@ -333,6 +376,115 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack }) => {
             Stats last computed: {stats.computedAt ? new Date(stats.computedAt).toLocaleString() : 'N/A'}
           </div>
         </div>
+        )}
+
+        {/* ── PORTFOLIO TAB ──────────────────────────────────────────────────── */}
+        {activeTab === 'portfolio' && (
+          <div className="animate-in fade-in duration-500">
+            {/* Loading plants */}
+            {loadingPlants && (
+              <div className="py-24 flex flex-col items-center justify-center space-y-4">
+                <div className="w-12 h-12 rounded-full border-2 border-blue-500/20 border-t-blue-500 animate-spin" />
+                <p className="text-slate-400 text-sm font-bold">Loading portfolio plants...</p>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {plantsFetched && plants.length === 0 && (
+              <div className="py-20 text-center bg-slate-900 rounded-2xl border border-slate-800">
+                <svg className="w-10 h-10 mx-auto mb-4 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                <p className="text-sm font-bold text-slate-400">No plants found in ownership records.</p>
+                <p className="text-xs text-slate-600 mt-1">This company may not have EIA-860 ownership data uploaded.</p>
+              </div>
+            )}
+
+            {/* Plant list */}
+            {plantsFetched && plants.length > 0 && (
+              <div className="space-y-3">
+                <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">
+                  {plants.length} Plant{plants.length !== 1 ? 's' : ''} • Sorted by Nameplate Capacity
+                </div>
+                {plants.map(plant => (
+                  <div
+                    key={plant.eiaPlantCode}
+                    onClick={() => onPlantClick?.(plant.eiaPlantCode)}
+                    className={`bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg transition-all ${onPlantClick ? 'cursor-pointer hover:border-slate-600 hover:bg-slate-800/50' : ''}`}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <h3 className="text-base font-bold text-white truncate">{plant.plantName}</h3>
+                          {plant.techType && (
+                            <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-widest border ${
+                              plant.techType === 'Solar' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' :
+                              plant.techType === 'Wind'  ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400' :
+                              plant.techType === 'Nuclear' ? 'bg-violet-500/10 border-violet-500/30 text-violet-400' :
+                              'bg-slate-500/10 border-slate-500/30 text-slate-400'
+                            }`}>{plant.techType}</span>
+                          )}
+                          {plant.ownStatus && (
+                            <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-widest border ${
+                              plant.ownStatus === 'Current' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
+                              'bg-slate-500/10 border-slate-500/30 text-slate-400'
+                            }`}>{plant.ownStatus}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-[10px] text-slate-500">
+                          <span className="font-mono">{plant.eiaPlantCode}</span>
+                          {plant.state && <span>• {plant.state}</span>}
+                          {plant.region && <span>• {plant.region}</span>}
+                          {plant.ownershipPct != null && <span>• {(plant.ownershipPct * 100).toFixed(1)}% owned</span>}
+                        </div>
+                      </div>
+
+                      {/* Stats block */}
+                      <div className="flex items-center gap-6 text-right shrink-0">
+                        <div>
+                          <div className="text-lg font-black text-white">{plant.nameplateMw.toLocaleString()} MW</div>
+                          <div className="text-[9px] text-slate-500 uppercase tracking-widest">Nameplate</div>
+                        </div>
+                        <div>
+                          <div className={`text-lg font-black ${plant.ttmAvgFactor > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
+                            {plant.ttmAvgFactor > 0 ? `${(plant.ttmAvgFactor * 100).toFixed(1)}%` : 'N/A'}
+                          </div>
+                          <div className="text-[9px] text-slate-500 uppercase tracking-widest">TTM CF</div>
+                        </div>
+                        {plant.isLikelyCurtailed && plant.curtailmentScore > 0 && (
+                          <div>
+                            <div className="text-lg font-black text-red-400">{plant.curtailmentScore.toFixed(0)}%</div>
+                            <div className="text-[9px] text-red-500 uppercase tracking-widest">Curtailed</div>
+                          </div>
+                        )}
+                        {onPlantClick && (
+                          <svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+                          </svg>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* PPA info row */}
+                    {(plant.ppaCounterparty || plant.ppaExpirationDate) && (
+                      <div className="mt-3 pt-3 border-t border-slate-800 flex items-center gap-4 text-[10px]">
+                        {plant.ppaCounterparty && (
+                          <span className="text-slate-400">
+                            <span className="text-slate-600">PPA:</span> {plant.ppaCounterparty}
+                          </span>
+                        )}
+                        {plant.ppaExpirationDate && (
+                          <span className="text-slate-400">
+                            <span className="text-slate-600">Expires:</span> {plant.ppaExpirationDate}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        </>
       )}
     </div>
   );
