@@ -28,6 +28,29 @@ const IMPORTANCE_WEIGHT: Record<string, number> = {
   low:     3,
 };
 const UPSERT_BATCH = 100; // rows per company_stats upsert
+const PAGE_SIZE    = 1000; // rows per paginated fetch
+
+// ── Paginated fetch helper (Supabase default cap = 1000 rows) ─────────────────
+async function fetchAll<T = Record<string, unknown>>(
+  sb: ReturnType<typeof createClient>,
+  table: string,
+  select: string,
+  filters?: (q: any) => any,
+): Promise<T[]> {
+  const all: T[] = [];
+  let offset = 0;
+  while (true) {
+    let q = sb.from(table).select(select).range(offset, offset + PAGE_SIZE - 1);
+    if (filters) q = filters(q);
+    const { data, error } = await q;
+    if (error) throw new Error(`${table} fetch: ${error.message}`);
+    const rows = (data ?? []) as T[];
+    all.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+  }
+  return all;
+}
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
@@ -46,12 +69,10 @@ Deno.serve(async (req: Request) => {
 
   try {
     // ── 1. Load plant_ownership (eia_site_code ↔ ult_parent) ─────────────────
-    const { data: ownershipRows, error: ownErr } = await sb
-      .from('plant_ownership')
-      .select('eia_site_code, ult_parent')
-      .not('ult_parent', 'is', null);
-
-    if (ownErr) throw new Error(`plant_ownership fetch: ${ownErr.message}`);
+    const ownershipRows = await fetchAll(sb, 'plant_ownership', 'eia_site_code, ult_parent',
+      (q: any) => q.not('ult_parent', 'is', null)
+    );
+    console.log(`  Loaded ${ownershipRows.length} ownership rows`);
 
     // Build bi-directional maps
     const sitesToParent = new Map<string, string>(); // eia_site_code → ult_parent
@@ -61,17 +82,18 @@ Deno.serve(async (req: Request) => {
       const code   = String(row.eia_site_code ?? '').trim();
       const parent = String(row.ult_parent ?? '').trim();
       if (!code || !parent) continue;
+      // Skip junk ult_parent values: purely numeric, "NA", single-word placeholders
+      if (/^\d+\.?\d*$/.test(parent) || parent === 'NA' || parent.length < 3) continue;
       sitesToParent.set(code, parent);
       if (!parentToSites.has(parent)) parentToSites.set(parent, new Set());
       parentToSites.get(parent)!.add(code);
     }
 
     // ── 2. Load plants (nameplate MW, fuel_source, state, ttm_avg_factor) ────
-    const { data: plantRows, error: plantsErr } = await sb
-      .from('plants')
-      .select('eia_plant_code, nameplate_capacity_mw, fuel_source, state, ttm_avg_factor');
-
-    if (plantsErr) throw new Error(`plants fetch: ${plantsErr.message}`);
+    const plantRows = await fetchAll(sb, 'plants',
+      'eia_plant_code, nameplate_capacity_mw, fuel_source, state, ttm_avg_factor'
+    );
+    console.log(`  Loaded ${plantRows.length} plant rows`);
 
     // eia_plant_code → plant info
     const plantsByCode = new Map<string, {
@@ -121,13 +143,11 @@ Deno.serve(async (req: Request) => {
     // ── 4. Load recent news articles ─────────────────────────────────────────
     const cutoff = new Date(Date.now() - NEWS_LOOKBACK_DAYS * 864e5).toISOString();
 
-    const { data: articleRows, error: artErr } = await sb
-      .from('news_articles')
-      .select('entity_company_names, event_type, fti_relevance_tags, importance')
-      .gte('published_at', cutoff)
-      .not('entity_company_names', 'is', null);
-
-    if (artErr) throw new Error(`news_articles fetch: ${artErr.message}`);
+    const articleRows = await fetchAll(sb, 'news_articles',
+      'entity_company_names, event_type, fti_relevance_tags, importance',
+      (q: any) => q.gte('published_at', cutoff).not('entity_company_names', 'is', null)
+    );
+    console.log(`  Loaded ${articleRows.length} recent articles`);
 
     // ── 5. Aggregate news signals per company ─────────────────────────────────
     interface NewsSignals {
