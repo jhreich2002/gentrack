@@ -837,6 +837,18 @@ const PlantDetailView: React.FC<Props> = ({
                           ) : article.description ? (
                             <p className="text-xs text-slate-400 line-clamp-2">{article.description}</p>
                           ) : null}
+                          {expandedArticleId === article.id && article.url && !article.url.includes('gentrack.app/synthetic') && (
+                            <a
+                              href={article.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-lg text-[10px] font-bold bg-blue-600/20 border border-blue-500/30 text-blue-400 hover:bg-blue-600/40 hover:text-blue-300 transition-all"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                              Open Article
+                            </a>
+                          )}
                         </div>
                         <div className="flex-shrink-0 flex flex-col items-end gap-1">
                           <span className="text-[9px] font-black px-2 py-1 rounded-lg bg-indigo-900/40 border border-indigo-700/40 text-indigo-300 whitespace-nowrap">
@@ -1025,20 +1037,34 @@ const PlantDetailView: React.FC<Props> = ({
                           )}
                         </div>
                         {expandedArticleId === article.id && (
-                          <div className="flex items-center gap-3 mt-3 pt-3 border-t border-slate-700/30">
-                            {article.eventType && (
-                              <span className="text-[9px] px-2 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-bold uppercase tracking-widest">{article.eventType}</span>
+                          <div className="flex items-center justify-between gap-3 mt-3 pt-3 border-t border-slate-700/30">
+                            <div className="flex items-center gap-3 flex-wrap">
+                              {article.eventType && (
+                                <span className="text-[9px] px-2 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-bold uppercase tracking-widest">{article.eventType}</span>
+                              )}
+                              {article.importance && (
+                                <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-widest ${
+                                  article.importance === 'high' ? 'bg-red-500/10 border border-red-500/20 text-red-400' :
+                                  article.importance === 'medium' ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400' :
+                                  'bg-slate-500/10 border border-slate-500/20 text-slate-400'
+                                }`}>{article.importance} importance</span>
+                              )}
+                              {(article.impactTags ?? []).slice(0, 3).map(tag => (
+                                <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-400 border border-slate-600/30 font-bold">{tag}</span>
+                              ))}
+                            </div>
+                            {article.url && !article.url.includes('gentrack.app/synthetic') && (
+                              <a
+                                href={article.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={e => e.stopPropagation()}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold bg-blue-600/20 border border-blue-500/30 text-blue-400 hover:bg-blue-600/40 hover:text-blue-300 transition-all"
+                              >
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                                Open Article
+                              </a>
                             )}
-                            {article.importance && (
-                              <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-widest ${
-                                article.importance === 'high' ? 'bg-red-500/10 border border-red-500/20 text-red-400' :
-                                article.importance === 'medium' ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400' :
-                                'bg-slate-500/10 border border-slate-500/20 text-slate-400'
-                              }`}>{article.importance} importance</span>
-                            )}
-                            {(article.impactTags ?? []).slice(0, 3).map(tag => (
-                              <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-400 border border-slate-600/30 font-bold">{tag}</span>
-                            ))}
                           </div>
                         )}
                       </div>
