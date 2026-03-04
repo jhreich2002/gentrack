@@ -831,7 +831,20 @@ const PlantDetailView: React.FC<Props> = ({
                               <span key={t} className="text-[8px] px-1.5 py-0.5 rounded-full bg-slate-700/60 text-slate-400 border border-slate-600/50 uppercase font-bold tracking-wide">{t}</span>
                             ))}
                           </div>
-                          <div className="text-sm font-bold text-slate-100 leading-snug mb-1">{article.title}</div>
+                          {article.url && !article.url.includes('gentrack.app/synthetic') ? (
+                            <a
+                              href={article.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              className="text-sm font-bold text-slate-100 hover:text-blue-400 leading-snug mb-1 flex items-center gap-1.5 group/link"
+                            >
+                              {article.title}
+                              <svg className="w-3 h-3 shrink-0 opacity-50 group-hover/link:opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                            </a>
+                          ) : (
+                            <div className="text-sm font-bold text-slate-100 leading-snug mb-1">{article.title}</div>
+                          )}
                           {expandedArticleId === article.id && article.description ? (
                             <p className="text-xs text-slate-300 mt-2 leading-relaxed whitespace-pre-wrap">{article.description}</p>
                           ) : article.description ? (
@@ -1009,7 +1022,20 @@ const PlantDetailView: React.FC<Props> = ({
                       >
                         <div className="flex items-start justify-between gap-3 mb-2">
                           <div className="flex-1">
-                            <div className="text-sm font-bold text-slate-200 group-hover:text-white line-clamp-2 leading-snug">{article.title}</div>
+                            {article.url && !article.url.includes('gentrack.app/synthetic') ? (
+                              <a
+                                href={article.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={e => e.stopPropagation()}
+                                className="text-sm font-bold text-slate-200 hover:text-blue-400 line-clamp-2 leading-snug flex items-center gap-1.5 group/link"
+                              >
+                                {article.title}
+                                <svg className="w-3 h-3 shrink-0 opacity-50 group-hover/link:opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                              </a>
+                            ) : (
+                              <div className="text-sm font-bold text-slate-200 group-hover:text-white line-clamp-2 leading-snug">{article.title}</div>
+                            )}
                             {expandedArticleId === article.id && article.description ? (
                               <div className="text-xs text-slate-300 mt-2 leading-relaxed whitespace-pre-wrap">{article.description}</div>
                             ) : article.description ? (
