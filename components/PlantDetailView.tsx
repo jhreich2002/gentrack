@@ -55,6 +55,9 @@ const PlantDetailView: React.FC<Props> = ({
   const [plantSummary, setPlantSummary] = useState<PlantSummaryResponse | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
 
+  // ── Expanded article (click to expand instead of link) ──────────────────
+  const [expandedArticleId, setExpandedArticleId] = useState<string | null>(null);
+
   // ── Semantic Search ──────────────────────────────────────────────────────
   const [semanticQuery, setSemanticQuery] = useState('');
   const [semanticResults, setSemanticResults] = useState<SemanticSearchResult[]>([]);
@@ -79,6 +82,12 @@ const PlantDetailView: React.FC<Props> = ({
         summary_last_updated_at: cachedState.summaryLastUpdatedAt ?? '',
         from_cache: true,
       });
+    } else {
+      // No cached summary — auto-generate one
+      setLoadingSummary(true);
+      callPlantSummarize(plant.eiaPlantCode, plant.name, plant.owner)
+        .then(result => { if (result) setPlantSummary(result); })
+        .finally(() => setLoadingSummary(false));
     }
     setLoadingIntel(false);
     setIntelFetched(true);
@@ -103,6 +112,7 @@ const PlantDetailView: React.FC<Props> = ({
     setNewsArticles([]); setNewsRating(null);
     setPlantSummary(null); setLoadingSummary(false);
     setIntelFetched(false); setIntelTopicFilter('all'); setIntelDaysBack(90);
+    setExpandedArticleId(null);
   }, [plant.eiaPlantCode]);
 
   const handleLoadOwnership = async () => {
@@ -732,7 +742,7 @@ const PlantDetailView: React.FC<Props> = ({
                           })()
                         : 'just now'}
                     </div>
-                    <div className="text-[9px] text-slate-600">Gemini 2.0 Flash Lite</div>
+                    <div className="text-[9px] text-slate-600">Gemini 2.5 Flash Lite</div>
                   </div>
                 </div>
               )}
@@ -803,20 +813,18 @@ const PlantDetailView: React.FC<Props> = ({
                 <div className="space-y-3">
                   <div className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-1">{semanticResults.length} result{semanticResults.length !== 1 ? 's' : ''} — ranked by semantic similarity</div>
                   {semanticResults.map(article => (
-                    <a
+                    <div
                       key={article.id}
-                      href={article.url ?? '#'}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block bg-slate-800/40 border border-indigo-900/30 rounded-xl p-4 hover:bg-slate-800/60 hover:border-indigo-700/50 transition-all"
+                      onClick={() => setExpandedArticleId(expandedArticleId === article.id ? null : article.id)}
+                      className="block bg-slate-800/40 border border-indigo-900/30 rounded-xl p-4 hover:bg-slate-800/60 hover:border-indigo-700/50 transition-all cursor-pointer"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1 flex-wrap">
                             <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{article.sourceName}</span>
-                            {article.published_at && (
+                            {article.publishedAt && (
                               <span className="text-[9px] text-slate-600">
-                                {new Date(article.published_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                               </span>
                             )}
                             {article.topics?.slice(0,2).map(t => (
@@ -824,9 +832,11 @@ const PlantDetailView: React.FC<Props> = ({
                             ))}
                           </div>
                           <div className="text-sm font-bold text-slate-100 leading-snug mb-1">{article.title}</div>
-                          {article.description && (
+                          {expandedArticleId === article.id && article.description ? (
+                            <p className="text-xs text-slate-300 mt-2 leading-relaxed whitespace-pre-wrap">{article.description}</p>
+                          ) : article.description ? (
                             <p className="text-xs text-slate-400 line-clamp-2">{article.description}</p>
-                          )}
+                          ) : null}
                         </div>
                         <div className="flex-shrink-0 flex flex-col items-end gap-1">
                           <span className="text-[9px] font-black px-2 py-1 rounded-lg bg-indigo-900/40 border border-indigo-700/40 text-indigo-300 whitespace-nowrap">
@@ -839,9 +849,10 @@ const PlantDetailView: React.FC<Props> = ({
                               'bg-slate-700/40 text-slate-500'
                             }`}>{article.sentimentLabel}</span>
                           )}
+                          <svg className={`w-3 h-3 text-slate-600 transition-transform ${expandedArticleId === article.id ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
                         </div>
                       </div>
-                    </a>
+                    </div>
                   ))}
                 </div>
               )}
@@ -973,12 +984,10 @@ const PlantDetailView: React.FC<Props> = ({
                       <p className="text-center text-xs text-slate-600 py-8 italic">No {intelTopicFilter} articles in this window.</p>
                     )}
                     {filtered.map(article => (
-                      <a
+                      <div
                         key={article.id}
-                        href={article.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className={`flex flex-col p-4 rounded-xl border transition-all group ${
+                        onClick={() => setExpandedArticleId(expandedArticleId === article.id ? null : article.id)}
+                        className={`flex flex-col p-4 rounded-xl border transition-all group cursor-pointer ${
                           article.sentimentLabel === 'negative'
                             ? 'bg-red-950/10 border-red-900/30 hover:border-red-600/40'
                             : article.sentimentLabel === 'positive'
@@ -989,11 +998,13 @@ const PlantDetailView: React.FC<Props> = ({
                         <div className="flex items-start justify-between gap-3 mb-2">
                           <div className="flex-1">
                             <div className="text-sm font-bold text-slate-200 group-hover:text-white line-clamp-2 leading-snug">{article.title}</div>
-                            {article.description && (
+                            {expandedArticleId === article.id && article.description ? (
+                              <div className="text-xs text-slate-300 mt-2 leading-relaxed whitespace-pre-wrap">{article.description}</div>
+                            ) : article.description ? (
                               <div className="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">{article.description}</div>
-                            )}
+                            ) : null}
                           </div>
-                          <svg className="w-4 h-4 shrink-0 text-slate-600 group-hover:text-slate-400 transition-colors mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                          <svg className={`w-4 h-4 shrink-0 text-slate-600 group-hover:text-slate-400 transition-all mt-0.5 ${expandedArticleId === article.id ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
                           {article.sourceName && (
@@ -1013,7 +1024,24 @@ const PlantDetailView: React.FC<Props> = ({
                             <span className="ml-auto text-[9px] font-black text-emerald-400 uppercase tracking-widest">◼ Positive</span>
                           )}
                         </div>
-                      </a>
+                        {expandedArticleId === article.id && (
+                          <div className="flex items-center gap-3 mt-3 pt-3 border-t border-slate-700/30">
+                            {article.eventType && (
+                              <span className="text-[9px] px-2 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-bold uppercase tracking-widest">{article.eventType}</span>
+                            )}
+                            {article.importance && (
+                              <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-widest ${
+                                article.importance === 'high' ? 'bg-red-500/10 border border-red-500/20 text-red-400' :
+                                article.importance === 'medium' ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400' :
+                                'bg-slate-500/10 border border-slate-500/20 text-slate-400'
+                              }`}>{article.importance} importance</span>
+                            )}
+                            {(article.impactTags ?? []).slice(0, 3).map(tag => (
+                              <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-400 border border-slate-600/30 font-bold">{tag}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 );

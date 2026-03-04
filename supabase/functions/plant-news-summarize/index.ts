@@ -26,7 +26,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const GEMINI_BASE  = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent';
+const GEMINI_BASE  = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
 const CACHE_HOURS  = 6;     // skip re-summarise if state is fresher than this
 const MAX_ARTICLES = 10;    // articles to feed into the prompt
 const LOOKBACK_DAYS = 30;   // news window for summary context
