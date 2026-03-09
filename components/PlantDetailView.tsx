@@ -49,7 +49,7 @@ const PlantDetailView: React.FC<Props> = ({
   const [loadingIntel, setLoadingIntel] = useState(false);
   const [intelFetched, setIntelFetched] = useState(false);
   const [intelTopicFilter, setIntelTopicFilter] = useState<string>('all');
-  const [intelDaysBack, setIntelDaysBack] = useState<number>(90);
+  const [intelDaysBack, setIntelDaysBack] = useState<number>(9999);
 
   // ── Situation Summary (LLM) ──────────────────────────────────────────────
   const [plantSummary, setPlantSummary] = useState<PlantSummaryResponse | null>(null);
@@ -111,7 +111,7 @@ const PlantDetailView: React.FC<Props> = ({
     setOwnership(null); setOwnershipFetched(false);
     setNewsArticles([]); setNewsRating(null);
     setPlantSummary(null); setLoadingSummary(false);
-    setIntelFetched(false); setIntelTopicFilter('all'); setIntelDaysBack(90);
+    setIntelFetched(false); setIntelTopicFilter('all'); setIntelDaysBack(9999);
     setExpandedArticleId(null);
   }, [plant.eiaPlantCode]);
 
@@ -944,7 +944,7 @@ const PlantDetailView: React.FC<Props> = ({
                     </button>
                   ))}
                   <div className="ml-auto flex gap-1">
-                    {[30, 90, 365].map(d => (
+                    {[30, 90, 365, 9999].map(d => (
                       <button
                         key={d}
                         onClick={() => {
@@ -966,7 +966,7 @@ const PlantDetailView: React.FC<Props> = ({
                             ? 'bg-slate-700 border-slate-500 text-white'
                             : 'bg-slate-800/40 border-slate-700/50 text-slate-500 hover:text-slate-300'
                         }`}
-                      >{d === 365 ? '1yr' : `${d}d`}</button>
+                      >{d === 9999 ? 'All' : d === 365 ? '1yr' : `${d}d`}</button>
                     ))}
                   </div>
                 </div>

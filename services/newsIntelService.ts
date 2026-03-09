@@ -46,9 +46,7 @@ export async function fetchPlantNewsArticles(
     limit?:     number;        // default 20
   } = {}
 ): Promise<NewsArticle[]> {
-  const { daysBack = 90, topic = null, limit = 20 } = options;
-
-  const cutoff = new Date(Date.now() - daysBack * 86400 * 1000).toISOString();
+  const { daysBack = 9999, topic = null, limit = 50 } = options;
 
   let query = supabase
     .from('news_articles')
@@ -58,9 +56,14 @@ export async function fetchPlantNewsArticles(
       event_type, impact_tags, fti_relevance_tags, importance, entity_company_names
     `)
     .contains('plant_codes', [eiaPlantCode])
-    .gte('published_at', cutoff)
     .order('published_at', { ascending: false })
     .limit(limit);
+
+  // Only apply date filter if a meaningful window is set (not "All")
+  if (daysBack < 9999) {
+    const cutoff = new Date(Date.now() - daysBack * 86400 * 1000).toISOString();
+    query = query.gte('published_at', cutoff);
+  }
 
   if (topic) {
     query = query.contains('topics', [topic]);

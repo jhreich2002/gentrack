@@ -1,128 +1,95 @@
 ﻿/**
- * GenTrack â€” news-ingest Edge Function  (Gemini-generation mode)
+ * GenTrack — news-ingest Edge Function (Gemini Grounded Search)
  *
- * Runs nightly (06:00 UTC via pg_cron).  Instead of scraping a news API
- * (which blocks server-side on free tiers), this function uses Gemini Flash
- * to synthesise realistic energy-sector news articles for a curated set of
- * plants, then upserts them into news_articles with full LLM classification.
+ * Uses Gemini 2.5 Flash with Google Search grounding to find REAL news articles
+ * with actual clickable URLs. No more fake/synthetic content!
  *
- * Plant selection per run (~50 total, cost-aware):
- *   1. Watchlisted plants   â€” always covered first  (up to WATCHLIST_CAP)
- *   2. Daily rotation batch â€” top plants by MW, rotating offset so the full
- *      catalogue cycles continuously over time                (fills to TARGET)
+ * Tiered refresh strategy:
+ *   - Tier 1: Top 200 plants by MW (daily)
+ *   - Tier 2: Next 300 plants (Mon/Thu)
  *
- * Cost estimate at default settings:
- *   ~50 plants Ã— 3 articles Ã— ~1,100 tokens â‰ˆ 165k tokens/run
- *   â‰ˆ $0.02/run with Gemini 2.0 Flash Lite  â†’ ~$0.60/month running nightly
+ * Cost estimate:
+ *   ~200 plants × 1 grounded search call ≈ $0.05-0.10/day → ~$2-3/month
  *
  * Required secrets:
- *   GEMINI_API_KEY            â€” Google AI Studio key
- *   SUPABASE_URL              â€” auto-injected
- *   SUPABASE_SERVICE_ROLE_KEY â€” auto-injected
+ *   GEMINI_API_KEY            — Google AI Studio key
+ *   SUPABASE_URL              — auto-injected
+ *   SUPABASE_SERVICE_ROLE_KEY — auto-injected
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
-// â”€â”€ Tuneable constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-const TARGET        = 100;  // plants per nightly run (~$0.044/run → ~$1.30/month)
-const WATCHLIST_CAP = 15;   // max watchlist plants (always covered first)
-const ARTICLES_PER_PLANT = 3;  // articles Gemini generates per plant
-const UPSERT_BATCH  = 50;   // rows per Supabase upsert call
-const GEMINI_URL    = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
+const TIER_1_SIZE     = 200;
+const TIER_2_SIZE     = 300;
+const ARTICLES_PER_PLANT = 8;  // Ask for more since some will fail validation
+const UPSERT_BATCH    = 50;
+const RATE_LIMIT_MS   = 1500;  // Be conservative with Gemini grounding
+const GEMINI_URL      = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function sha256(text: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
 }
 
-const STATE_NAMES: Record<string, string> = {
-  AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',
-  CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',
-  IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',
-  ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',
-  MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',
-  NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',
-  ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',
-  RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',
-  UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',
-  WI:'Wisconsin',WY:'Wyoming',
-};
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-// â”€â”€ Gemini article generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-interface GeneratedArticle {
-  title:                string;
-  description:          string;
-  source_name:          string;
-  published_at:         string;   // ISO date string, within last 14 days
-  topics:               string[];
-  sentiment_label:      string;
-  event_type:           string;
-  impact_tags:          string[];
-  fti_relevance_tags:   string[];
-  importance:           string;
-  entity_company_names: string[];
+/** Verify a URL is live (returns 200-399). Timeout after 8s. */
+async function isUrlLive(url: string): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GenTrack/1.0)' },
+    });
+    clearTimeout(timeout);
+    return res.status >= 200 && res.status < 400;
+  } catch {
+    return false;
+  }
 }
 
-async function generatePlantNews(
-  plant: { code: string; name: string; owner: string; fuel: string; state: string; mw: number; isCurtailed: boolean },
+// ── Gemini Grounded Search ────────────────────────────────────────────────────
+
+interface GroundedArticle {
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: string;
+  description: string;
+}
+
+interface PlantInfo {
+  eia_plant_code: string;
+  name: string;
+  owner: string;
+  state: string;
+  fuel_source: string;
+}
+
+async function findRealArticles(
+  plant: PlantInfo,
   geminiKey: string,
-  today: string,   // YYYY-MM-DD
-): Promise<GeneratedArticle[]> {
+): Promise<GroundedArticle[]> {
+  const prompt = `Find ${ARTICLES_PER_PLANT} recent real news articles about "${plant.name}" power plant in ${plant.state}. 
+This is a ${plant.fuel_source} power plant owned by ${plant.owner || 'unknown'}.
 
-  const stateName    = STATE_NAMES[plant.state] ?? plant.state;
-  const fuelLabel    = plant.fuel === 'Solar' ? 'solar farm'
-    : plant.fuel === 'Wind'  ? 'wind farm'
-    : plant.fuel === 'Nuclear' ? 'nuclear generating station'
-    : `${plant.fuel.toLowerCase()} power plant`;
-  const articleCount = plant.isCurtailed ? 6 : ARTICLES_PER_PLANT;
-  const curtailmentBlock = plant.isCurtailed ? `
+IMPORTANT: Only include articles from reputable news websites (e.g. Reuters, Bloomberg, Utility Dive, Power Engineering, local newspapers, AP News, ans.org). Each URL must be a direct link to an actual published article page - NOT a search page, government database, or directory listing.
 
-⚠️  CURTAILMENT CONTEXT: This plant has been identified as likely curtailed — its capacity factor
-consistently underperforms regional peers. At least 3 of the ${articleCount} articles MUST focus on:
-  - Grid congestion or negative LMP pricing forcing dispatch curtailment
-  - ISO/RTO curtailment orders or economic dispatch displacement
-  - Owner/lender concerns about debt service coverage or covenant compliance
-  - Potential PPA dispute, force majeure claim, or contract renegotiation
-  - Asset sale, decommissioning consideration, or strategic review announcement
-  - Transmission upgrade or battery co-location proposal to remediate curtailment
-Articles should surface financial distress signals and M&A/advisory-relevant angles.` : '';
+Return ONLY a JSON array with these exact fields for each article:
+- title: the article headline
+- url: the direct link to the article (must be real and currently accessible)
+- source: the publication name
+- publishedAt: publication date in ISO format (YYYY-MM-DD)
+- description: 1-sentence summary
 
-  const prompt = `You are a financial journalist specialising in US power generation and energy M&A advisory.
-
-Generate exactly ${articleCount} realistic, distinct news articles about the following power plant.
-Each article must be a plausible energy-sector news story that could appear in trade publications like
-S&P Global Platts, Bloomberg NEF, Reuters Energy, or Utility Dive.
-
-Plant details:
-  Name:  ${plant.name}
-  Type:  ${plant.mw} MW ${fuelLabel}
-  Owner: ${plant.owner}
-  State: ${stateName} (${plant.state})
-  EIA Plant Code: ${plant.code}
-
-Cover a MIX of story types across the ${articleCount} articles — including: outage/maintenance,
-regulatory/permitting, financial/M&A, grid congestion/transmission constraints,
-ISO/RTO dispatch & negative pricing events, PPA early termination or renegotiation,
-debt/credit covenant stress signals, interconnection queue delays, community/environmental,
-and capacity expansion. Make dates realistic: within the last 14 days before ${today}.${curtailmentBlock}
-
-Return ONLY a valid JSON array of exactly ${articleCount} objects. No markdown, no explanation.
-Each object must have these exact keys:
-  title                 string   â€” headline (max 120 chars)
-  description           string   â€” 2-sentence summary (max 300 chars)
-  source_name           string   â€” one of: S&P Global | Reuters | Bloomberg NEF | Utility Dive | Platts | E&E News | Wood Mackenzie | SNL Energy
-  published_at          string   â€” ISO 8601 datetime within last 14 days, e.g. "${today}T08:00:00Z"
-  topics                string[] â€” subset of: outage | regulatory | financial | weather | construction
-  sentiment_label       string   â€” one of: positive | negative | neutral
-  event_type            string   â€” one of: unplanned_outage | planned_outage | regulatory_action | rate_case | m_and_a | financing | ppa_signed | construction | commissioning | litigation | community_event | corporate_strategy | none
-  impact_tags           string[] â€” subset of: distress | asset_sale | capacity_addition | curtailment | ppa_dispute | litigation | rate_case | community_opposition | environmental | market_entry
-  fti_relevance_tags    string[] â€” subset of: restructuring | transactions | disputes | market_strategy
-  importance            string   â€” one of: low | medium | high
-  entity_company_names  string[] â€” company/org names mentioned (owner, regulators, counterparties)`;
+Return JSON array only, no other text.`;
 
   try {
     const res = await fetch(`${GEMINI_URL}?key=${geminiKey}`, {
@@ -130,166 +97,245 @@ Each object must have these exact keys:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.85, maxOutputTokens: plant.isCurtailed ? 3600 : 1800 },
+        tools: [{ google_search: {} }],
+        generationConfig: { temperature: 0.1 },
       }),
     });
 
     if (!res.ok) {
-      console.warn(`Gemini HTTP ${res.status} for plant ${plant.code}`);
+      console.error(`Gemini error for ${plant.name}: HTTP ${res.status}`);
       return [];
     }
 
     const data = await res.json();
-    const raw: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    if (!raw) { console.warn(`Empty Gemini response for plant ${plant.code}`); return []; }
-    const stripped = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    // Extract array even if Gemini adds prose before/after the JSON
-    const arrStart = stripped.indexOf('[');
-    const arrEnd   = stripped.lastIndexOf(']');
-    if (arrStart === -1 || arrEnd === -1) { console.warn(`No JSON array found for plant ${plant.code}:`, stripped.slice(0, 120)); return []; }
-    const parsed = JSON.parse(stripped.slice(arrStart, arrEnd + 1));
-
-    if (!Array.isArray(parsed)) {
-      console.warn(`Non-array response for plant ${plant.code}`);
-      return [];
+    const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    
+    // ── Also extract grounding metadata (Google's own verified URLs) ─────────
+    const groundingChunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+    const groundingUrls = new Map<string, { title: string; uri: string }>();
+    for (const chunk of groundingChunks) {
+      if (chunk?.web?.uri && chunk?.web?.title) {
+        groundingUrls.set(chunk.web.uri, { title: chunk.web.title, uri: chunk.web.uri });
+      }
     }
-
-    return parsed.filter((a: Record<string, unknown>) =>
-      typeof a.title === 'string' && typeof a.description === 'string'
-    ) as GeneratedArticle[];
-
+    
+    // Extract JSON array from LLM response
+    const start = text.indexOf('[');
+    const end = text.lastIndexOf(']');
+    
+    const BAD_DOMAINS = ['example.com', 'vertexaisearch.cloud.google.com', 'news.google.com/rss', 'google.com/search', 'govinfo.gov', 'federalregister.gov'];
+    
+    // Combine: LLM-parsed articles + grounding metadata articles
+    const candidates: GroundedArticle[] = [];
+    
+    // 1) From LLM JSON response
+    if (start !== -1 && end !== -1) {
+      try {
+        const articles = JSON.parse(text.slice(start, end + 1));
+        for (const a of articles) {
+          if (a.url && a.title && a.url.startsWith('http') &&
+              !BAD_DOMAINS.some(d => a.url.includes(d))) {
+            candidates.push({
+              title: String(a.title || '').trim(),
+              url: String(a.url || '').trim(),
+              source: String(a.source || 'Unknown').trim(),
+              publishedAt: a.publishedAt ? new Date(a.publishedAt).toISOString() : new Date().toISOString(),
+              description: String(a.description || '').trim(),
+            });
+          }
+        }
+      } catch { /* JSON parse error, fall through to grounding */ }
+    }
+    
+    // 2) From grounding metadata (these are Google's own verified links)
+    for (const [uri, info] of groundingUrls) {
+      if (!BAD_DOMAINS.some(d => uri.includes(d)) &&
+          !candidates.some(c => c.url === uri)) {
+        candidates.push({
+          title: info.title,
+          url: uri,
+          source: new URL(uri).hostname.replace('www.', ''),
+          publishedAt: new Date().toISOString(),
+          description: '',
+        });
+      }
+    }
+    
+    // 3) Verify URLs are actually live (HEAD request)
+    const verified: GroundedArticle[] = [];
+    for (const article of candidates) {
+      if (verified.length >= 3) break; // We only need 3 good ones
+      const live = await isUrlLive(article.url);
+      if (live) {
+        verified.push(article);
+        console.log(`  ✓ ${article.url}`);
+      } else {
+        console.log(`  ✗ DEAD: ${article.url}`);
+      }
+    }
+    
+    return verified;
   } catch (e) {
-    console.warn(`Gemini error for plant ${plant.code}:`, e);
+    console.error(`Error fetching articles for ${plant.name}:`, e);
     return [];
   }
 }
 
-// â”€â”€ Main handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Main Handler ──────────────────────────────────────────────────────────────
 
-Deno.serve(async (_req) => {
+Deno.serve(async (req: Request) => {
   try {
-    const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const geminiKey      = Deno.env.get('GEMINI_API_KEY');
-
+    const geminiKey = Deno.env.get('GEMINI_API_KEY');
     if (!geminiKey) {
-      return new Response(JSON.stringify({ error: 'GEMINI_API_KEY secret not set' }), { status: 500 });
+      return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not set' }), { status: 500 });
+    }
+    
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Determine tier
+    const url = new URL(req.url);
+    const tierParam = url.searchParams.get('tier');
+    const limitParam = url.searchParams.get('limit');
+    const hour = new Date().getUTCHours();
+    const dayOfWeek = new Date().getUTCDay();
+    
+    let tier: 1 | 2;
+    if (tierParam) {
+      tier = parseInt(tierParam) as 1 | 2;
+    } else if (hour < 10) {
+      tier = 1;
+    } else if (dayOfWeek === 1 || dayOfWeek === 4) {
+      tier = 2;
+    } else {
+      tier = 1;
     }
 
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
-    const today    = new Date().toISOString().split('T')[0];
+    console.log(`news-ingest starting: tier=${tier}`);
 
-    // â”€â”€ Load all plants (sorted by MW desc for rotation) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Load plants sorted by MW
+    const maxPlants = limitParam ? parseInt(limitParam) : (tier === 1 ? TIER_1_SIZE : TIER_1_SIZE + TIER_2_SIZE);
     const { data: plantsData, error: plantsErr } = await supabase
       .from('plants')
-      .select('eia_plant_code, name, owner, fuel_source, state, nameplate_capacity_mw, is_likely_curtailed')
+      .select('eia_plant_code, name, owner, state, fuel_source, nameplate_capacity_mw')
       .neq('eia_plant_code', '99999')
-      .order('nameplate_capacity_mw', { ascending: false });
+      .gt('ttm_avg_factor', 0)
+      .order('nameplate_capacity_mw', { ascending: false })
+      .limit(maxPlants);
 
-    if (plantsErr || !plantsData?.length) {
-      return new Response(JSON.stringify({ error: 'Failed to load plants' }), { status: 500 });
+    if (plantsErr || !plantsData) {
+      throw new Error(`Failed to load plants: ${plantsErr?.message}`);
     }
 
-    const allPlants = plantsData.map((p: Record<string, unknown>) => ({
-      code:        p.eia_plant_code as string,
-      name:        p.name as string,
-      owner:       (p.owner as string) ?? '',
-      fuel:        (p.fuel_source as string) ?? '',
-      state:       (p.state as string) ?? '',
-      mw:          Number(p.nameplate_capacity_mw) || 0,
-      isCurtailed: !!(p.is_likely_curtailed as boolean),
-    }));
+    // Select plants based on tier
+    let plants: PlantInfo[];
+    if (tier === 1) {
+      plants = plantsData.slice(0, TIER_1_SIZE) as PlantInfo[];
+    } else {
+      plants = plantsData.slice(TIER_1_SIZE, TIER_1_SIZE + TIER_2_SIZE) as PlantInfo[];
+    }
 
-    // â”€â”€ Load watchlisted plant codes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    const { data: watchData } = await supabase
-      .from('watchlist')
-      .select('plant_id');
-    const watchlistCodes = new Set<string>(
-      (watchData ?? []).map((w: { plant_id: string }) => w.plant_id)
-    );
+    if (limitParam) {
+      plants = plants.slice(0, parseInt(limitParam));
+    }
 
-    // â”€â”€ Build target plant list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Priority 1: watchlisted plants (up to WATCHLIST_CAP)
-    const watchlistPlants = allPlants
-      .filter(p => watchlistCodes.has(p.code))
-      .slice(0, WATCHLIST_CAP);
+    console.log(`Processing ${plants.length} plants for tier ${tier}`);
 
-    const watchlistSet = new Set(watchlistPlants.map(p => p.code));
+    // Load existing URLs to avoid duplicates
+    const { data: existingData } = await supabase
+      .from('news_articles')
+      .select('url')
+      .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+    
+    const existingUrls = new Set((existingData || []).map(r => r.url));
 
-    // Priority 2: daily rotation through remaining plants sorted by MW
-    const nonWatchlistPlants = allPlants.filter(p => !watchlistSet.has(p.code));
-    const rotationSize = TARGET - watchlistPlants.length;
-    const dayIndex     = Math.floor(Date.now() / 86_400_000);
-    const totalBatches = Math.ceil(nonWatchlistPlants.length / rotationSize);
-    const batchIndex   = dayIndex % totalBatches;
-    const offset       = batchIndex * rotationSize;
-    const rotationBatch = nonWatchlistPlants.slice(offset, offset + rotationSize);
-
-    const targetPlants = [...watchlistPlants, ...rotationBatch];
-    console.log(`Targeting ${targetPlants.length} plants (${watchlistPlants.length} watchlist + ${rotationBatch.length} rotation batch ${batchIndex}/${totalBatches})`);
-
-    // â”€â”€ Generate + store articles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    const toUpsert: Record<string, unknown>[] = [];
+    // Fetch articles for each plant
+    const allArticles: Array<GroundedArticle & { plantCode: string; owner: string; state: string; fuelType: string }> = [];
+    let plantsFetched = 0;
     let geminiCalls = 0;
 
-    for (const plant of targetPlants) {
-      const articles = await generatePlantNews(plant, geminiKey, today);
+    for (const plant of plants) {
+      const articles = await findRealArticles(plant, geminiKey);
       geminiCalls++;
-
+      
       for (const a of articles) {
-        const externalId = await sha256(`${plant.code}:${a.title}`);
-        toUpsert.push({
-          external_id:          externalId,
-          title:                a.title,
-          description:          a.description,
-          content:              null,
-          source_name:          a.source_name ?? 'Gemini Synthesis',
-          url:                  `https://gentrack.app/synthetic/${externalId}`,
-          published_at:         a.published_at,
-          query_tag:            `gemini:${plant.code}`,
-          plant_codes:          [plant.code],
-          owner_names:          plant.owner ? [plant.owner] : [],
-          states:               plant.state ? [plant.state] : [],
-          fuel_types:           plant.fuel  ? [plant.fuel]  : [],
-          topics:               Array.isArray(a.topics) ? a.topics : [],
-          sentiment_label:      a.sentiment_label ?? 'neutral',
-          event_type:           a.event_type ?? 'none',
-          impact_tags:          Array.isArray(a.impact_tags) ? a.impact_tags : [],
-          fti_relevance_tags:   Array.isArray(a.fti_relevance_tags) ? a.fti_relevance_tags : [],
-          importance:           a.importance ?? 'low',
-          entity_company_names: Array.isArray(a.entity_company_names) ? a.entity_company_names : [],
-          llm_classified_at:    new Date().toISOString(),
-        });
+        if (!existingUrls.has(a.url)) {
+          existingUrls.add(a.url);
+          allArticles.push({
+            ...a,
+            plantCode: plant.eia_plant_code,
+            owner: plant.owner || '',
+            state: plant.state || '',
+            fuelType: plant.fuel_source || '',
+          });
+        }
       }
 
-      // Polite inter-call delay to avoid Gemini rate limits
-      await new Promise(r => setTimeout(r, 150)); // 150ms → ~6 RPS, well under paid tier 4,000 RPM
+      plantsFetched++;
+      if (plantsFetched % 10 === 0) {
+        console.log(`Fetched ${plantsFetched}/${plants.length} plants, ${allArticles.length} articles`);
+      }
+
+      await sleep(RATE_LIMIT_MS);
     }
 
-    // â”€â”€ Upsert in batches â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    let upsertErrors = 0;
+    console.log(`Found ${allArticles.length} new articles from ${geminiCalls} Gemini calls`);
+
+    // Upsert to database
+    const toUpsert = await Promise.all(allArticles.map(async a => ({
+      external_id: await sha256(a.url),
+      title: a.title,
+      description: a.description || null,
+      content: null,
+      source_name: a.source,
+      url: a.url,
+      published_at: a.publishedAt,
+      query_tag: `grounded:${a.plantCode}`,
+      plant_codes: [a.plantCode],
+      owner_names: a.owner ? [a.owner] : [],
+      states: a.state ? [a.state] : [],
+      fuel_types: a.fuelType ? [a.fuelType] : [],
+      topics: [],
+      sentiment_label: 'neutral',
+      event_type: 'none',
+      impact_tags: [],
+      fti_relevance_tags: [],
+      importance: 'medium',
+      entity_company_names: [],
+      llm_classified_at: new Date().toISOString(),
+    })));
+
+    let inserted = 0;
+    let errors = 0;
     for (let i = 0; i < toUpsert.length; i += UPSERT_BATCH) {
       const batch = toUpsert.slice(i, i + UPSERT_BATCH);
       const { error } = await supabase
         .from('news_articles')
         .upsert(batch, { onConflict: 'external_id', ignoreDuplicates: true });
+      
       if (error) {
-        console.error(`Upsert error batch ${i}:`, error.message);
-        upsertErrors++;
+        console.error(`Upsert error at ${i}:`, error.message);
+        errors++;
+      } else {
+        inserted += batch.length;
       }
     }
 
     const result = {
       ok: true,
-      plantsProcessed: targetPlants.length,
-      articlesGenerated: toUpsert.length,
+      tier,
+      plantsProcessed: plants.length,
       geminiCalls,
-      upsertErrors,
-      rotationBatch: batchIndex,
-      totalBatches,
+      articlesFound: allArticles.length,
+      articlesInserted: inserted,
+      errors,
     };
+
     console.log('news-ingest complete:', result);
-    return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify(result), { 
+      headers: { 'Content-Type': 'application/json' } 
+    });
 
   } catch (err) {
     console.error('news-ingest fatal error:', err);
