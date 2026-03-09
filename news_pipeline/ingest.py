@@ -39,6 +39,7 @@ RATE_LIMIT_SECONDS = 1.5
 HEAD_TIMEOUT_SECONDS = 8
 DUPE_TITLE_THRESHOLD = 0.70     # word-overlap ratio to flag near-duplicates
 TITLE_MATCH_THRESHOLD = 0.25    # min word overlap between claimed & real title
+MAX_ARTICLE_AGE_DAYS = 730      # ~2 years — reject articles older than this
 
 BAD_DOMAINS = [
     "example.com",
@@ -492,6 +493,21 @@ def _verify_and_scrape(
         elif not article.published_date:
             # No scraped date and no LLM date — leave empty (will become NULL)
             logger.debug("  📅 No date found for %s", article.title[:60])
+
+        # Age filter — reject articles older than MAX_ARTICLE_AGE_DAYS
+        if article.published_date:
+            try:
+                from datetime import datetime, timezone
+                pub = datetime.fromisoformat(article.published_date[:10])
+                age_days = (datetime.now() - pub).days
+                if age_days > MAX_ARTICLE_AGE_DAYS:
+                    logger.info(
+                        "  ✗ TOO OLD (%d days) %s",
+                        age_days, article.title[:60],
+                    )
+                    continue
+            except ValueError:
+                pass
 
         verified.append(article)
         kept_titles.append(article.title)
