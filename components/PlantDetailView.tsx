@@ -824,7 +824,7 @@ const PlantDetailView: React.FC<Props> = ({
                             <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{article.sourceName}</span>
                             {article.publishedAt && (
                               <span className="text-[9px] text-slate-600">
-                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
                               </span>
                             )}
                             {article.topics?.slice(0,2).map(t => (
@@ -1050,7 +1050,7 @@ const PlantDetailView: React.FC<Props> = ({
                           )}
                           <span className="text-[9px] text-slate-600">•</span>
                           <span className="text-[9px] text-slate-600">
-                            {article.publishedAt ? new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Date unknown'}
+                            {article.publishedAt ? new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'Date unknown'}
                           </span>
                           {(article.topics ?? []).map(t => (
                             <span key={t} className={`text-[9px] px-1.5 py-0.5 rounded border font-bold uppercase tracking-widest ${TOPIC_COLORS[t] ?? TOPIC_COLORS.other}`}>{t}</span>
