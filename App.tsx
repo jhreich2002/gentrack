@@ -42,7 +42,7 @@ const App: React.FC = () => {
   const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
   const [selectedSubRegions, setSelectedSubRegions] = useState<string[]>([]);
   const [search, setSearch] = useState('');
-  const [hideNoGeneration, setHideNoGeneration] = useState(false);
+  const [noGenMonths, setNoGenMonths] = useState<number>(0);
   const [minCurtailmentLag, setMinCurtailmentLag] = useState<number>(0);
   const [maxCFThreshold, setMaxCFThreshold] = useState<number | null>(null);
 
@@ -185,7 +185,7 @@ const App: React.FC = () => {
         p.location?.state?.toLowerCase().includes(search.toLowerCase()) ||
         p.county?.toLowerCase().includes(search.toLowerCase());
       const stats = statsMap[p.id];
-      const gapMatch = !hideNoGeneration || (stats?.trailingZeroMonths ?? 0) < 6;
+      const gapMatch = noGenMonths === 0 || (stats?.trailingZeroMonths ?? 0) < noGenMonths;
       const lagMatch = minCurtailmentLag === 0
         ? true
         : (stats?.isLikelyCurtailed && (stats?.curtailmentScore ?? 0) >= minCurtailmentLag);
@@ -210,12 +210,12 @@ const App: React.FC = () => {
     });
 
     return result;
-  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, hideNoGeneration, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
+  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, noGenMonths, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, selectedFuels, selectedSubRegions, search, hideNoGeneration, minCurtailmentLag, maxCFThreshold, sortKey, sortDesc]);
+  }, [activeTab, selectedFuels, selectedSubRegions, search, noGenMonths, minCurtailmentLag, maxCFThreshold, sortKey, sortDesc]);
 
   // Paginated slice
   const totalPages = Math.max(1, Math.ceil(filteredPlants.length / PAGE_SIZE));
@@ -463,8 +463,8 @@ const App: React.FC = () => {
               setSelectedSubRegions={setSelectedSubRegions}
               search={search}
               setSearch={setSearch}
-              hideNoGeneration={hideNoGeneration}
-              setHideNoGeneration={setHideNoGeneration}
+              noGenMonths={noGenMonths}
+              setNoGenMonths={setNoGenMonths}
               minCurtailmentLag={minCurtailmentLag}
               setMinCurtailmentLag={setMinCurtailmentLag}
               maxCFThreshold={maxCFThreshold}
