@@ -14,9 +14,11 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from supabase import create_client, Client
@@ -32,9 +34,10 @@ GEMINI_URL = (
 )
 
 ARTICLES_PER_PLANT = 8          # request more; filter to verified subset
-MAX_VERIFIED_PER_PLANT = 3
+MAX_VERIFIED_PER_PLANT = 5      # keep more; dedup + relevance will prune
 RATE_LIMIT_SECONDS = 1.5
 HEAD_TIMEOUT_SECONDS = 8
+DUPE_TITLE_THRESHOLD = 0.70     # word-overlap ratio to flag near-duplicates
 
 BAD_DOMAINS = [
     "example.com",
@@ -118,6 +121,156 @@ def _is_url_live(url: str, *, timeout: float = HEAD_TIMEOUT_SECONDS) -> bool:
         return False
 
 
+# ── Date scraping ─────────────────────────────────────────────────────────────
+
+
+def _scrape_date_from_html(url: str, html: str) -> str | None:
+    """Extract a publication date from article HTML using multiple strategies.
+
+    Returns an ISO date string (YYYY-MM-DD) or None.
+    Strategies (in priority order):
+      1. <meta property="article:published_time"> tag
+      2. JSON-LD datePublished
+      3. Date embedded in the URL path (e.g. /2025-02-05/ or /2025/02/05/)
+      4. Visible text dates near the top of the page
+    """
+    date_str: str | None = None
+
+    # 1 — Meta tags
+    for pat in [
+        r'property="article:published_time"[^>]*content="([^"]+)"',
+        r'content="([^"]+)"[^>]*property="article:published_time"',
+        r'name="date"[^>]*content="([^"]+)"',
+        r'name="pubdate"[^>]*content="([^"]+)"',
+        r'name="publish-date"[^>]*content="([^"]+)"',
+    ]:
+        m = re.search(pat, html, re.I)
+        if m:
+            date_str = m.group(1)
+            break
+
+    # 2 — JSON-LD
+    if not date_str:
+        for m in re.finditer(
+            r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
+            html, re.S,
+        ):
+            try:
+                data = json.loads(m.group(1))
+                items = [data] if isinstance(data, dict) else (
+                    data if isinstance(data, list) else []
+                )
+                for item in items:
+                    if isinstance(item, dict) and "datePublished" in item:
+                        date_str = str(item["datePublished"])
+                        break
+                if date_str:
+                    break
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    # 3 — URL path date
+    if not date_str:
+        m = re.search(r"/(\d{4})[-/](\d{2})[-/](\d{2})/?", url)
+        if m:
+            date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+    # Normalize to YYYY-MM-DD
+    if date_str:
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", date_str)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _fetch_article_html(url: str, *, timeout: float = 12) -> str | None:
+    """GET the article page and return its HTML, or None on failure."""
+    try:
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; GenTrack/1.0)"},
+        ) as client:
+            r = client.get(url)
+            if 200 <= r.status_code < 400:
+                return r.text
+    except Exception:
+        pass
+    return None
+
+
+# ── Relevance check ───────────────────────────────────────────────────────────
+
+
+def _is_article_relevant(
+    title: str,
+    description: str,
+    plant_name: str,
+    owner: str,
+) -> bool:
+    """Return True if the article appears to be *about* the plant, not just
+    mentioning it tangentially.
+
+    Checks that the plant name (or a significant word from it) appears in
+    the article title or description.  A generic article about the industry
+    that merely lists the plant in passing will be rejected.
+    """
+    combined = f"{title} {description}".lower()
+    plant_lower = plant_name.lower()
+
+    # Direct plant name match
+    if plant_lower in combined:
+        return True
+
+    # Try significant words from the plant name (skip generic words)
+    skip = {
+        "power", "plant", "station", "generating", "generation", "energy",
+        "solar", "wind", "farm", "facility", "center", "the", "of", "and",
+        "llc", "inc", "co", "project", "electric", "nuclear",
+    }
+    significant = [
+        w for w in plant_lower.split() if w not in skip and len(w) > 2
+    ]
+    if significant:
+        # At least one significant word from the plant name must appear
+        return any(word in combined for word in significant)
+
+    # Owner name match as fallback
+    if owner and owner.lower() in combined:
+        return True
+
+    return False
+
+
+# ── Near-duplicate detection ──────────────────────────────────────────────────
+
+
+def _word_set(text: str) -> set[str]:
+    """Return the set of lowercase alpha-numeric words in *text*."""
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _is_near_duplicate(
+    title: str,
+    existing_titles: list[str],
+    threshold: float = DUPE_TITLE_THRESHOLD,
+) -> bool:
+    """Return True if *title* shares ≥threshold word overlap with any
+    existing title (Jaccard similarity on word sets)."""
+    words_new = _word_set(title)
+    if not words_new:
+        return False
+    for existing in existing_titles:
+        words_old = _word_set(existing)
+        if not words_old:
+            continue
+        intersection = words_new & words_old
+        union = words_new | words_old
+        if len(intersection) / len(union) >= threshold:
+            return True
+    return False
+
+
 # ── Gemini grounded search ────────────────────────────────────────────────────
 
 
@@ -135,19 +288,25 @@ def _gemini_grounded_search(
     """
 
     prompt = (
-        f'Find {ARTICLES_PER_PLANT} recent real news articles about '
-        f'"{plant_name}" power plant in {state}. '
+        f'Find {ARTICLES_PER_PLANT} recent real news articles specifically about '
+        f'the "{plant_name}" power plant in {state}. '
         f'This is a {fuel_type} power plant owned by {owner or "unknown"}.\n\n'
-        "IMPORTANT: Only include articles from reputable news websites "
+        "CRITICAL RULES:\n"
+        "1. Every article MUST be specifically about this plant — not just "
+        "mentioning it in passing or listing it among many facilities.\n"
+        "2. Only include articles from reputable news websites "
         "(e.g. Reuters, Bloomberg, Utility Dive, Power Engineering, "
-        "local newspapers, AP News, ans.org). Each URL must be a direct "
-        "link to an actual published article page — NOT a search page, "
-        "government database, or directory listing.\n\n"
+        "local newspapers, AP News, ans.org).\n"
+        "3. Each URL must be a direct link to an actual published article "
+        "page — NOT a search page, government database, or directory.\n"
+        "4. Do NOT include duplicate or near-duplicate articles covering "
+        "the same story from the same source.\n\n"
         "Return ONLY a JSON array with these exact fields for each article:\n"
         "- title: the article headline\n"
         "- url: the direct link to the article\n"
         "- source: the publication name\n"
-        "- publishedAt: publication date in ISO format (YYYY-MM-DD)\n"
+        "- publishedAt: publication date in ISO format (YYYY-MM-DD) — "
+        "leave empty string if uncertain\n"
         "- description: 1-sentence summary\n\n"
         "Return JSON array only, no other text."
     )
@@ -227,8 +386,6 @@ def _gemini_grounded_search(
         title = web.get("title", "")
         if uri and not _is_bad_domain(uri) and uri not in seen_urls:
             seen_urls.add(uri)
-            from urllib.parse import urlparse
-
             hostname = urlparse(uri).hostname or ""
             candidates.append(
                 RawArticle(
@@ -242,17 +399,56 @@ def _gemini_grounded_search(
     return candidates
 
 
-def _verify_urls(candidates: list[RawArticle]) -> list[RawArticle]:
-    """HEAD-check each URL and keep the first *MAX_VERIFIED_PER_PLANT* that are live."""
+def _verify_and_scrape(
+    candidates: list[RawArticle],
+    plant_name: str,
+    owner: str,
+) -> list[RawArticle]:
+    """GET each URL, verify it's live, scrape real dates, check relevance,
+    remove near-duplicates, and keep up to *MAX_VERIFIED_PER_PLANT*."""
     verified: list[RawArticle] = []
+    kept_titles: list[str] = []
+
     for article in candidates:
         if len(verified) >= MAX_VERIFIED_PER_PLANT:
             break
-        if _is_url_live(article.url):
-            logger.debug("  ✓ LIVE  %s", article.url)
-            verified.append(article)
-        else:
+
+        # Fetch the full page (also proves liveness)
+        html = _fetch_article_html(article.url)
+        if html is None:
             logger.debug("  ✗ DEAD  %s", article.url)
+            continue
+        logger.debug("  ✓ LIVE  %s", article.url)
+
+        # Relevance check — must be *about* the plant
+        desc_text = article.description or ""
+        if not _is_article_relevant(article.title, desc_text, plant_name, owner):
+            # Also check if plant name is in the HTML body
+            if plant_name.lower() not in html.lower():
+                logger.info("  ✗ IRRELEVANT  %s", article.title)
+                continue
+
+        # Near-duplicate check
+        if _is_near_duplicate(article.title, kept_titles):
+            logger.info("  ✗ NEAR-DUPE  %s", article.title)
+            continue
+
+        # Scrape real date from the HTML (prefer over Gemini-generated dates)
+        scraped_date = _scrape_date_from_html(article.url, html)
+        if scraped_date:
+            if article.published_date and article.published_date != scraped_date:
+                logger.info(
+                    "  📅 Date corrected: %s → %s for %s",
+                    article.published_date, scraped_date, article.title[:60],
+                )
+            article.published_date = scraped_date
+        elif not article.published_date:
+            # No scraped date and no LLM date — leave empty (will become NULL)
+            logger.debug("  📅 No date found for %s", article.title[:60])
+
+        verified.append(article)
+        kept_titles.append(article.title)
+
     return verified
 
 
@@ -322,9 +518,9 @@ def ingest_articles(
             time.sleep(RATE_LIMIT_SECONDS)
             continue
 
-        # 2 — Verify URLs are live
+        # 2 — Verify URLs, scrape dates, filter relevance & near-dupes
         if verify_urls:
-            candidates = _verify_urls(candidates)
+            candidates = _verify_and_scrape(candidates, plant_name, owner)
 
         if not candidates:
             logger.info("   → 0 verified articles")
