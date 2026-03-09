@@ -56,7 +56,7 @@ export async function fetchPlantNewsArticles(
       event_type, impact_tags, fti_relevance_tags, importance, entity_company_names
     `)
     .contains('plant_codes', [eiaPlantCode])
-    .order('published_at', { ascending: false })
+    .order('published_at', { ascending: false, nullsFirst: false })
     .limit(limit);
 
   // Only apply date filter if a meaningful window is set (not "All")
@@ -82,7 +82,7 @@ export async function fetchPlantNewsArticles(
     description:        row.description as string | null,
     url:                row.url as string,
     sourceName:         row.source_name as string | null,
-    publishedAt:        row.published_at as string,
+    publishedAt:        (row.published_at as string | null) ?? null,
     topics:             (row.topics as string[]) ?? [],
     sentimentLabel:     row.sentiment_label as 'positive' | 'negative' | 'neutral' | null,
     eventType:          row.event_type as string | null,
@@ -245,7 +245,7 @@ export async function semanticSearchPlantNews(
     description:        row.description as string | null,
     url:                row.url as string,
     sourceName:         row.source_name as string | null,
-    publishedAt:        row.published_at as string,
+    publishedAt:        (row.published_at as string | null) ?? null,
     topics:             (row.topics as string[]) ?? [],
     sentimentLabel:     row.sentiment_label as 'positive' | 'negative' | 'neutral' | null,
     eventType:          row.event_type as string | null,

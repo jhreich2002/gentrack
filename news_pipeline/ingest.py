@@ -212,7 +212,7 @@ def _gemini_grounded_search(
                             source=str(item.get("source", "Unknown")).strip(),
                             published_date=item.get(
                                 "publishedAt",
-                                time.strftime("%Y-%m-%d"),
+                                "",
                             ),
                             description=str(item.get("description", "")).strip(),
                         )
@@ -235,7 +235,7 @@ def _gemini_grounded_search(
                     title=title,
                     url=uri,
                     source=hostname.removeprefix("www."),
-                    published_date=time.strftime("%Y-%m-%d"),
+                    published_date="",
                 )
             )
 
@@ -387,7 +387,7 @@ def ingest_articles(
                 "description": ea.description or None,
                 "source_name": ea.source,
                 "url": ea.url,
-                "published_at": ea.published_date,
+                "published_at": ea.published_date or None,
                 "query_tag": f"grounded:{ea.plant_id}",
                 "plant_codes": [ea.plant_id],
                 "owner_names": [ea.owner] if ea.owner else [],
