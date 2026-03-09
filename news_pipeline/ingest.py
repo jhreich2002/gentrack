@@ -38,6 +38,7 @@ MAX_VERIFIED_PER_PLANT = 5      # keep more; dedup + relevance will prune
 RATE_LIMIT_SECONDS = 1.5
 HEAD_TIMEOUT_SECONDS = 8
 DUPE_TITLE_THRESHOLD = 0.70     # word-overlap ratio to flag near-duplicates
+TITLE_MATCH_THRESHOLD = 0.25    # min word overlap between claimed & real title
 
 BAD_DOMAINS = [
     "example.com",
@@ -242,6 +243,35 @@ def _is_article_relevant(
     return False
 
 
+# ── Title verification ────────────────────────────────────────────────────────
+
+
+def _extract_page_title(html: str) -> str | None:
+    """Extract the <title> tag content from HTML."""
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    if m:
+        import html as html_mod
+        return html_mod.unescape(m.group(1)).strip()
+    return None
+
+
+def _titles_match(
+    claimed_title: str,
+    page_title: str,
+    threshold: float = TITLE_MATCH_THRESHOLD,
+) -> bool:
+    """Return True if the claimed title shares enough words with the actual
+    page title.  This catches hallucinated URLs where the page content is
+    completely different from what Gemini reported."""
+    claimed_words = _word_set(claimed_title)
+    page_words = _word_set(page_title)
+    if not claimed_words or not page_words:
+        return True  # can't verify — give benefit of doubt
+    overlap = len(claimed_words & page_words)
+    # At least threshold of the claimed title's words should appear
+    return overlap / len(claimed_words) >= threshold
+
+
 # ── Near-duplicate detection ──────────────────────────────────────────────────
 
 
@@ -419,6 +449,23 @@ def _verify_and_scrape(
             logger.debug("  ✗ DEAD  %s", article.url)
             continue
         logger.debug("  ✓ LIVE  %s", article.url)
+
+        # Title verification — reject hallucinated URLs
+        page_title = _extract_page_title(html)
+        if page_title and not _titles_match(article.title, page_title):
+            logger.info(
+                "  ✗ TITLE MISMATCH — claimed: '%s' | actual: '%s'",
+                article.title[:80], page_title[:80],
+            )
+            continue
+
+        # If page title is available, use it instead of Gemini's claimed title
+        # (the real title is more accurate)
+        if page_title:
+            # Clean common suffixes like " -- ANS / Nuclear Newswire"
+            clean_title = re.split(r"\s*[|–—]\s*", page_title)[0].strip()
+            if clean_title and len(clean_title) > 10:
+                article.title = clean_title
 
         # Relevance check — must be *about* the plant
         desc_text = article.description or ""
