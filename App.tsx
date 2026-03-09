@@ -185,7 +185,7 @@ const App: React.FC = () => {
         p.location?.state?.toLowerCase().includes(search.toLowerCase()) ||
         p.county?.toLowerCase().includes(search.toLowerCase());
       const stats = statsMap[p.id];
-      const gapMatch = !hideNoGeneration || (stats?.ttmAverage ?? 0) > 0;
+      const gapMatch = !hideNoGeneration || (stats?.trailingZeroMonths ?? 0) < 6;
       const lagMatch = minCurtailmentLag === 0
         ? true
         : (stats?.isLikelyCurtailed && (stats?.curtailmentScore ?? 0) >= minCurtailmentLag);

@@ -157,7 +157,7 @@ const FilterControls: React.FC<Props> = ({
         {/* Hide No-Generation Toggle */}
         <div>
           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 block">
-            No Generation (Last 12 Mo)
+            No Generation (Last 6 Mo)
           </label>
           <button
             onClick={() => setHideNoGeneration(!hideNoGeneration)}
@@ -174,7 +174,7 @@ const FilterControls: React.FC<Props> = ({
           </button>
           {hideNoGeneration && (
             <p className="text-[10px] text-amber-500/70 mt-1.5">
-              Hiding plants with zero generation in the trailing 12 months
+              Hiding plants with zero generation in the last 6 months
             </p>
           )}
         </div>
