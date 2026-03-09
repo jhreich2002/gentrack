@@ -134,7 +134,7 @@ def classify_sentiment(
 
         data = resp.json()
         # Gemini 2.5 Flash may return "thinking" parts before the text part.
-        # Iterate through all parts and pick the last one with a "text" key.
+        # Iterate through all parts and pick the last non-thought text part.
         parts = (
             (data.get("candidates") or [{}])[0]
             .get("content", {})
@@ -142,7 +142,7 @@ def classify_sentiment(
         )
         raw = ""
         for part in parts:
-            if "text" in part:
+            if "text" in part and not part.get("thought"):
                 raw = part["text"]
 
         # Strip markdown code fences if present

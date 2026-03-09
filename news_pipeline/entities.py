@@ -160,12 +160,16 @@ def _llm_extract_lenders(
             return {"owner": owner or None, "lenders": []}
 
         data = resp.json()
-        raw = (
+        # Gemini 2.5 Flash may include "thinking" parts — skip those
+        parts = (
             (data.get("candidates") or [{}])[0]
             .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "")
+            .get("parts", [])
         )
+        raw = ""
+        for part in parts:
+            if "text" in part and not part.get("thought"):
+                raw = part["text"]
 
         start = raw.find("{")
         end = raw.rfind("}")

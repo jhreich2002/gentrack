@@ -27,13 +27,14 @@ logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash"          # sentiment & entity extraction
+GEMINI_SEARCH_MODEL = "gemini-2.5-flash"   # grounded search
 GEMINI_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_MODEL}:generateContent"
+    f"{GEMINI_SEARCH_MODEL}:generateContent"
 )
 
-ARTICLES_PER_PLANT = 8          # request more; filter to verified subset
+ARTICLES_PER_PLANT = 15         # request more; filter to verified subset
 MAX_VERIFIED_PER_PLANT = 5      # keep more; dedup + relevance will prune
 RATE_LIMIT_SECONDS = 1.5
 HEAD_TIMEOUT_SECONDS = 8
@@ -305,42 +306,95 @@ def _is_near_duplicate(
 # ── Gemini grounded search ────────────────────────────────────────────────────
 
 
+def _fuel_label(fuel_type: str) -> str:
+    """Return a human-friendly facility label based on fuel type."""
+    ft = fuel_type.lower().strip()
+    if "wind" in ft:
+        return "wind farm"
+    if "solar" in ft or "photovoltaic" in ft:
+        return "solar facility"
+    if "nuclear" in ft:
+        return "nuclear power plant"
+    if "hydro" in ft or "water" in ft:
+        return "hydroelectric plant"
+    if "gas" in ft or "natural gas" in ft:
+        return "natural gas power plant"
+    if "coal" in ft:
+        return "coal power plant"
+    if "geothermal" in ft:
+        return "geothermal plant"
+    if "biomass" in ft or "wood" in ft:
+        return "biomass power plant"
+    return "power plant"
+
+
 def _gemini_grounded_search(
     plant_name: str,
     state: str,
     fuel_type: str,
     owner: str,
     api_key: str,
+    *,
+    fallback: bool = False,
 ) -> list[RawArticle]:
     """Call Gemini with google_search grounding to discover real articles.
 
     Returns up to *ARTICLES_PER_PLANT* candidate RawArticles extracted from
     both the LLM JSON response and the grounding metadata chunks.
+
+    When *fallback* is True, uses a simpler/broader query to catch articles
+    that the primary search missed.
     """
 
-    prompt = (
-        f'Find {ARTICLES_PER_PLANT} recent real news articles specifically about '
-        f'the "{plant_name}" power plant in {state}. '
-        f'This is a {fuel_type} power plant owned by {owner or "unknown"}.\n\n'
-        "CRITICAL RULES:\n"
-        "1. Every article MUST be specifically about this plant — not just "
-        "mentioning it in passing or listing it among many facilities.\n"
-        "2. Only include articles from reputable news websites "
-        "(e.g. Reuters, Bloomberg, Utility Dive, Power Engineering, "
-        "local newspapers, AP News, ans.org).\n"
-        "3. Each URL must be a direct link to an actual published article "
-        "page — NOT a search page, government database, or directory.\n"
-        "4. Do NOT include duplicate or near-duplicate articles covering "
-        "the same story from the same source.\n\n"
-        "Return ONLY a JSON array with these exact fields for each article:\n"
-        "- title: the article headline\n"
-        "- url: the direct link to the article\n"
-        "- source: the publication name\n"
-        "- publishedAt: publication date in ISO format (YYYY-MM-DD) — "
-        "leave empty string if uncertain\n"
-        "- description: 1-sentence summary\n\n"
-        "Return JSON array only, no other text."
-    )
+    facility = _fuel_label(fuel_type)
+
+    if fallback:
+        # Broader search: owner + fuel + state (catches indirect mentions)
+        search_name = plant_name.split("(")[0].strip()  # remove parentheticals
+        prompt = (
+            f'Find {ARTICLES_PER_PLANT} recent real news articles about '
+            f'{owner or search_name} {facility} projects in {state}. '
+            f'The specific project is called "{search_name}".\n\n'
+            "Include articles about construction, operation, outages, "
+            "production, regulatory issues, or business developments.\n\n"
+            "CRITICAL RULES:\n"
+            "1. Every article MUST be about real energy projects — "
+            "not government reports, databases, or search results.\n"
+            "2. Only include articles from reputable news websites.\n"
+            "3. Each URL must be a direct link to an actual published article.\n\n"
+            "Return ONLY a JSON array with these exact fields for each article:\n"
+            "- title: the article headline\n"
+            "- url: the direct link to the article\n"
+            "- source: the publication name\n"
+            "- publishedAt: publication date in ISO format (YYYY-MM-DD) — "
+            "leave empty string if uncertain\n"
+            "- description: 1-sentence summary\n\n"
+            "Return JSON array only, no other text."
+        )
+    else:
+        prompt = (
+            f'Find {ARTICLES_PER_PLANT} recent real news articles specifically about '
+            f'the "{plant_name}" {facility} in {state}. '
+            f'This is a {fuel_type} {facility} owned by {owner or "unknown"}.\n\n'
+            "CRITICAL RULES:\n"
+            "1. Every article MUST be specifically about this plant — not just "
+            "mentioning it in passing or listing it among many facilities.\n"
+            "2. Only include articles from reputable news websites "
+            "(e.g. Reuters, Bloomberg, Utility Dive, Power Engineering, "
+            "local newspapers, AP News, ans.org).\n"
+            "3. Each URL must be a direct link to an actual published article "
+            "page — NOT a search page, government database, or directory.\n"
+            "4. Do NOT include duplicate or near-duplicate articles covering "
+            "the same story from the same source.\n\n"
+            "Return ONLY a JSON array with these exact fields for each article:\n"
+            "- title: the article headline\n"
+            "- url: the direct link to the article\n"
+            "- source: the publication name\n"
+            "- publishedAt: publication date in ISO format (YYYY-MM-DD) — "
+            "leave empty string if uncertain\n"
+            "- description: 1-sentence summary\n\n"
+            "Return JSON array only, no other text."
+        )
 
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -370,7 +424,12 @@ def _gemini_grounded_search(
 
     data = resp.json()
     candidate = (data.get("candidates") or [{}])[0]
-    text: str = (candidate.get("content", {}).get("parts") or [{}])[0].get("text", "")
+
+    # Gemini 2.5 Flash may include "thinking" parts — skip those
+    text: str = ""
+    for part in (candidate.get("content", {}).get("parts") or []):
+        if "text" in part and not part.get("thought"):
+            text = part["text"]
 
     # Grounding metadata — Google's own verified URLs
     grounding_chunks = (
@@ -471,8 +530,23 @@ def _verify_and_scrape(
         # Relevance check — must be *about* the plant
         desc_text = article.description or ""
         if not _is_article_relevant(article.title, desc_text, plant_name, owner):
-            # Also check if plant name is in the HTML body
-            if plant_name.lower() not in html.lower():
+            # Fallback: check if significant words from the plant name appear
+            # in the HTML body (relaxed from exact full-name match)
+            html_lower = html.lower()
+            skip_html = {
+                "power", "plant", "station", "generating", "generation",
+                "energy", "solar", "wind", "farm", "facility", "center",
+                "the", "of", "and", "llc", "inc", "co", "project",
+                "electric", "nuclear",
+            }
+            sig_words = [
+                w for w in plant_name.lower().split()
+                if w not in skip_html and len(w) > 2
+            ]
+            if sig_words and not all(w in html_lower for w in sig_words):
+                logger.info("  ✗ IRRELEVANT  %s", article.title)
+                continue
+            elif not sig_words and plant_name.lower() not in html_lower:
                 logger.info("  ✗ IRRELEVANT  %s", article.title)
                 continue
 
@@ -585,8 +659,22 @@ def ingest_articles(
         if verify_urls:
             candidates = _verify_and_scrape(candidates, plant_name, owner)
 
+        # 2b — Fallback: retry with broader search terms if 0 passed
         if not candidates:
-            logger.info("   → 0 verified articles")
+            logger.info("   → 0 verified articles — trying fallback search")
+            try:
+                fallback_candidates = _gemini_grounded_search(
+                    plant_name, state, fuel, owner, api_key, fallback=True,
+                )
+                if verify_urls:
+                    candidates = _verify_and_scrape(
+                        fallback_candidates, plant_name, owner,
+                    )
+            except Exception as exc:
+                logger.error("Fallback search failed for %s: %s", plant_name, exc)
+
+        if not candidates:
+            logger.info("   → 0 verified articles (even after fallback)")
             time.sleep(RATE_LIMIT_SECONDS)
             continue
 
