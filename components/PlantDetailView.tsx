@@ -1181,7 +1181,7 @@ const PlantDetailView: React.FC<Props> = ({
               return (
                 <div className="space-y-4 pb-2">
                   {/* Overview callout */}
-                  <div className={`rounded-2xl border p-5 space-y-3 ${
+                  <div className={`rounded-2xl border p-3.5 space-y-2 ${
                     isConfirmed
                       ? 'bg-emerald-950/15 border-emerald-800/30'
                       : isPortfolioLevel
@@ -1206,21 +1206,21 @@ const PlantDetailView: React.FC<Props> = ({
                       <div className="flex items-center gap-3 flex-wrap">
                         <div className="text-center">
                           <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Total CAPEX</div>
-                          <div className="text-sm font-black text-slate-200">${seed.totalCapex_m}M</div>
+                          <div className="text-xs font-black text-slate-200">${seed.totalCapex_m}M</div>
                         </div>
-                        <div className="w-px h-7 bg-slate-800" />
+                        <div className="w-px h-5 bg-slate-800" />
                         <div className="text-center">
                           <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Debt / Equity</div>
-                          <div className="text-sm font-black text-slate-200">{seed.debtEquityRatio}</div>
+                          <div className="text-xs font-black text-slate-200">{seed.debtEquityRatio}</div>
                         </div>
-                        <div className="w-px h-7 bg-slate-800" />
+                        <div className="w-px h-5 bg-slate-800" />
                         <div className="text-center">
                           <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Facilities</div>
-                          <div className="text-sm font-black text-slate-200">{seed.facilities.length}</div>
+                          <div className="text-xs font-black text-slate-200">{seed.facilities.length}</div>
                         </div>
                       </div>
                     </div>
-                    <p className="text-xs text-slate-400 leading-relaxed">{seed.overview}</p>
+                    <p className="text-[11px] text-slate-500 leading-relaxed">{seed.overview}</p>
                     <div className="flex items-center gap-2 pt-1">
                       <svg className="w-3 h-3 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -1459,6 +1459,50 @@ const PlantDetailView: React.FC<Props> = ({
                   </div>
                 )}
 
+                {/* Dedicated Financing Search */}
+                <div>
+                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-3">Financing Search</div>
+                  {financingNews.length === 0 && (
+                    <div className="py-6 text-center bg-slate-800/10 rounded-xl border border-dashed border-slate-800">
+                      <p className="text-xs text-slate-600 italic">No dedicated financing articles found.</p>
+                      <p className="text-[10px] text-slate-700 mt-1">Run <code className="font-mono">ingest_financing_articles()</code> for this plant to populate.</p>
+                    </div>
+                  )}
+                  {financingNews.length > 0 && (
+                    <div className="space-y-3">
+                      {financingNews.map(article => (
+                        <div key={article.id} className={`flex flex-col p-4 rounded-xl border transition-all ${
+                          article.sentimentLabel === 'negative' ? 'bg-red-950/10 border-red-900/30' :
+                          article.sentimentLabel === 'positive' ? 'bg-emerald-950/10 border-emerald-900/30' :
+                          'bg-slate-800/20 border-slate-700/40'
+                        }`}>
+                          <div className="flex items-start justify-between gap-3 mb-1.5">
+                            <a href={article.url} target="_blank" rel="noopener noreferrer"
+                               className="text-sm font-bold text-slate-200 hover:text-white leading-snug line-clamp-2 flex-1">
+                              {article.title}
+                            </a>
+                            <span className="shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide text-violet-400 bg-violet-900/30 border border-violet-700/30">FINANCE</span>
+                          </div>
+                          {article.description && (
+                            <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 mb-2">{article.description}</p>
+                          )}
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <span className="text-[10px] text-slate-600 font-medium">{article.sourceName}</span>
+                            {article.publishedAt && (
+                              <span className="text-[10px] text-slate-700">
+                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                              </span>
+                            )}
+                            {article.lenders && article.lenders.length > 0 && article.lenders.map((l: string) => (
+                              <span key={l} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/30">{l}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* From General News */}
                 <div>
                   <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-3">From General News</div>
@@ -1493,50 +1537,6 @@ const PlantDetailView: React.FC<Props> = ({
                                 'text-slate-500 bg-slate-800/60'
                               }`}>{article.sentimentLabel}</span>
                             )}
-                          </div>
-                          {article.description && (
-                            <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 mb-2">{article.description}</p>
-                          )}
-                          <div className="flex items-center gap-3 flex-wrap">
-                            <span className="text-[10px] text-slate-600 font-medium">{article.sourceName}</span>
-                            {article.publishedAt && (
-                              <span className="text-[10px] text-slate-700">
-                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
-                              </span>
-                            )}
-                            {article.lenders && article.lenders.length > 0 && article.lenders.map((l: string) => (
-                              <span key={l} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/30">{l}</span>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Dedicated Financing Search */}
-                <div>
-                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-3">Financing Search</div>
-                  {financingNews.length === 0 && (
-                    <div className="py-6 text-center bg-slate-800/10 rounded-xl border border-dashed border-slate-800">
-                      <p className="text-xs text-slate-600 italic">No dedicated financing articles found.</p>
-                      <p className="text-[10px] text-slate-700 mt-1">Run <code className="font-mono">ingest_financing_articles()</code> for this plant to populate.</p>
-                    </div>
-                  )}
-                  {financingNews.length > 0 && (
-                    <div className="space-y-3">
-                      {financingNews.map(article => (
-                        <div key={article.id} className={`flex flex-col p-4 rounded-xl border transition-all ${
-                          article.sentimentLabel === 'negative' ? 'bg-red-950/10 border-red-900/30' :
-                          article.sentimentLabel === 'positive' ? 'bg-emerald-950/10 border-emerald-900/30' :
-                          'bg-slate-800/20 border-slate-700/40'
-                        }`}>
-                          <div className="flex items-start justify-between gap-3 mb-1.5">
-                            <a href={article.url} target="_blank" rel="noopener noreferrer"
-                               className="text-sm font-bold text-slate-200 hover:text-white leading-snug line-clamp-2 flex-1">
-                              {article.title}
-                            </a>
-                            <span className="shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide text-violet-400 bg-violet-900/30 border border-violet-700/30">FINANCE</span>
                           </div>
                           {article.description && (
                             <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 mb-2">{article.description}</p>
