@@ -11,19 +11,10 @@ Modules:
     entities    Extract plant names, owners, and lender/financier mentions.
 """
 
-from news_pipeline.ingest import ingest_articles
-from news_pipeline.chunk import chunk_article
-from news_pipeline.embed import embed_and_upsert
-from news_pipeline.retrieve import retrieve_chunks, rag_answer
+from news_pipeline.ingest import upsert_articles
 from news_pipeline.sentiment import classify_sentiment
-from news_pipeline.entities import extract_entities
 
 __all__ = [
-    "ingest_articles",
-    "chunk_article",
-    "embed_and_upsert",
-    "retrieve_chunks",
-    "rag_answer",
+    "upsert_articles",
     "classify_sentiment",
-    "extract_entities",
 ]
