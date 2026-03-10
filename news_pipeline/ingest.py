@@ -107,6 +107,22 @@ def load_curtailed_plants(sb: Client, tier: int, limit: int | None = None) -> li
     return plants
 
 
+def load_plants_by_codes(sb: Client, eia_codes: list[str]) -> list[dict]:
+    """Load specific plants by EIA plant code (e.g. ['65678', '63883'])."""
+    resp = (
+        sb.table("plants")
+        .select(
+            "eia_plant_code, name, owner, state, fuel_source, "
+            "curtailment_score, nameplate_capacity_mw, is_maintenance_offline"
+        )
+        .in_("eia_plant_code", eia_codes)
+        .execute()
+    )
+    plants = resp.data or []
+    log.info("Loaded %d plants by code: %s", len(plants), eia_codes)
+    return plants
+
+
 # ── Tavily search ─────────────────────────────────────────────────────────────
 
 
@@ -469,6 +485,8 @@ def main() -> None:
     parser.add_argument("--financing",  action="store_true", help="Also run finance-focused ingest")
     parser.add_argument("--only-financing", action="store_true",
                         help="Run ONLY the finance ingest (skip general curtailment articles)")
+    parser.add_argument("--plants",     type=str, default=None,
+                        help="Comma-separated EIA plant codes to target, e.g. '65678,63883,67910'")
     args = parser.parse_args()
 
     required = ["TAVILY_API_KEY", "GEMINI_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]
@@ -481,10 +499,14 @@ def main() -> None:
     gemini_key = os.environ["GEMINI_API_KEY"]
     sb         = _get_supabase()
 
-    # 1 — Load plants
-    plants = load_curtailed_plants(sb, args.tier, limit=args.limit)
+    # 1 — Load plants (specific codes or tier-based curtailed list)
+    if args.plants:
+        codes  = [c.strip() for c in args.plants.split(",") if c.strip()]
+        plants = load_plants_by_codes(sb, codes)
+    else:
+        plants = load_curtailed_plants(sb, args.tier, limit=args.limit)
     if not plants:
-        log.info("No curtailed plants found for tier %d — nothing to do", args.tier)
+        log.info("No plants found — nothing to do")
         return
 
     # 2 — Load existing URLs (shared dedup pool across both pipelines)
