@@ -82,22 +82,24 @@ export const PLANT_FINANCING_SEED: Record<string, PlantFinancingSeed> = {
 
   // ─── Appaloosa Solar I (EIA-65678) ──────────────────────────────────────
   // 200 MW solar PV, Millard County, Utah
-  // Operator / Owner: Greenbacker Renewable Energy Company LLC
-  // COD: ~2022  |  Research-based estimate — Greenbacker public filings + industry comps
+  // EIA operator / owner: Greenbacker Renewable Energy Company LLC
+  // Appaloosa Solar I is a project-level SPV; no SEC filings found for this specific entity
+  // Research-based estimate — Greenbacker portfolio-level filings + Utah solar market comps
   '65678': {
     overview:
-      'Appaloosa Solar I is a 200 MW utility-scale solar PV facility located in Millard County, ' +
-      'Utah, owned and operated by Greenbacker Renewable Energy Company LLC (Greenbacker). ' +
-      'Greenbacker is a publicly registered non-traded vehicle (CIK 0001563922) focused on ' +
-      'sustainable infrastructure; it aggregates project-level debt through portfolio-level ' +
-      'credit facilities syndicated via KeyBank, CoBank, and other institutional lenders. ' +
-      'Utah solar projects commissioned after August 2022 qualify for the 30% Investment Tax ' +
-      'Credit (ITC) under the Inflation Reduction Act, which Greenbacker typically monetizes ' +
-      'through an inverted lease or partnership-flip tax equity structure with a major bank. ' +
-      'The facility features a long-term Power Purchase Agreement providing revenue certainty ' +
-      'for debt service. Financing details below are research-based estimates derived from ' +
-      'Greenbacker\'s publicly available credit agreements and comparable Utah solar transactions; ' +
-      'confirm exact terms with the project lender.',
+      'Appaloosa Solar I (EIA-65678) is a 200 MW utility-scale solar PV facility located in ' +
+      'Millard County, Utah. The EIA identifies the operator/owner as Greenbacker Renewable ' +
+      'Energy Company LLC (CIK 0001563922), a publicly registered non-traded sustainable ' +
+      'infrastructure vehicle. No public SEC filings have been identified that disclose ' +
+      'project-level financing specifically for the Appaloosa Solar I SPV. Greenbacker holds ' +
+      'its assets through individual project entities and finances them through a combination ' +
+      'of a portfolio-level revolving credit facility (led by KeyBank and CoBank at the ' +
+      'Greenbacker entity level, per Greenbacker\'s own public filings) and project-specific ' +
+      'term debt. Whether Appaloosa Solar I carries standalone project debt or draws on the ' +
+      'portfolio facility is not confirmed in public disclosures. Utah solar projects ' +
+      'commissioned after August 2022 qualify for the 30% ITC under the IRA. All facility ' +
+      'details below are estimates based on Greenbacker\'s disclosed financing approach and ' +
+      'comparable Utah solar transactions; confirm exact terms with the project lender.',
     totalCapex_m: 210,
     debtEquityRatio: '67/33',
     dataQuality: 'estimated',
@@ -107,9 +109,13 @@ export const PLANT_FINANCING_SEED: Record<string, PlantFinancingSeed> = {
         amount_m: 122,
         instrument: 'Term Loan',
         creditMechanism: 'Senior Secured Debt',
-        provider: 'KeyBank (lead) / CoBank (participant)',
+        provider: 'KeyBank / CoBank (portfolio-level, est. for this SPV)',
         notes:
-          'Est. 7-year tenor, SOFR + 175–200 bps. Greenbacker\'s portfolio credit facilities are confirmed syndicated by KeyBank and CoBank in public filings; Appaloosa-specific allocation estimated.',
+          'KeyBank and CoBank are confirmed lead arrangers on Greenbacker\'s entity-level revolving ' +
+          'credit facility per Greenbacker public filings — but that facility operates at the ' +
+          'Greenbacker parent level, not specifically for Appaloosa Solar I. Project-level term ' +
+          'debt for this SPV, if any, is not confirmed in public disclosures. Est. 7-year tenor, ' +
+          'SOFR + 175–200 bps based on Greenbacker comparable asset financings.',
       },
       {
         amount_m: 52,
@@ -132,21 +138,21 @@ export const PLANT_FINANCING_SEED: Record<string, PlantFinancingSeed> = {
 
   // ─── Timbermill Wind, LLC (EIA-67910) ───────────────────────────────────
   // 189 MW onshore wind, North Carolina
-  // Operator / Owner: Timbermill Wind (private)
-  // COD: ~2023  |  Research-based estimate — NC wind market comps + IRA PTC data
+  // EIA operator / owner: Timbermill Wind (private entity, no SEC filings found)
+  // No confirmed public filings for this specific SPV — research-based estimate
   '67910': {
     overview:
-      'Timbermill Wind, LLC is a 189 MW onshore wind energy facility located in North Carolina, ' +
-      'operated by a private developer under the same name. As an onshore wind facility placed ' +
-      'in service after January 1, 2022, the project qualifies for the Inflation Reduction Act\'s ' +
-      'Production Tax Credit (PTC) at the full inflation-adjusted rate ($0.03/kWh in 2024), ' +
-      'monetized via a tax equity partnership-flip with a major institutional investor. ' +
-      'North Carolina wind projects of this scale are typically financed with a 12–15 year ' +
-      'senior secured term loan from an infrastructure-focused lending syndicate, supplemented ' +
-      'by a letter-of-credit facility to satisfy MISO/PJM interconnection security requirements. ' +
-      'The project is expected to hold a long-term offtake agreement or hedge. Financing details ' +
-      'below are research-based estimates derived from comparable North Carolina and Southeast ' +
-      'US wind transactions; confirm exact terms with the project lender.',
+      'Timbermill Wind, LLC (EIA-67910) is a 189 MW onshore wind energy facility located in ' +
+      'North Carolina. The EIA identifies the operator as Timbermill Wind, a private entity. ' +
+      'No public SEC filings have been identified that disclose project-level financing ' +
+      'specifically for Timbermill Wind, LLC. All lender names and facility amounts below are ' +
+      'pure market-comparable estimates based on similar North Carolina and Southeast US onshore ' +
+      'wind transactions of 150–250 MW scale executed in 2022–2024 — they do not reflect any ' +
+      'confirmed disclosure for this project. As an onshore wind facility placed in service ' +
+      'after January 1, 2022, the project qualifies for the Inflation Reduction Act\'s ' +
+      'Production Tax Credit (PTC). A tax equity partnership-flip and senior secured term loan ' +
+      'are standard for PTC-eligible wind assets of this size. Confirm all terms with the ' +
+      'project developer or lender directly.',
     totalCapex_m: 308,
     debtEquityRatio: '70/30',
     dataQuality: 'estimated',
@@ -156,25 +162,32 @@ export const PLANT_FINANCING_SEED: Record<string, PlantFinancingSeed> = {
         amount_m: 196,
         instrument: 'Term Loan',
         creditMechanism: 'Senior Secured Debt',
-        provider: 'Investec / ING Capital (est. syndicate)',
+        provider: 'Wind infrastructure lender syndicate (est. — not confirmed for this project)',
         notes:
-          'Est. 12-year tenor, SOFR + 200 bps. Investec and ING Capital are active lead arrangers in mid-size US onshore wind transactions with project sizes of 150–250 MW.',
+          'Investec and ING Capital are cited only as examples of active lead arrangers in comparable ' +
+          'US onshore wind deals; neither has been confirmed as a lender to Timbermill Wind LLC ' +
+          'in any public filing. Est. 12-year tenor, SOFR + 200 bps based on NC wind comps.',
       },
       {
         amount_m: 84,
         instrument: 'Tax Equity',
         creditMechanism: 'PTC (10-yr flip)',
-        provider: 'Bank of America (est.)',
+        provider: 'Institutional tax equity investor (est. — not confirmed for this project)',
         notes:
-          'Partnership-flip structure typical for PTC wind assets. Tax equity investor receives ~99% of PTCs until a target IRR flip, after which the developer retakes majority economics. 10-year PTC window from COD.',
+          'Bank of America is cited as an example of a major PTC tax equity provider active in ' +
+          'this market segment; it has not been confirmed as an investor in Timbermill Wind LLC. ' +
+          'Partnership-flip structure typical for PTC wind assets; ~99% tax benefits to investor ' +
+          'until target IRR, then flip to developer majority.',
       },
       {
         amount_m: 18,
         instrument: 'Letter of Credit Facility',
         creditMechanism: 'LC / Contingent Facility',
-        provider: 'Wells Fargo (est.)',
+        provider: 'Lender syndicate member (est. — not confirmed for this project)',
         notes:
-          'Interconnection security deposit and balance-of-plant warranty LC. Standard for NC onshore wind interconnecting into MISO or Duke Energy Carolinas territory.',
+          'Wells Fargo is cited as a typical LC provider for NC wind interconnection security; ' +
+          'not confirmed for this project. Standard for wind projects interconnecting into ' +
+          'Duke Energy Carolinas or MISO territory.',
       },
       {
         amount_m: 10,
