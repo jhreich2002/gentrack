@@ -63,6 +63,9 @@ const App: React.FC = () => {
   const [sortKey, setSortKey] = useState<SortKey>('curtailment');
   const [sortDesc, setSortDesc] = useState(true);
   
+  // Sidebar
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
   // Selection
   const [selectedPlantId, setSelectedPlantId]       = useState<string | null>(null);
   const [selectedUltParent, setSelectedUltParent]   = useState<string | null>(null);
@@ -328,80 +331,108 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-950 text-slate-200">
-      <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col h-full shadow-2xl z-10">
-        <div className="p-6 border-b border-slate-800">
-          <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
-            <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse"></div>
-            GENTRACK
-          </h2>
-          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Power Plant Analytics</p>
+      <aside className={`${sidebarCollapsed ? 'w-14' : 'w-64'} bg-slate-900 border-r border-slate-800 flex flex-col h-full shadow-2xl z-10 transition-all duration-200 overflow-hidden flex-shrink-0`}>
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between gap-2">
+          {!sidebarCollapsed && (
+            <div className="min-w-0">
+              <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse flex-shrink-0"></div>
+                GENTRACK
+              </h2>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Power Plant Analytics</p>
+            </div>
+          )}
+          {sidebarCollapsed && <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse mx-auto" />}
+          <button
+            onClick={() => setSidebarCollapsed(c => !c)}
+            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors flex-shrink-0"
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={sidebarCollapsed ? 'M13 5l7 7-7 7M5 5l7 7-7 7' : 'M11 19l-7-7 7-7m8 14l-7-7 7-7'} />
+            </svg>
+          </button>
         </div>
         
         <nav className="flex-1 overflow-y-auto p-4 space-y-1 custom-scrollbar">
           <button
             onClick={() => { setActiveTab('Overview'); setView('dashboard'); }}
-            className={`w-full text-left px-4 py-3 rounded-xl transition-all duration-200 flex items-center gap-3 ${
+            title={sidebarCollapsed ? 'National Overview' : undefined}
+            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
               activeTab === 'Overview' && view === 'dashboard'
                 ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
                 : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
             }`}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-            <span className="text-sm font-semibold tracking-wide">National Overview</span>
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">National Overview</span>}
           </button>
 
           <button
             onClick={() => { setActiveTab('Watchlist'); setView('dashboard'); }}
-            className={`w-full text-left px-4 py-3 rounded-xl transition-all duration-200 flex items-center gap-3 ${
+            title={sidebarCollapsed ? 'Watch List' : undefined}
+            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
               activeTab === 'Watchlist' && view === 'dashboard'
                 ? 'bg-amber-600 text-white shadow-lg shadow-amber-900/20' 
                 : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
             }`}
           >
-            <svg className="w-5 h-5" fill={activeTab === 'Watchlist' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.382-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
-            <span className="text-sm font-semibold tracking-wide flex-1">Watch List</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded ${activeTab === 'Watchlist' ? 'bg-amber-900/40 text-amber-100' : 'bg-slate-800 text-slate-500'}`}>{watchlist.length}</span>
+            <svg className="w-5 h-5 flex-shrink-0" fill={activeTab === 'Watchlist' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.382-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide flex-1">Watch List</span>}
+            {!sidebarCollapsed && <span className={`text-[10px] px-1.5 py-0.5 rounded ${activeTab === 'Watchlist' ? 'bg-amber-900/40 text-amber-100' : 'bg-slate-800 text-slate-500'}`}>{watchlist.length}</span>}
           </button>
           
           <button
             onClick={() => setView('prospecting')}
-            className={`w-full text-left px-4 py-3 rounded-xl transition-all duration-200 flex items-center gap-3 ${
+            title={sidebarCollapsed ? 'Prospecting' : undefined}
+            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
               view === 'prospecting'
                 ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/20'
                 : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
             }`}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-            <span className="text-sm font-semibold tracking-wide">Prospecting</span>
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Prospecting</span>}
           </button>
 
-          <div className="pt-6 pb-2 px-4">
-            <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">ISO / RTO SECTORS</span>
-          </div>
+          {!sidebarCollapsed && (
+            <div className="pt-6 pb-2 px-4">
+              <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">ISO / RTO SECTORS</span>
+            </div>
+          )}
+          {sidebarCollapsed && <div className="pt-3 pb-1"><div className="h-px bg-slate-800 mx-2" /></div>}
 
-          <div className="pt-4 pb-2 px-4">
-            <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">Data Source</span>
-            <p className="text-[10px] text-slate-500 mt-1">
-              {getDataTimestamp()
-                ? `EIA • ${new Date(getDataTimestamp()!).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
-                : 'Built-in dataset'}
-            </p>
-          </div>
+          {!sidebarCollapsed && (
+            <div className="pt-4 pb-2 px-4">
+              <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">Data Source</span>
+              <p className="text-[10px] text-slate-500 mt-1">
+                {getDataTimestamp()
+                  ? `EIA • ${new Date(getDataTimestamp()!).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
+                  : 'Built-in dataset'}
+              </p>
+            </div>
+          )}
 
           {REGIONS.map(region => (
             <button
               key={region}
               onClick={() => { setActiveTab(region); setView('dashboard'); }}
-              className={`w-full text-left px-4 py-2.5 rounded-xl transition-all duration-200 flex items-center justify-between group ${
+              title={sidebarCollapsed ? region : undefined}
+              className={`w-full text-left rounded-xl transition-all duration-200 flex items-center justify-between group ${sidebarCollapsed ? 'justify-center px-2 py-2.5' : 'px-4 py-2.5'} ${
                 activeTab === region && view === 'dashboard'
                   ? 'bg-slate-800 text-blue-400 border border-slate-700' 
                   : 'text-slate-500 hover:bg-slate-800/50 hover:text-slate-300'
               }`}
             >
-              <span className={`text-sm font-medium ${activeTab === region ? 'font-bold' : ''}`}>{region}</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${activeTab === region ? 'bg-blue-900/40 text-blue-400' : 'bg-slate-800 text-slate-600 group-hover:text-slate-400'}`}>
-                {plants.filter(p => p.region === region).length}
-              </span>
+              {sidebarCollapsed
+                ? <span className={`text-[10px] font-bold ${activeTab === region ? 'text-blue-400' : ''}`}>{region.slice(0, 3)}</span>
+                : <>
+                    <span className={`text-sm font-medium ${activeTab === region ? 'font-bold' : ''}`}>{region}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${activeTab === region ? 'bg-blue-900/40 text-blue-400' : 'bg-slate-800 text-slate-600 group-hover:text-slate-400'}`}>
+                      {plants.filter(p => p.region === region).length}
+                    </span>
+                  </>
+              }
             </button>
           ))}
         </nav>
@@ -411,29 +442,42 @@ const App: React.FC = () => {
           {userRole === 'admin' && (
             <button
               onClick={() => setView('admin')}
-              className={`w-full text-left px-4 py-3 rounded-xl transition-all duration-200 flex items-center gap-3 ${
+              title={sidebarCollapsed ? 'Admin' : undefined}
+              className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
                 view === 'admin'
                   ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/20'
                   : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
               }`}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-              <span className="text-sm font-semibold">Admin</span>
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+              {!sidebarCollapsed && <span className="text-sm font-semibold">Admin</span>}
             </button>
           )}
-          <div className="px-4 py-3 flex items-center justify-between">
-            <div className="min-w-0">
-              <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Signed in as</div>
-              <div className="text-xs text-slate-400 font-medium truncate mt-0.5">{session?.user?.email}</div>
+          {sidebarCollapsed ? (
+            <div className="flex justify-center py-2">
+              <button
+                onClick={() => signOut()}
+                className="p-2 rounded-lg text-slate-600 hover:text-red-400 hover:bg-slate-800 transition-colors"
+                title="Sign Out"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+              </button>
             </div>
-            <button
-              onClick={() => signOut()}
-              className="ml-3 p-2 rounded-lg text-slate-600 hover:text-red-400 hover:bg-slate-800 transition-colors flex-shrink-0"
-              title="Sign Out"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
-            </button>
-          </div>
+          ) : (
+            <div className="px-4 py-3 flex items-center justify-between">
+              <div className="min-w-0">
+                <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Signed in as</div>
+                <div className="text-xs text-slate-400 font-medium truncate mt-0.5">{session?.user?.email}</div>
+              </div>
+              <button
+                onClick={() => signOut()}
+                className="ml-3 p-2 rounded-lg text-slate-600 hover:text-red-400 hover:bg-slate-800 transition-colors flex-shrink-0"
+                title="Sign Out"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
