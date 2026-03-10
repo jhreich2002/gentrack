@@ -19,7 +19,13 @@ export interface PlantFinancingSeed {
   overview: string;
   totalCapex_m: number;
   debtEquityRatio: string; // e.g. "68/32"
-  dataQuality: 'confirmed' | 'estimated';
+  /**
+   * 'confirmed'       — financing terms sourced from a public filing specific to this asset
+   * 'portfolio-level' — financing is real/confirmed in public filings but scoped to the broader
+   *                     parent vehicle or project series (I, II, III), not this specific SPV alone
+   * 'estimated'       — no confirmed financing found; structure derived from market comparables
+   */
+  dataQuality: 'confirmed' | 'portfolio-level' | 'estimated';
   source: string;          // citation label shown to user
   sourceUrl?: string;      // optional deep link to filing
   facilities: FinancingFacility[];
@@ -82,48 +88,49 @@ export const PLANT_FINANCING_SEED: Record<string, PlantFinancingSeed> = {
 
   // ─── Appaloosa Solar I (EIA-65678) ──────────────────────────────────────
   // 200 MW solar PV, Millard County, Utah
-  // EIA operator / owner: Greenbacker Renewable Energy Company LLC
-  // Appaloosa Solar I is a project-level SPV; no SEC filings found for this specific entity
-  // Research-based estimate — Greenbacker portfolio-level filings + Utah solar market comps
+  // EIA operator / owner: Greenbacker Renewable Energy Company LLC (CIK 0001563922)
+  // Greenbacker's KeyBank/CoBank revolving facility is confirmed in SEC filings — but that
+  // facility secures Greenbacker's ENTIRE portfolio of assets, not Appaloosa Solar I alone.
+  // dataQuality: 'portfolio-level' — lenders confirmed, scope is the full Greenbacker portfolio
   '65678': {
     overview:
       'Appaloosa Solar I (EIA-65678) is a 200 MW utility-scale solar PV facility located in ' +
-      'Millard County, Utah. The EIA identifies the operator/owner as Greenbacker Renewable ' +
-      'Energy Company LLC (CIK 0001563922), a publicly registered non-traded sustainable ' +
-      'infrastructure vehicle. No public SEC filings have been identified that disclose ' +
-      'project-level financing specifically for the Appaloosa Solar I SPV. Greenbacker holds ' +
-      'its assets through individual project entities and finances them through a combination ' +
-      'of a portfolio-level revolving credit facility (led by KeyBank and CoBank at the ' +
-      'Greenbacker entity level, per Greenbacker\'s own public filings) and project-specific ' +
-      'term debt. Whether Appaloosa Solar I carries standalone project debt or draws on the ' +
-      'portfolio facility is not confirmed in public disclosures. Utah solar projects ' +
-      'commissioned after August 2022 qualify for the 30% ITC under the IRA. All facility ' +
-      'details below are estimates based on Greenbacker\'s disclosed financing approach and ' +
-      'comparable Utah solar transactions; confirm exact terms with the project lender.',
+      'Millard County, Utah, owned and operated by Greenbacker Renewable Energy Company LLC ' +
+      '(CIK 0001563922). Greenbacker\'s SEC filings (10-K / credit agreement exhibits) confirm ' +
+      'a revolving credit facility led by KeyBank and CoBank that is secured by Greenbacker\'s ' +
+      'entire portfolio of renewable energy assets — Appaloosa Solar I is one asset within that ' +
+      'portfolio. The lender names and facility structure below reflect that confirmed ' +
+      'portfolio-level financing. Whether Appaloosa Solar I additionally carries standalone ' +
+      'project-level term debt is not confirmed in any public disclosure; the amounts shown ' +
+      'are estimates of this asset\'s proportional share of the portfolio facility and ' +
+      'comparable Utah solar project financings. Utah solar projects commissioned after ' +
+      'August 2022 qualify for the 30% ITC under the IRA. Confirm asset-specific terms ' +
+      'with Greenbacker or the lead arranger directly.',
     totalCapex_m: 210,
     debtEquityRatio: '67/33',
-    dataQuality: 'estimated',
-    source: 'Research-based estimate — Greenbacker public filings + Utah solar market comps',
+    dataQuality: 'portfolio-level',
+    source: 'Greenbacker SEC filings (portfolio facility) + Utah solar market comps',
+    sourceUrl: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001563922&type=10-K&dateb=&owner=include&count=10',
     facilities: [
       {
         amount_m: 122,
-        instrument: 'Term Loan',
+        instrument: 'Revolving / Term Credit Facility',
         creditMechanism: 'Senior Secured Debt',
-        provider: 'KeyBank / CoBank (portfolio-level, est. for this SPV)',
+        provider: 'KeyBank (lead) / CoBank (participant) — Greenbacker portfolio facility',
         notes:
-          'KeyBank and CoBank are confirmed lead arrangers on Greenbacker\'s entity-level revolving ' +
-          'credit facility per Greenbacker public filings — but that facility operates at the ' +
-          'Greenbacker parent level, not specifically for Appaloosa Solar I. Project-level term ' +
-          'debt for this SPV, if any, is not confirmed in public disclosures. Est. 7-year tenor, ' +
-          'SOFR + 175–200 bps based on Greenbacker comparable asset financings.',
+          'KeyBank and CoBank are confirmed lead arrangers on Greenbacker\'s entity-level ' +
+          'revolving credit facility per Greenbacker\'s own SEC filings. That facility is secured ' +
+          'by Greenbacker\'s full portfolio of assets — not specifically by Appaloosa Solar I. ' +
+          'Amount shown is an estimated pro-rata allocation to this 200 MW asset. Est. tenor ' +
+          'SOFR + 175–200 bps; confirm asset-specific draw with Greenbacker.',
       },
       {
         amount_m: 52,
         instrument: 'Tax Equity',
         creditMechanism: 'ITC Transfer (30%)',
-        provider: 'Institutional bank / tax equity investor',
+        provider: 'Institutional bank / tax equity investor (est.)',
         notes:
-          'ITC on 200 MW Utah solar at ~$1.05/W DC cost ≈ $63M gross credit at 30%; typical tax equity covers ~80% of credit value. Inverted lease or partnership-flip structure typical for Greenbacker assets.',
+          'ITC on 200 MW Utah solar at ~$1.05/W DC cost ≈ $63M gross credit at 30%; typical tax equity covers ~80% of credit value. Inverted lease or partnership-flip structure typical for Greenbacker assets. Specific investor not identified in public filings.',
       },
       {
         amount_m: 36,

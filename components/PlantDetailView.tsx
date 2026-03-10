@@ -1177,25 +1177,30 @@ const PlantDetailView: React.FC<Props> = ({
                 .filter(f => f.creditMechanism.toLowerCase().includes('debt') || f.instrument.toLowerCase().includes('loan') || f.instrument.toLowerCase().includes('note'))
                 .reduce((s, f) => s + f.amount_m, 0);
               const isConfirmed = seed.dataQuality === 'confirmed';
+              const isPortfolioLevel = seed.dataQuality === 'portfolio-level';
               return (
                 <div className="space-y-4 pb-2">
                   {/* Overview callout */}
                   <div className={`rounded-2xl border p-5 space-y-3 ${
                     isConfirmed
                       ? 'bg-emerald-950/15 border-emerald-800/30'
-                      : 'bg-amber-950/15 border-amber-800/30'
+                      : isPortfolioLevel
+                        ? 'bg-sky-950/15 border-sky-800/30'
+                        : 'bg-amber-950/15 border-amber-800/30'
                   }`}>
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       <div className="flex items-center gap-2.5">
-                        <svg className={`w-4 h-4 shrink-0 ${ isConfirmed ? 'text-emerald-400' : 'text-amber-400' }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className={`w-4 h-4 shrink-0 ${ isConfirmed ? 'text-emerald-400' : isPortfolioLevel ? 'text-sky-400' : 'text-amber-400' }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8"
                             d={isConfirmed
                               ? 'M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z'
-                              : 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'}
+                              : isPortfolioLevel
+                                ? 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'
+                                : 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'}
                           />
                         </svg>
-                        <span className={`text-[10px] font-black uppercase tracking-[0.18em] ${ isConfirmed ? 'text-emerald-400' : 'text-amber-400' }`}>
-                          {isConfirmed ? 'Confirmed — SEC Filing' : 'Research-Based Estimate'}
+                        <span className={`text-[10px] font-black uppercase tracking-[0.18em] ${ isConfirmed ? 'text-emerald-400' : isPortfolioLevel ? 'text-sky-400' : 'text-amber-400' }`}>
+                          {isConfirmed ? 'Confirmed — Asset-Specific Filing' : isPortfolioLevel ? 'Confirmed — Portfolio / Project-Series Level' : 'Research-Based Estimate'}
                         </span>
                       </div>
                       <div className="flex items-center gap-3 flex-wrap">
@@ -1319,8 +1324,9 @@ const PlantDetailView: React.FC<Props> = ({
 
                   {!isConfirmed && (
                     <p className="text-[10px] text-slate-600 italic px-1">
-                      ⚠ Facility amounts and lender names are research-based estimates for illustrative purposes.
-                      Confirm exact terms with the project lender or operator before making investment decisions.
+                      {isPortfolioLevel
+                        ? '⚠ Lender names are confirmed at the portfolio or project-series level per public filings — facility amounts represent estimated allocations to this specific asset. Confirm asset-level terms with the lead arranger or operator directly.'
+                        : '⚠ Facility amounts and lender names are research-based estimates derived from market comparables. No confirmed public filing has been identified for this specific project. Confirm exact terms with the project lender or operator before making investment decisions.'}
                     </p>
                   )}
                 </div>
