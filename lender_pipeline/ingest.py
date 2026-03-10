@@ -6,12 +6,13 @@ fetches 10-K and 8-K filings, extracts lender/financing data via Gemini Flash,
 and upserts structured rows to the plant_lenders table.
 
 Usage:
-    python lender_pipeline/ingest.py               # all curtailed plants
-    python lender_pipeline/ingest.py --limit 5     # test on 5 plants
-    python lender_pipeline/ingest.py --plant 56789 # single EIA plant code
-    python lender_pipeline/ingest.py --dry-run     # fetch + extract, skip upsert
-    python lender_pipeline/ingest.py --reprocess   # ignore edgar_filings_seen cache
-    python lender_pipeline/ingest.py --forms 10-K  # only 10-K filings
+    python lender_pipeline/ingest.py                            # all curtailed plants
+    python lender_pipeline/ingest.py --limit 5                  # test on 5 plants
+    python lender_pipeline/ingest.py --plant 56789              # single EIA plant code
+    python lender_pipeline/ingest.py --plants 56789,63883,67910 # explicit plant list
+    python lender_pipeline/ingest.py --dry-run                  # fetch + extract, skip upsert
+    python lender_pipeline/ingest.py --reprocess                # ignore edgar_filings_seen cache
+    python lender_pipeline/ingest.py --forms 10-K               # only 10-K filings
 
 Environment variables required:
     GEMINI_API_KEY
@@ -67,23 +68,57 @@ def load_curtailed_plants(
     sb: Client,
     limit: int | None = None,
     plant_code: str | None = None,
+    plant_codes: list[str] | None = None,
 ) -> list[dict]:
-    """Load curtailed plants with clean data — same criteria as news ingest."""
+    """Load curtailed plants with clean data — same criteria as news ingest.
+
+    Precedence:
+      1. plant_codes (list) — load exactly these EIA codes, ordered by
+         curtailment_score DESC so ranking is consistent with news pipeline
+      2. plant_code  (str)  — single EIA code (backwards compat)
+      3. default           — all curtailed plants ordered by curtailment_score
+    """
+    _SELECT = "eia_plant_code, name, owner, state, fuel_source, nameplate_capacity_mw, curtailment_score"
+
+    if plant_codes:
+        # Explicit bulk list — used by --plants flag and trial batch runs
+        resp = (
+            sb.table("plants")
+            .select(_SELECT)
+            .in_("eia_plant_code", plant_codes)
+            .not_.is_("owner", "null")
+            .order("curtailment_score", desc=True)
+            .order("nameplate_capacity_mw", desc=True)
+            .execute()
+        )
+        plants = resp.data or []
+        log.info("Loaded %d plants from explicit code list (%d requested)", len(plants), len(plant_codes))
+        return plants
+
+    if plant_code:
+        # Single plant — backwards-compatible singular flag
+        resp = (
+            sb.table("plants")
+            .select(_SELECT)
+            .eq("eia_plant_code", plant_code)
+            .execute()
+        )
+        plants = resp.data or []
+        log.info("Loaded %d plant for code %s", len(plants), plant_code)
+        return plants
+
+    # Default: full curtailed-plant query ordered by curtailment severity
     q = (
         sb.table("plants")
-        .select("eia_plant_code, name, owner, state, fuel_source, nameplate_capacity_mw")
+        .select(_SELECT)
         .eq("is_likely_curtailed", True)
         .eq("is_maintenance_offline", False)
         .eq("trailing_zero_months", 0)
         .neq("eia_plant_code", "99999")
         .not_.is_("owner", "null")
+        .order("curtailment_score", desc=True)
         .order("nameplate_capacity_mw", desc=True)
     )
-    if plant_code:
-        q = sb.table("plants").select(
-            "eia_plant_code, name, owner, state, fuel_source, nameplate_capacity_mw"
-        ).eq("eia_plant_code", plant_code)
-
     resp = q.limit(limit or 10_000).execute()
     plants = resp.data or []
     log.info("Loaded %d curtailed plants", len(plants))
@@ -152,6 +187,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="EDGAR lender extraction pipeline")
     parser.add_argument("--limit",     type=int,   default=None, help="Max plants to process")
     parser.add_argument("--plant",     type=str,   default=None, help="Single EIA plant code")
+    parser.add_argument("--plants",    type=str,   default=None,
+                        help="Comma-separated EIA plant codes, e.g. '65678,63883,67910'")
     parser.add_argument("--dry-run",   action="store_true",      help="Skip upsert")
     parser.add_argument("--reprocess", action="store_true",      help="Ignore edgar_filings_seen cache")
     parser.add_argument("--forms",     type=str,   default=None, help="Comma-separated form types e.g. 10-K,8-K")
@@ -171,8 +208,18 @@ def main() -> None:
     if args.forms:
         forms_filter = {f.strip().upper() for f in args.forms.split(",")}
 
-    # 1 — Load plants
-    plants = load_curtailed_plants(sb, limit=args.limit, plant_code=args.plant)
+    # 1 — Load plants (--plants list takes precedence over --plant singular)
+    explicit_codes: list[str] | None = None
+    if args.plants:
+        explicit_codes = [c.strip() for c in args.plants.split(",") if c.strip()]
+        log.info("Targeting %d explicit plant codes from --plants", len(explicit_codes))
+
+    plants = load_curtailed_plants(
+        sb,
+        limit=args.limit,
+        plant_code=args.plant,
+        plant_codes=explicit_codes,
+    )
     if not plants:
         log.info("No plants found — nothing to do")
         return
