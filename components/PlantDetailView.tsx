@@ -5,8 +5,8 @@ import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } fr
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
 import { fetchPlantOwnership } from '../services/ownershipService';
-import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse, semanticSearchPlantNews, SemanticSearchResult } from '../services/newsIntelService';
-import { fetchPlantLenders, PlantLender } from '../services/lenderService';
+import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse, semanticSearchPlantNews, SemanticSearchResult, filterFinancingRelevantArticles } from '../services/newsIntelService';
+import { fetchPlantLenders, PlantLender, fetchPlantFinancingNews, callFinancingSummarize } from '../services/lenderService';
 import { getGlobalLatestMonth } from '../services/dataService';
 
 interface Props {
@@ -64,13 +64,42 @@ const PlantDetailView: React.FC<Props> = ({
   const [loadingLenders, setLoadingLenders] = useState(false);
   const [lendersFetched, setLendersFetched] = useState(false);
 
+  // ── Financing Context (news-based, supplemental to SEC) ──────────────────
+  const [financingGeneralArticles, setFinancingGeneralArticles] = useState<NewsArticle[]>([]);
+  const [financingNews, setFinancingNews] = useState<NewsArticle[]>([]);
+  const [financingSummary, setFinancingSummary] = useState<string | null>(null);
+  const [loadingFinancingContext, setLoadingFinancingContext] = useState(false);
+  const [loadingFinancingSummary, setLoadingFinancingSummary] = useState(false);
+
   const handleLoadLenders = async () => {
     if (loadingLenders || lendersFetched) return;
     setLoadingLenders(true);
-    const rows = await fetchPlantLenders(plant.eiaPlantCode);
+    setLoadingFinancingContext(true);
+
+    const ownerName = (plant.owners?.[0] as PlantOwner | undefined)?.name ?? plant.owner ?? '';
+
+    const [rows, allArticles, finNews] = await Promise.all([
+      fetchPlantLenders(plant.eiaPlantCode),
+      fetchPlantNewsArticles(plant.eiaPlantCode, { limit: 50 }),
+      fetchPlantFinancingNews(plant.eiaPlantCode),
+    ]);
+
     setLenders(rows);
+    setFinancingNews(finNews);
     setLoadingLenders(false);
     setLendersFetched(true);
+
+    // LLM filter: identify which general articles mention financing
+    const finRelevant = await filterFinancingRelevantArticles(allArticles, plant.name);
+    setFinancingGeneralArticles(finRelevant);
+    setLoadingFinancingContext(false);
+
+    // Generate financing synthesis if any data exists
+    if (rows.length > 0 || finNews.length > 0 || finRelevant.length > 0) {
+      setLoadingFinancingSummary(true);
+      callFinancingSummarize({ name: plant.name, owner: ownerName }, rows, finRelevant, finNews)
+        .then(s => { setFinancingSummary(s); setLoadingFinancingSummary(false); });
+    }
   };
 
   // ── Semantic Search ──────────────────────────────────────────────────────
@@ -1238,6 +1267,131 @@ const PlantDetailView: React.FC<Props> = ({
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* ── Financing Context — News & Market Intelligence ──────── */}
+            {lendersFetched && (
+              <div className="space-y-6 pt-6 border-t border-slate-800 mt-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Financing Context — News & Market Intelligence</h3>
+                    <p className="text-[10px] text-slate-600 mt-1">Supplemental to SEC filings — sourced from news search</p>
+                  </div>
+                </div>
+
+                {/* AI Financing Summary */}
+                {loadingFinancingSummary && (
+                  <div className="flex items-center gap-2 text-slate-500 text-xs py-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-violet-500"></div>
+                    <span>Generating financing synthesis…</span>
+                  </div>
+                )}
+                {financingSummary && !loadingFinancingSummary && (
+                  <div className="bg-violet-950/20 border border-violet-800/30 rounded-xl p-5">
+                    <div className="text-[10px] text-violet-400 font-black uppercase tracking-widest mb-2">AI Financing Summary</div>
+                    <p className="text-sm text-slate-300 leading-relaxed italic">{financingSummary}</p>
+                  </div>
+                )}
+
+                {/* From General News */}
+                <div>
+                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-3">From General News</div>
+                  {loadingFinancingContext && (
+                    <div className="flex items-center gap-2 text-slate-600 text-xs py-3">
+                      <div className="animate-spin rounded-full h-3.5 w-3.5 border-t-2 border-b-2 border-slate-500"></div>
+                      <span>Filtering articles for financing relevance…</span>
+                    </div>
+                  )}
+                  {!loadingFinancingContext && financingGeneralArticles.length === 0 && (
+                    <div className="py-6 text-center bg-slate-800/10 rounded-xl border border-dashed border-slate-800">
+                      <p className="text-xs text-slate-600 italic">No general articles mention financing for this plant.</p>
+                    </div>
+                  )}
+                  {!loadingFinancingContext && financingGeneralArticles.length > 0 && (
+                    <div className="space-y-3">
+                      {financingGeneralArticles.map(article => (
+                        <div key={article.id} className={`flex flex-col p-4 rounded-xl border transition-all ${
+                          article.sentimentLabel === 'negative' ? 'bg-red-950/10 border-red-900/30' :
+                          article.sentimentLabel === 'positive' ? 'bg-emerald-950/10 border-emerald-900/30' :
+                          'bg-slate-800/20 border-slate-700/40'
+                        }`}>
+                          <div className="flex items-start justify-between gap-3 mb-1.5">
+                            <a href={article.url} target="_blank" rel="noopener noreferrer"
+                               className="text-sm font-bold text-slate-200 hover:text-white leading-snug line-clamp-2 flex-1">
+                              {article.title}
+                            </a>
+                            {article.sentimentLabel && (
+                              <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide ${
+                                article.sentimentLabel === 'negative' ? 'text-red-400 bg-red-900/30' :
+                                article.sentimentLabel === 'positive' ? 'text-emerald-400 bg-emerald-900/30' :
+                                'text-slate-500 bg-slate-800/60'
+                              }`}>{article.sentimentLabel}</span>
+                            )}
+                          </div>
+                          {article.description && (
+                            <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 mb-2">{article.description}</p>
+                          )}
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <span className="text-[10px] text-slate-600 font-medium">{article.sourceName}</span>
+                            {article.publishedAt && (
+                              <span className="text-[10px] text-slate-700">
+                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                              </span>
+                            )}
+                            {article.lenders && article.lenders.length > 0 && article.lenders.map((l: string) => (
+                              <span key={l} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/30">{l}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Dedicated Financing Search */}
+                <div>
+                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-3">Financing Search</div>
+                  {financingNews.length === 0 && (
+                    <div className="py-6 text-center bg-slate-800/10 rounded-xl border border-dashed border-slate-800">
+                      <p className="text-xs text-slate-600 italic">No dedicated financing articles found.</p>
+                      <p className="text-[10px] text-slate-700 mt-1">Run <code className="font-mono">ingest_financing_articles()</code> for this plant to populate.</p>
+                    </div>
+                  )}
+                  {financingNews.length > 0 && (
+                    <div className="space-y-3">
+                      {financingNews.map(article => (
+                        <div key={article.id} className={`flex flex-col p-4 rounded-xl border transition-all ${
+                          article.sentimentLabel === 'negative' ? 'bg-red-950/10 border-red-900/30' :
+                          article.sentimentLabel === 'positive' ? 'bg-emerald-950/10 border-emerald-900/30' :
+                          'bg-slate-800/20 border-slate-700/40'
+                        }`}>
+                          <div className="flex items-start justify-between gap-3 mb-1.5">
+                            <a href={article.url} target="_blank" rel="noopener noreferrer"
+                               className="text-sm font-bold text-slate-200 hover:text-white leading-snug line-clamp-2 flex-1">
+                              {article.title}
+                            </a>
+                            <span className="shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide text-violet-400 bg-violet-900/30 border border-violet-700/30">FINANCE</span>
+                          </div>
+                          {article.description && (
+                            <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 mb-2">{article.description}</p>
+                          )}
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <span className="text-[10px] text-slate-600 font-medium">{article.sourceName}</span>
+                            {article.publishedAt && (
+                              <span className="text-[10px] text-slate-700">
+                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                              </span>
+                            )}
+                            {article.lenders && article.lenders.length > 0 && article.lenders.map((l: string) => (
+                              <span key={l} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/30">{l}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>

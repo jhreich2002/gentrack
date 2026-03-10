@@ -53,7 +53,7 @@ export async function fetchPlantNewsArticles(
     .select(`
       id, title, description, url, source_name,
       published_at, topics, sentiment_label, plant_codes,
-      event_type, impact_tags, fti_relevance_tags, importance, entity_company_names
+      event_type, impact_tags, fti_relevance_tags, importance, entity_company_names, lenders
     `)
     .contains('plant_codes', [eiaPlantCode])
     .order('published_at', { ascending: false, nullsFirst: false })
@@ -90,7 +90,76 @@ export async function fetchPlantNewsArticles(
     ftiRelevanceTags:   (row.fti_relevance_tags as string[]) ?? [],
     importance:         row.importance as 'low' | 'medium' | 'high' | null,
     entityCompanyNames: (row.entity_company_names as string[]) ?? [],
+    lenders:            (row.lenders as string[]) ?? [],
   }));
+}
+
+// ── filterFinancingRelevantArticles ──────────────────────────────────────────
+
+/**
+ * Uses Gemini to identify which articles from a plant's general news contain
+ * financing-relevant content: lenders, credit facilities, tax equity, bonds,
+ * PPAs, project finance, or investor relationships.
+ *
+ * Falls back to tag-based filtering if the API call fails.
+ */
+export async function filterFinancingRelevantArticles(
+  articles: NewsArticle[],
+  plantName: string,
+): Promise<NewsArticle[]> {
+  if (articles.length === 0) return [];
+
+  const apiKey = (import.meta as Record<string, Record<string, string>>).env?.VITE_GEMINI_API_KEY
+             ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY;
+
+  // Fallback: use existing structured fields if no API key
+  const fallback = () => articles.filter(a =>
+    (a.lenders && a.lenders.length > 0) ||
+    a.eventType === 'financial' ||
+    a.topics?.includes('financial') ||
+    a.impactTags?.some(t => ['debt', 'financing', 'ppa_dispute', 'asset_sale'].includes(t))
+  );
+
+  if (!apiKey) return fallback();
+
+  const articleList = articles
+    .map((a, i) => `${i}: ${a.title}${a.description ? ' — ' + a.description.slice(0, 120) : ''}`)
+    .join('\n');
+
+  const prompt = `You are analyzing news articles about the "${plantName}" power plant.\n\n` +
+    `Identify which articles contain information about financing, lenders, credit facilities, ` +
+    `debt, tax equity, bonds, project finance, PPAs (power purchase agreements), or investor relationships.\n\n` +
+    `Articles:\n${articleList}\n\n` +
+    `Return ONLY a JSON array of the numeric indices (0-based) of relevant articles. ` +
+    `Example: [0, 3, 7]. If none are relevant, return: []`;
+
+  try {
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.0, maxOutputTokens: 256 },
+        }),
+      }
+    );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const parts: Record<string, unknown>[] = data?.candidates?.[0]?.content?.parts ?? [];
+    const text = (parts.find(p => 'text' in p && !p.thought) as Record<string, string> | undefined)?.text ?? '';
+    const start = text.indexOf('[');
+    const end = text.lastIndexOf(']');
+    if (start === -1 || end === -1) return fallback();
+    const indices: number[] = JSON.parse(text.slice(start, end + 1));
+    return indices
+      .filter((i): i is number => typeof i === 'number' && i >= 0 && i < articles.length)
+      .map(i => articles[i]);
+  } catch (err) {
+    console.error('filterFinancingRelevantArticles error:', err);
+    return fallback();
+  }
 }
 
 // ── fetchPlantNewsRating ──────────────────────────────────────────────────────

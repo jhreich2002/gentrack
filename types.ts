@@ -98,6 +98,7 @@ export interface NewsArticle {
   ftiRelevanceTags:     string[];         // restructuring|transactions|disputes|market_strategy
   importance:           'low' | 'medium' | 'high' | null;
   entityCompanyNames:   string[];         // ult_parent names mentioned in article
+  lenders?:             string[];         // lender/financier names extracted from article
 }
 
 /** Precomputed risk rating from the plant_news_ratings Supabase table. */
