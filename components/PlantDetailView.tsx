@@ -6,6 +6,7 @@ import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
 import { fetchPlantOwnership } from '../services/ownershipService';
 import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse, semanticSearchPlantNews, SemanticSearchResult } from '../services/newsIntelService';
+import { fetchPlantLenders, PlantLender } from '../services/lenderService';
 import { getGlobalLatestMonth } from '../services/dataService';
 
 interface Props {
@@ -22,7 +23,7 @@ interface Props {
   onCompanyClick?: (ultParentName: string) => void;
 }
 
-type DetailTab = 'overview' | 'monthly' | 'generation' | 'ownership' | 'news';
+type DetailTab = 'overview' | 'monthly' | 'generation' | 'ownership' | 'news' | 'lenders';
 
 const PlantDetailView: React.FC<Props> = ({ 
   plant, 
@@ -57,6 +58,20 @@ const PlantDetailView: React.FC<Props> = ({
 
   // ── Expanded article (click to expand instead of link) ──────────────────
   const [expandedArticleId, setExpandedArticleId] = useState<string | null>(null);
+
+  // ── Lender / Financing Data ──────────────────────────────────────────────
+  const [lenders, setLenders] = useState<PlantLender[]>([]);
+  const [loadingLenders, setLoadingLenders] = useState(false);
+  const [lendersFetched, setLendersFetched] = useState(false);
+
+  const handleLoadLenders = async () => {
+    if (loadingLenders || lendersFetched) return;
+    setLoadingLenders(true);
+    const rows = await fetchPlantLenders(plant.eiaPlantCode);
+    setLenders(rows);
+    setLoadingLenders(false);
+    setLendersFetched(true);
+  };
 
   // ── Semantic Search ──────────────────────────────────────────────────────
   const [semanticQuery, setSemanticQuery] = useState('');
@@ -251,12 +266,19 @@ const PlantDetailView: React.FC<Props> = ({
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
           OWNERSHIP & PPA
         </button>
-        <button 
+        <button
           onClick={() => { setActiveTab('news'); handleLoadNewsIntel(); }}
           className={`px-6 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'news' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10l4 4v10a2 2 0 01-2 2zM14 4v4h4" /></svg>
           NEWS & INTELLIGENCE
+        </button>
+        <button
+          onClick={() => { setActiveTab('lenders'); handleLoadLenders(); }}
+          className={`px-6 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'lenders' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M3 14h18M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z" /></svg>
+          FINANCING
         </button>
       </div>
 
@@ -1099,6 +1121,125 @@ const PlantDetailView: React.FC<Props> = ({
                 );
               })()}
             </section>
+          </div>
+        )}
+
+        {/* ── Financing Tab ─────────────────────────────────────────── */}
+        {activeTab === 'lenders' && (
+          <div className="space-y-6 animate-in fade-in duration-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Financing & Lender Data</h3>
+                <p className="text-[10px] text-slate-600 mt-1">Extracted from SEC EDGAR 10-K and 8-K filings</p>
+              </div>
+              {lendersFetched && (
+                <div className="text-[10px] text-slate-500 font-bold">
+                  {lenders.length} {lenders.length === 1 ? 'FACILITY' : 'FACILITIES'} FOUND
+                </div>
+              )}
+            </div>
+
+            {loadingLenders && (
+              <div className="flex items-center justify-center py-20 gap-3 text-slate-400">
+                <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-blue-500"></div>
+                <span className="text-sm font-medium">Loading financing data...</span>
+              </div>
+            )}
+
+            {lendersFetched && lenders.length === 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center">
+                <svg className="w-10 h-10 mx-auto text-slate-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p className="text-slate-500 text-sm font-semibold">No financing data found</p>
+                <p className="text-slate-600 text-xs mt-1">This plant's owner may not file with the SEC, or no credit agreements were identified in processed filings.</p>
+              </div>
+            )}
+
+            {lendersFetched && lenders.length > 0 && (
+              <div className="space-y-4">
+                {lenders.map((row: PlantLender) => {
+                  const facilityColors: Record<string, string> = {
+                    term_loan: 'text-blue-400 bg-blue-900/20 border-blue-500/20',
+                    revolver: 'text-violet-400 bg-violet-900/20 border-violet-500/20',
+                    letter_of_credit: 'text-amber-400 bg-amber-900/20 border-amber-500/20',
+                    bond: 'text-green-400 bg-green-900/20 border-green-500/20',
+                    tax_equity: 'text-emerald-400 bg-emerald-900/20 border-emerald-500/20',
+                    construction_loan: 'text-orange-400 bg-orange-900/20 border-orange-500/20',
+                    bridge_loan: 'text-rose-400 bg-rose-900/20 border-rose-500/20',
+                    mezzanine: 'text-pink-400 bg-pink-900/20 border-pink-500/20',
+                    preferred_equity: 'text-indigo-400 bg-indigo-900/20 border-indigo-500/20',
+                    other: 'text-slate-400 bg-slate-800/40 border-slate-700/30',
+                  };
+                  const facilityColor = facilityColors[row.facility_type] ?? facilityColors.other;
+                  const confidenceColor = row.confidence === 'high' ? 'text-green-400' : row.confidence === 'medium' ? 'text-amber-400' : 'text-slate-500';
+                  const facilityLabel = row.facility_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+
+                  return (
+                    <div key={row.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-5">
+                      {/* Header row */}
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-base font-black text-white">{row.lender_name}</div>
+                          <div className="flex items-center gap-2 mt-1.5">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${facilityColor}`}>
+                              {facilityLabel}
+                            </span>
+                            <span className={`text-[10px] font-bold ${confidenceColor}`}>
+                              {row.confidence.toUpperCase()} CONFIDENCE
+                            </span>
+                          </div>
+                        </div>
+                        {row.loan_amount_usd && (
+                          <div className="text-right shrink-0">
+                            <div className="text-2xl font-black text-white">
+                              ${(row.loan_amount_usd / 1_000_000).toFixed(0)}M
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-bold">FACILITY SIZE</div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Details grid */}
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div className="bg-slate-800/50 rounded-xl p-3">
+                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Rate</div>
+                          <div className="text-xs font-semibold text-slate-200">{row.interest_rate_text ?? '—'}</div>
+                        </div>
+                        <div className="bg-slate-800/50 rounded-xl p-3">
+                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Maturity</div>
+                          <div className="text-xs font-semibold text-slate-200">{row.maturity_text ?? '—'}</div>
+                        </div>
+                        <div className="bg-slate-800/50 rounded-xl p-3">
+                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Filing</div>
+                          <div className="text-xs font-semibold text-slate-200">{row.filing_type} · {row.filing_date.slice(0, 7)}</div>
+                        </div>
+                        <div className="bg-slate-800/50 rounded-xl p-3">
+                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Source</div>
+                          <a
+                            href={row.filing_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-semibold text-blue-400 hover:text-blue-300 transition-colors flex items-center gap-1"
+                          >
+                            SEC EDGAR
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                          </a>
+                        </div>
+                      </div>
+
+                      {/* Excerpt */}
+                      {row.excerpt_text && (
+                        <div className="border-t border-slate-800 pt-4">
+                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2">Filing Excerpt</div>
+                          <p className="text-xs text-slate-400 leading-relaxed italic">"{row.excerpt_text}"</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

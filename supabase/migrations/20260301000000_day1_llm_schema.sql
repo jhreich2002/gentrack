@@ -46,11 +46,14 @@ CREATE TABLE IF NOT EXISTS plant_news_state (
 
 ALTER TABLE plant_news_state ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "plant_news_state_public_read"
-  ON plant_news_state FOR SELECT USING (true);
-
-CREATE POLICY "plant_news_state_service_write"
-  ON plant_news_state FOR ALL USING (auth.role() = 'service_role');
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='plant_news_state' AND policyname='plant_news_state_public_read') THEN
+    CREATE POLICY "plant_news_state_public_read" ON plant_news_state FOR SELECT USING (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='plant_news_state' AND policyname='plant_news_state_service_write') THEN
+    CREATE POLICY "plant_news_state_service_write" ON plant_news_state FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+END $$;
 
 -- ── 3. company_stats ─────────────────────────────────────────────────────────
 -- Nightly-materialized metrics per ult_parent (no separate companies table needed).
@@ -71,11 +74,14 @@ CREATE TABLE IF NOT EXISTS company_stats (
 
 ALTER TABLE company_stats ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "company_stats_public_read"
-  ON company_stats FOR SELECT USING (true);
-
-CREATE POLICY "company_stats_service_write"
-  ON company_stats FOR ALL USING (auth.role() = 'service_role');
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='company_stats' AND policyname='company_stats_public_read') THEN
+    CREATE POLICY "company_stats_public_read" ON company_stats FOR SELECT USING (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='company_stats' AND policyname='company_stats_service_write') THEN
+    CREATE POLICY "company_stats_service_write" ON company_stats FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+END $$;
 
 -- Helpful index for ranked prospecting queries
 CREATE INDEX IF NOT EXISTS idx_company_stats_total_mw
