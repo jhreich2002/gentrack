@@ -1243,7 +1243,7 @@ const PlantDetailView: React.FC<Props> = ({
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="border-b border-slate-800">
-                            {['Amount', 'Instrument', 'Credit Mechanism', 'Provider / Firm', 'Notes'].map(h => (
+                            {['Amount', 'Instrument', 'Credit Mechanism', 'Provider / Firm', 'Notes', 'Source'].map(h => (
                               <th key={h} className="text-left text-[10px] font-black text-slate-500 uppercase tracking-widest px-4 py-2.5">{h}</th>
                             ))}
                           </tr>
@@ -1267,6 +1267,17 @@ const PlantDetailView: React.FC<Props> = ({
                                 </td>
                                 <td className="px-4 py-3 text-slate-300 font-medium">{f.provider}</td>
                                 <td className="px-4 py-3 text-slate-500 max-w-xs">{f.notes || '—'}</td>
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                  {seed.sourceUrl ? (
+                                    <a href={seed.sourceUrl} target="_blank" rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-400 hover:text-blue-300 transition-colors">
+                                      {isConfirmed ? 'SEC EDGAR' : 'Source'}
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                                    </a>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-600">{seed.source}</span>
+                                  )}
+                                </td>
                               </tr>
                             );
                           })}
@@ -1276,7 +1287,7 @@ const PlantDetailView: React.FC<Props> = ({
                             <td className="px-4 py-3 font-black text-slate-300">
                               ${seed.facilities.reduce((s, f) => s + f.amount_m, 0)}M
                             </td>
-                            <td colSpan={4} className="px-4 py-3 text-[10px] text-slate-600 font-bold uppercase tracking-widest">Total across all facilities</td>
+                            <td colSpan={5} className="px-4 py-3 text-[10px] text-slate-600 font-bold uppercase tracking-widest">Total across all facilities</td>
                           </tr>
                         </tfoot>
                       </table>
@@ -1302,6 +1313,13 @@ const PlantDetailView: React.FC<Props> = ({
                             <div className="text-sm font-semibold text-slate-200">{f.instrument}</div>
                             <div className="text-xs text-slate-400">{f.provider}</div>
                             {f.notes && <div className="text-[11px] text-slate-600 leading-relaxed">{f.notes}</div>}
+                            {seed.sourceUrl && (
+                              <a href={seed.sourceUrl} target="_blank" rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-400 hover:text-blue-300 transition-colors pt-0.5">
+                                {isConfirmed ? 'SEC EDGAR' : 'Source'}
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                              </a>
+                            )}
                           </div>
                         );
                       })}
