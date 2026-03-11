@@ -1231,7 +1231,15 @@ const PlantDetailView: React.FC<Props> = ({
                           Source: {seed.source} ↗
                         </a>
                       ) : (
-                        <span className="text-[10px] text-slate-600">Source: {seed.source}</span>
+                        <>
+                          <span className="text-[10px] text-slate-600">Source: {seed.source}</span>
+                          <span className="text-slate-700">·</span>
+                          <a
+                            href={`https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(plant.owner ?? '')}%22&forms=10-K%2C8-K&dateRange=custom&startdt=2020-01-01&enddt=2026-12-31`}
+                            target="_blank" rel="noopener noreferrer"
+                            className="text-[10px] text-blue-500/70 hover:text-blue-400 transition-colors"
+                          >Search EDGAR ↗</a>
+                        </>
                       )}
                     </div>
                   </div>
@@ -1257,7 +1265,7 @@ const PlantDetailView: React.FC<Props> = ({
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="border-b border-slate-800">
-                            {['Amount', 'Instrument', 'Credit Mechanism', 'Provider / Firm', 'Notes'].map(h => (
+                            {['Amount', 'Instrument', 'Credit Mechanism', 'Provider / Firm', 'Notes', 'Source'].map(h => (
                               <th key={h} className="text-left text-[10px] font-black text-slate-500 uppercase tracking-widest px-4 py-2.5">{h}</th>
                             ))}
                           </tr>
@@ -1272,6 +1280,8 @@ const PlantDetailView: React.FC<Props> = ({
                               mechLower.includes('lc') || mechLower.includes('contingent') ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
                               mechLower.includes('equity') ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
                               'text-slate-400 bg-slate-800/40 border-slate-700/30';
+                            // Resolve a per-row source URL: use facility-specific url, then seed-level, then EDGAR search
+                            const rowSourceUrl: string = (f as any).sourceUrl ?? seed.sourceUrl ?? `https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(f.provider)}%22&forms=10-K%2C8-K&dateRange=custom&startdt=2020-01-01&enddt=2026-12-31`;
                             return (
                               <tr key={i} className={`border-b border-slate-800/60 ${ i % 2 === 1 ? 'bg-slate-800/20' : '' } hover:bg-slate-800/40 transition-colors`}>
                                 <td className="px-4 py-3 font-black text-white whitespace-nowrap">${f.amount_m}M</td>
@@ -1281,6 +1291,18 @@ const PlantDetailView: React.FC<Props> = ({
                                 </td>
                                 <td className="px-4 py-3 text-slate-300 font-medium">{f.provider}</td>
                                 <td className="px-4 py-3 text-slate-500 max-w-xs">{f.notes || '—'}</td>
+                                <td className="px-4 py-3">
+                                  <a
+                                    href={rowSourceUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={seed.sourceUrl ? `View source: ${seed.source}` : `Search EDGAR for ${f.provider}`}
+                                    className="text-blue-500/60 hover:text-blue-400 transition-colors flex items-center gap-1 text-[10px] font-bold whitespace-nowrap"
+                                  >
+                                    {seed.sourceUrl ? 'Source' : 'EDGAR'}
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                                  </a>
+                                </td>
                               </tr>
                             );
                           })}
@@ -1307,6 +1329,7 @@ const PlantDetailView: React.FC<Props> = ({
                           mechLower.includes('lc') || mechLower.includes('contingent') ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
                           mechLower.includes('equity') ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
                           'text-slate-400 bg-slate-800/40 border-slate-700/30';
+                        const rowSourceUrl: string = (f as any).sourceUrl ?? seed.sourceUrl ?? `https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(f.provider)}%22&forms=10-K%2C8-K&dateRange=custom&startdt=2020-01-01&enddt=2026-12-31`;
                         return (
                           <div key={i} className="p-4 space-y-2">
                             <div className="flex items-center justify-between">
@@ -1314,7 +1337,14 @@ const PlantDetailView: React.FC<Props> = ({
                               <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${mechColor}`}>{f.creditMechanism}</span>
                             </div>
                             <div className="text-sm font-semibold text-slate-200">{f.instrument}</div>
-                            <div className="text-xs text-slate-400">{f.provider}</div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-slate-400">{f.provider}</span>
+                              <a href={rowSourceUrl} target="_blank" rel="noopener noreferrer"
+                                className="text-[10px] font-bold text-blue-500/60 hover:text-blue-400 transition-colors flex items-center gap-1">
+                                {seed.sourceUrl ? 'Source' : 'EDGAR'}
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                              </a>
+                            </div>
                             {f.notes && <div className="text-[11px] text-slate-600 leading-relaxed">{f.notes}</div>}
                           </div>
                         );
@@ -1347,6 +1377,26 @@ const PlantDetailView: React.FC<Props> = ({
                 </svg>
                 <p className="text-slate-500 text-sm font-semibold">No financing data found</p>
                 <p className="text-slate-600 text-xs mt-1">This plant's owner may not file with the SEC, or no credit agreements were identified in processed filings.</p>
+                <div className="flex items-center justify-center gap-3 mt-5 flex-wrap">
+                  <a
+                    href={`https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(plant.owner ?? '')}%22&forms=10-K%2C8-K&dateRange=custom&startdt=2020-01-01&enddt=2026-12-31`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-blue-400 bg-blue-900/20 border border-blue-700/30 hover:bg-blue-900/40 transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                    Search {plant.owner} on EDGAR
+                  </a>
+                  <a
+                    href={`https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(plant.owner ?? '')}&CIK=&type=10-K&dateb=&owner=include&count=20&search_text=&action=getcompany`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-slate-400 bg-slate-800 border border-slate-700 hover:bg-slate-700 transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                    EDGAR Company Search
+                  </a>
+                </div>
               </div>
             )}
 
