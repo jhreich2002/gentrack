@@ -139,7 +139,10 @@ function buildRankingPrompt(plant: PlantMeta, articles: ArticleRow[], mode: stri
     source: a.source_name ?? 'Other',
   }));
 
+  const today = new Date().toISOString().split('T')[0];
+
   const inputPayload = JSON.stringify({
+    current_date: today,
     asset,
     articles: articleList,
     time_window_months: RESCORING_MONTHS,
@@ -147,6 +150,8 @@ function buildRankingPrompt(plant: PlantMeta, articles: ArticleRow[], mode: stri
   });
 
   return `You are an AI assistant that ranks news articles for a US power plant prospecting application used by lenders and tax equity investors.
+
+TODAY'S DATE: ${today}
 
 PURPOSE
 The app tracks US power plants that show signs of curtailment or underperformance. Users are lenders, tax equity investors, and asset managers who need to understand:
