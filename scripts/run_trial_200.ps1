@@ -8,8 +8,7 @@
 #   Step 1 — Select the 200 plants (select_trial_plants.py)
 #   Step 2 — News + financing dry-run (confirm output before writing)
 #   Step 3 — News + financing LIVE run (after confirmation)
-#   Step 4 — EDGAR lender extraction LIVE run
-#   Step 5 — Post-run summary (row counts from Supabase)
+#   Step 4 — Post-run summary (row counts from Supabase)
 #
 # Usage:
 #   cd C:\Users\jhrei\Downloads\us-power-generation-capacity-factor-tracker
@@ -21,14 +20,11 @@
 #   Use a pre-existing codes file (skip selection step):
 #   .\scripts\run_trial_200.ps1 -CodesFile .\scripts\trial_200_plant_codes.txt
 #
-#   Skip EDGAR/lender extraction (news only):
-#   .\scripts\run_trial_200.ps1 -SkipLenders
 # =============================================================================
 
 param(
     [switch] $SkipDryRunConfirm,
     [string] $CodesFile       = "",
-    [switch] $SkipLenders,
     [int]    $Limit           = 200,
     [string] $MinMonth        = "2025-10"
 )
@@ -99,11 +95,7 @@ codes_raw = '$($plantIds -join ",")'
 codes = [c.strip() for c in codes_raw.split(',')]
 ids = ['EIA-' + c for c in codes if c]
 
-# Count articles / lenders for these plants
-if '$table' == 'news_articles':
-    r = sb.table('news_articles').select('id', count='exact').in_('plant_id', ids).execute()
-else:
-    r = sb.table('plant_lenders').select('id', count='exact').in_('eia_plant_code', codes).execute()
+r = sb.table('news_articles').select('id', count='exact').in_('plant_id', ids).execute()
 
 print(r.count if hasattr(r, 'count') and r.count is not None else len(r.data or []))
 "@
@@ -182,35 +174,11 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "  ✓ News + financing ingest complete." -ForegroundColor Green
 }
 
-# ── Step 4: EDGAR lender extraction ──────────────────────────────────────────
+# ── Step 4: Summary ───────────────────────────────────────────────────────────
 
-if ($SkipLenders) {
-    Write-Host ""
-    Write-Host "  --SkipLenders set: skipping EDGAR extraction." -ForegroundColor DarkGray
-} else {
-    Write-Step "4" "EDGAR lender extraction — LIVE"
-
-    $LendersBefore = Get-RowCount "plant_lenders" ($Codes -split ",")
-    Write-Host "  Lender rows before: $LendersBefore" -ForegroundColor DarkGray
-    Write-Host ""
-    Write-Host "  NOTE: EDGAR will deduplicate by owner — many plants share a parent filer." -ForegroundColor DarkGray
-    Write-Host "        Rate-limited to ~10 req/sec (EDGAR fair-use). Expect 15–45 min for 200 plants." -ForegroundColor DarkGray
-    Write-Host ""
-
-    & $Py -m lender_pipeline.ingest --plants $Codes
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "WARNING: lender ingest exited with code $LASTEXITCODE — check logs above." -ForegroundColor Yellow
-    } else {
-        Write-Host "  ✓ EDGAR lender extraction complete." -ForegroundColor Green
-    }
-}
-
-# ── Step 5: Summary ───────────────────────────────────────────────────────────
-
-Write-Step "5" "Post-run summary"
+Write-Step "4" "Post-run summary"
 
 $ArticlesAfter = Get-RowCount "news_articles" ($Codes -split ",")
-$LendersAfter  = if (-not $SkipLenders) { Get-RowCount "plant_lenders" ($Codes -split ",") } else { "skipped" }
 
 Write-Host ""
 Write-Host "  ┌─────────────────────────────────────────────┐" -ForegroundColor Cyan
@@ -219,10 +187,6 @@ Write-Host "  ├─────────────────────
 Write-Host ("  │  Plants targeted:      {0,-21}│" -f $CodeCount) -ForegroundColor Cyan
 Write-Host ("  │  News articles added:  {0,-21}│" -f ($ArticlesAfter - $ArticlesBefore)) -ForegroundColor Cyan
 Write-Host ("  │  News articles total:  {0,-21}│" -f $ArticlesAfter) -ForegroundColor Cyan
-if (-not $SkipLenders) {
-    Write-Host ("  │  Lender rows added:    {0,-21}│" -f ($LendersAfter - $LendersBefore)) -ForegroundColor Cyan
-    Write-Host ("  │  Lender rows total:    {0,-21}│" -f $LendersAfter) -ForegroundColor Cyan
-}
 Write-Host "  └─────────────────────────────────────────────┘" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Plant codes file: $CodesPath" -ForegroundColor DarkGray

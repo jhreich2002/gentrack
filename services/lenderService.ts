@@ -1,93 +1,81 @@
 /**
  * GenTrack — lenderService
  *
- * Fetches structured lender/financing rows from the plant_lenders table.
- * Populated by the lender_pipeline Python script (SEC EDGAR extraction).
+ * Fetches financing/lender articles from news_articles (pipeline = 'financing')
+ * and generates AI financing summaries. Populated by the lender-ingest edge function.
  */
 
 import { supabase } from './supabaseClient';
 
-export interface PlantLender {
-  id: string;
-  eia_plant_code: string;
-  lender_name: string;
-  facility_type: string;
-  loan_amount_usd: number | null;
-  interest_rate_text: string | null;
-  maturity_date: string | null;
-  maturity_text: string | null;
-  filing_type: string;
-  filing_date: string;
-  filing_url: string;
-  accession_no: string;
-  excerpt_text: string | null;
-  confidence: 'high' | 'medium' | 'low';
-  extracted_at: string;
-}
-
-export async function fetchPlantFinancingNews(eiaPlantCode: string): Promise<import('../types').NewsArticle[]> {
+export async function fetchPlantFinancingArticles(eiaPlantCode: string): Promise<import('../types').NewsArticle[]> {
   const { data, error } = await supabase
     .from('news_articles')
     .select(`
       id, title, description, url, source_name,
       published_at, topics, sentiment_label, plant_codes,
+      asset_linkage_tier, relevance_score, include_for_embedding,
+      categories, tags, article_summary, ranked_at,
       event_type, impact_tags, fti_relevance_tags, importance, entity_company_names, lenders
     `)
-    .eq('query_tag', `finance:${eiaPlantCode}`)
+    .eq('pipeline', 'financing')
+    .contains('plant_codes', [eiaPlantCode])
+    .or('asset_linkage_tier.neq.none,asset_linkage_tier.is.null')
     .order('published_at', { ascending: false, nullsFirst: false })
-    .limit(20);
+    .limit(50);
 
   if (error) {
-    console.error('fetchPlantFinancingNews error:', error.message);
+    console.error('fetchPlantFinancingArticles error:', error.message);
     return [];
   }
 
   return (data ?? []).map((row: Record<string, unknown>) => ({
-    id:                 row.id as string,
-    title:              row.title as string,
-    description:        row.description as string | null,
-    url:                row.url as string,
-    sourceName:         row.source_name as string | null,
-    publishedAt:        (row.published_at as string | null) ?? null,
-    topics:             (row.topics as string[]) ?? [],
-    sentimentLabel:     row.sentiment_label as 'positive' | 'negative' | 'neutral' | null,
-    eventType:          row.event_type as string | null,
-    impactTags:         (row.impact_tags as string[]) ?? [],
-    ftiRelevanceTags:   (row.fti_relevance_tags as string[]) ?? [],
-    importance:         row.importance as 'low' | 'medium' | 'high' | null,
-    entityCompanyNames: (row.entity_company_names as string[]) ?? [],
-    lenders:            (row.lenders as string[]) ?? [],
+    id:                   row.id as string,
+    title:                row.title as string,
+    description:          row.description as string | null,
+    url:                  row.url as string,
+    sourceName:           row.source_name as string | null,
+    publishedAt:          (row.published_at as string | null) ?? null,
+    topics:               (row.topics as string[]) ?? [],
+    sentimentLabel:       row.sentiment_label as 'positive' | 'negative' | 'neutral' | null,
+    assetLinkageTier:     row.asset_linkage_tier as string | null,
+    relevanceScore:       row.relevance_score as number | null,
+    includeForEmbedding:  row.include_for_embedding as boolean | null,
+    categories:           (row.categories as string[]) ?? [],
+    tags:                 (row.tags as string[]) ?? [],
+    articleSummary:        row.article_summary as string | null,
+    eventType:            row.event_type as string | null,
+    impactTags:           (row.impact_tags as string[]) ?? [],
+    ftiRelevanceTags:     (row.fti_relevance_tags as string[]) ?? [],
+    importance:           row.importance as 'low' | 'medium' | 'high' | null,
+    entityCompanyNames:   (row.entity_company_names as string[]) ?? [],
+    lenders:              (row.lenders as string[]) ?? [],
   }));
 }
 
 export async function callFinancingSummarize(
   plant: { name: string; owner: string },
-  secLenders: PlantLender[],
-  generalArticles: import('../types').NewsArticle[],
-  financingArticles: import('../types').NewsArticle[],
+  articles: import('../types').NewsArticle[],
 ): Promise<string | null> {
   const apiKey = (import.meta as Record<string, Record<string, string>>).env?.VITE_GEMINI_API_KEY
              ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY;
   if (!apiKey) return null;
 
-  const secContext = secLenders.length > 0
-    ? secLenders.map(l =>
-        `- ${l.lender_name} (${l.facility_type.replace(/_/g, ' ')}, ${
-          l.loan_amount_usd ? `$${(l.loan_amount_usd / 1e6).toFixed(0)}M` : 'amount unknown'
-        }, ${l.filing_date.slice(0, 7)})`
-      ).join('\n')
-    : 'No SEC filing data available.';
-
-  const articleContext = [...generalArticles, ...financingArticles]
-    .slice(0, 8)
-    .map(a => `- ${a.title}${a.description ? ': ' + a.description.slice(0, 150) : ''}`)
+  const articleContext = articles
+    .slice(0, 10)
+    .map(a => {
+      let entry = `- ${a.title}`;
+      if (a.articleSummary) entry += `: ${a.articleSummary}`;
+      else if (a.description) entry += `: ${a.description.slice(0, 200)}`;
+      if (a.tags && a.tags.length > 0) entry += ` [${a.tags.join(', ')}]`;
+      return entry;
+    })
     .join('\n');
 
   const prompt = `Synthesize the financing and lender exposure for the "${plant.name}" power plant (owner: ${
     plant.owner || 'unknown'
-  }).\n\nSEC Filing Data:\n${secContext}\n\nRelevant News Articles:\n${
+  }).\n\nFinancing-Related Articles:\n${
     articleContext || 'No financing news found.'
-  }\n\nIn 2–3 concise sentences, summarize: known lenders or investors, facility types and amounts where available, and any recent financing events or risks. Be specific with names and numbers. If data is limited, note what is known and acknowledge the gap.`;
+  }\n\nIn 2–3 concise sentences, summarize: known lenders or investors, financing events, tax equity structures, and any recent refinancing or credit changes. Be specific with names and numbers. If data is limited, note what is known and acknowledge the gap.`;
 
   try {
     const resp = await fetch(
@@ -110,18 +98,4 @@ export async function callFinancingSummarize(
     console.error('callFinancingSummarize error:', err);
     return null;
   }
-}
-
-export async function fetchPlantLenders(eiaPlantCode: string): Promise<PlantLender[]> {
-  const { data, error } = await supabase
-    .from('plant_lenders')
-    .select('*')
-    .eq('eia_plant_code', eiaPlantCode)
-    .order('filing_date', { ascending: false });
-
-  if (error) {
-    console.error('fetchPlantLenders error:', error);
-    return [];
-  }
-  return (data ?? []) as PlantLender[];
 }

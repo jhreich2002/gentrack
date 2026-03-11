@@ -5,10 +5,9 @@ import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } fr
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
 import { fetchPlantOwnership } from '../services/ownershipService';
-import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse, semanticSearchPlantNews, SemanticSearchResult, filterFinancingRelevantArticles } from '../services/newsIntelService';
-import { fetchPlantLenders, PlantLender, fetchPlantFinancingNews, callFinancingSummarize } from '../services/lenderService';
+import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse, semanticSearchPlantNews, SemanticSearchResult } from '../services/newsIntelService';
+import { fetchPlantFinancingArticles, callFinancingSummarize } from '../services/lenderService';
 import { getGlobalLatestMonth } from '../services/dataService';
-import { PLANT_FINANCING_SEED, PlantFinancingSeed, FinancingFacility } from '../constants/plantFinancingData';
 
 interface Props {
   plant: PowerPlant;
@@ -61,44 +60,25 @@ const PlantDetailView: React.FC<Props> = ({
   const [expandedArticleId, setExpandedArticleId] = useState<string | null>(null);
 
   // ── Lender / Financing Data ──────────────────────────────────────────────
-  const [lenders, setLenders] = useState<PlantLender[]>([]);
-  const [loadingLenders, setLoadingLenders] = useState(false);
-  const [lendersFetched, setLendersFetched] = useState(false);
-
-  // ── Financing Context (news-based, supplemental to SEC) ──────────────────
-  const [financingGeneralArticles, setFinancingGeneralArticles] = useState<NewsArticle[]>([]);
-  const [financingNews, setFinancingNews] = useState<NewsArticle[]>([]);
+  const [financingArticles, setFinancingArticles] = useState<NewsArticle[]>([]);
+  const [loadingFinancing, setLoadingFinancing] = useState(false);
+  const [financingFetched, setFinancingFetched] = useState(false);
   const [financingSummary, setFinancingSummary] = useState<string | null>(null);
-  const [loadingFinancingContext, setLoadingFinancingContext] = useState(false);
   const [loadingFinancingSummary, setLoadingFinancingSummary] = useState(false);
 
   const handleLoadLenders = async () => {
-    if (loadingLenders || lendersFetched) return;
-    setLoadingLenders(true);
-    setLoadingFinancingContext(true);
+    if (loadingFinancing || financingFetched) return;
+    setLoadingFinancing(true);
 
     const ownerName = (plant.owners?.[0] as PlantOwner | undefined)?.name ?? plant.owner ?? '';
+    const articles = await fetchPlantFinancingArticles(plant.eiaPlantCode);
+    setFinancingArticles(articles);
+    setLoadingFinancing(false);
+    setFinancingFetched(true);
 
-    const [rows, allArticles, finNews] = await Promise.all([
-      fetchPlantLenders(plant.eiaPlantCode),
-      fetchPlantNewsArticles(plant.eiaPlantCode, { limit: 50 }),
-      fetchPlantFinancingNews(plant.eiaPlantCode),
-    ]);
-
-    setLenders(rows);
-    setFinancingNews(finNews);
-    setLoadingLenders(false);
-    setLendersFetched(true);
-
-    // LLM filter: identify which general articles mention financing
-    const finRelevant = await filterFinancingRelevantArticles(allArticles, plant.name);
-    setFinancingGeneralArticles(finRelevant);
-    setLoadingFinancingContext(false);
-
-    // Generate financing synthesis if any data exists
-    if (rows.length > 0 || finNews.length > 0 || finRelevant.length > 0) {
+    if (articles.length > 0) {
       setLoadingFinancingSummary(true);
-      callFinancingSummarize({ name: plant.name, owner: ownerName }, rows, finRelevant, finNews)
+      callFinancingSummarize({ name: plant.name, owner: ownerName }, articles)
         .then(s => { setFinancingSummary(s); setLoadingFinancingSummary(false); });
     }
   };
@@ -1159,454 +1139,138 @@ const PlantDetailView: React.FC<Props> = ({
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Financing & Lender Data</h3>
-                <p className="text-[10px] text-slate-600 mt-1">Extracted from SEC EDGAR 10-K and 8-K filings</p>
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Financing & Lender Intelligence</h3>
+                <p className="text-[10px] text-slate-600 mt-1">Sourced from financing-focused news pipeline (monthly)</p>
               </div>
-              {lendersFetched && (
+              {financingFetched && (
                 <div className="text-[10px] text-slate-500 font-bold">
-                  {lenders.length} {lenders.length === 1 ? 'FACILITY' : 'FACILITIES'} FOUND
+                  {financingArticles.length} {financingArticles.length === 1 ? 'ARTICLE' : 'ARTICLES'}
                 </div>
               )}
             </div>
 
-            {/* ── Static Financing Capital Structure (seeded for select plants) ── */}
-            {(() => {
-              const seed: PlantFinancingSeed | undefined = PLANT_FINANCING_SEED[plant.eiaPlantCode];
-              if (!seed) return null;
-              const totalDebt = seed.facilities
-                .filter(f => f.creditMechanism.toLowerCase().includes('debt') || f.instrument.toLowerCase().includes('loan') || f.instrument.toLowerCase().includes('note'))
-                .reduce((s, f) => s + f.amount_m, 0);
-              const isConfirmed = seed.dataQuality === 'confirmed';
-              const isPortfolioLevel = seed.dataQuality === 'portfolio-level';
-              return (
-                <div className="space-y-4 pb-2">
-                  {/* Overview callout */}
-                  <div className={`rounded-2xl border p-3.5 space-y-2 ${
-                    isConfirmed
-                      ? 'bg-emerald-950/15 border-emerald-800/30'
-                      : isPortfolioLevel
-                        ? 'bg-sky-950/15 border-sky-800/30'
-                        : 'bg-amber-950/15 border-amber-800/30'
-                  }`}>
-                    <div className="flex items-start justify-between gap-4 flex-wrap">
-                      <div className="flex items-center gap-2.5">
-                        <svg className={`w-4 h-4 shrink-0 ${ isConfirmed ? 'text-emerald-400' : isPortfolioLevel ? 'text-sky-400' : 'text-amber-400' }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8"
-                            d={isConfirmed
-                              ? 'M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z'
-                              : isPortfolioLevel
-                                ? 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'
-                                : 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'}
-                          />
-                        </svg>
-                        <span className={`text-[10px] font-black uppercase tracking-[0.18em] ${ isConfirmed ? 'text-emerald-400' : isPortfolioLevel ? 'text-sky-400' : 'text-amber-400' }`}>
-                          {isConfirmed ? 'Confirmed — Asset-Specific Filing' : isPortfolioLevel ? 'Confirmed — Portfolio / Project-Series Level' : 'Research-Based Estimate'}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <div className="text-center">
-                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Total CAPEX</div>
-                          <div className="text-xs font-black text-slate-200">${seed.totalCapex_m}M</div>
-                        </div>
-                        <div className="w-px h-5 bg-slate-800" />
-                        <div className="text-center">
-                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Debt / Equity</div>
-                          <div className="text-xs font-black text-slate-200">{seed.debtEquityRatio}</div>
-                        </div>
-                        <div className="w-px h-5 bg-slate-800" />
-                        <div className="text-center">
-                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Facilities</div>
-                          <div className="text-xs font-black text-slate-200">{seed.facilities.length}</div>
-                        </div>
-                      </div>
-                    </div>
-                    <p className="text-[11px] text-slate-500 leading-relaxed">{seed.overview}</p>
-                    <div className="flex items-center gap-2 pt-1">
-                      <svg className="w-3 h-3 text-slate-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      {seed.sourceUrl ? (
-                        <a href={seed.sourceUrl} target="_blank" rel="noopener noreferrer"
-                          className="text-[10px] text-slate-500 hover:text-slate-400 transition-colors">
-                          Source: {seed.source} ↗
-                        </a>
-                      ) : (
-                        <>
-                          <span className="text-[10px] text-slate-600">Source: {seed.source}</span>
-                          <span className="text-slate-700">·</span>
-                          <a
-                            href={`https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(plant.owner ?? '')}%22&forms=10-K%2C8-K&dateRange=custom&startdt=2020-01-01&enddt=2026-12-31`}
-                            target="_blank" rel="noopener noreferrer"
-                            className="text-[10px] text-blue-500/70 hover:text-blue-400 transition-colors"
-                          >Search EDGAR ↗</a>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Facilities table */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-                    <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.18em]">Capital Structure</span>
-                        {seed.sourceUrl && (
-                          <a href={seed.sourceUrl} target="_blank" rel="noopener noreferrer"
-                            title={seed.source}
-                            className="text-slate-600 hover:text-blue-400 transition-colors">
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                          </a>
-                        )}
-                      </div>
-                      <span className="text-[10px] text-slate-600 font-bold">{seed.facilities.length} FACILITIES</span>
-                    </div>
-
-                    {/* Desktop: table */}
-                    <div className="hidden sm:block overflow-x-auto">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="border-b border-slate-800">
-                            {['Amount', 'Instrument', 'Credit Mechanism', 'Provider / Firm', 'Notes', 'Source'].map(h => (
-                              <th key={h} className="text-left text-[10px] font-black text-slate-500 uppercase tracking-widest px-4 py-2.5">{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {seed.facilities.map((f: FinancingFacility, i: number) => {
-                            const mechLower = f.creditMechanism.toLowerCase();
-                            const mechColor =
-                              mechLower.includes('ptc') ? 'text-green-400 bg-green-900/20 border-green-700/30' :
-                              mechLower.includes('itc') ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
-                              mechLower.includes('senior secured') ? 'text-blue-400 bg-blue-900/20 border-blue-700/30' :
-                              mechLower.includes('lc') || mechLower.includes('contingent') ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
-                              mechLower.includes('equity') ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
-                              'text-slate-400 bg-slate-800/40 border-slate-700/30';
-                            // Resolve a per-row source URL: use facility-specific url, then seed-level, then EDGAR search
-                            const rowSourceUrl: string = (f as any).sourceUrl ?? seed.sourceUrl ?? `https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(f.provider)}%22&forms=10-K%2C8-K&dateRange=custom&startdt=2020-01-01&enddt=2026-12-31`;
-                            return (
-                              <tr key={i} className={`border-b border-slate-800/60 ${ i % 2 === 1 ? 'bg-slate-800/20' : '' } hover:bg-slate-800/40 transition-colors`}>
-                                <td className="px-4 py-3 font-black text-white whitespace-nowrap">${f.amount_m}M</td>
-                                <td className="px-4 py-3 text-slate-200 font-semibold whitespace-nowrap">{f.instrument}</td>
-                                <td className="px-4 py-3">
-                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${mechColor}`}>{f.creditMechanism}</span>
-                                </td>
-                                <td className="px-4 py-3 text-slate-300 font-medium">{f.provider}</td>
-                                <td className="px-4 py-3 text-slate-500 max-w-xs">{f.notes || '—'}</td>
-                                <td className="px-4 py-3">
-                                  <a
-                                    href={rowSourceUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    title={seed.sourceUrl ? `View source: ${seed.source}` : `Search EDGAR for ${f.provider}`}
-                                    className="text-blue-500/60 hover:text-blue-400 transition-colors flex items-center gap-1 text-[10px] font-bold whitespace-nowrap"
-                                  >
-                                    {seed.sourceUrl ? 'Source' : 'EDGAR'}
-                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                                  </a>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                        <tfoot>
-                          <tr className="border-t border-slate-700">
-                            <td className="px-4 py-3 font-black text-slate-300">
-                              ${seed.facilities.reduce((s, f) => s + f.amount_m, 0)}M
-                            </td>
-                            <td colSpan={4} className="px-4 py-3 text-[10px] text-slate-600 font-bold uppercase tracking-widest">Total across all facilities</td>
-                          </tr>
-                        </tfoot>
-                      </table>
-                    </div>
-
-                    {/* Mobile: stacked cards */}
-                    <div className="sm:hidden divide-y divide-slate-800">
-                      {seed.facilities.map((f: FinancingFacility, i: number) => {
-                        const mechLower = f.creditMechanism.toLowerCase();
-                        const mechColor =
-                          mechLower.includes('ptc') ? 'text-green-400 bg-green-900/20 border-green-700/30' :
-                          mechLower.includes('itc') ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
-                          mechLower.includes('senior secured') ? 'text-blue-400 bg-blue-900/20 border-blue-700/30' :
-                          mechLower.includes('lc') || mechLower.includes('contingent') ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
-                          mechLower.includes('equity') ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
-                          'text-slate-400 bg-slate-800/40 border-slate-700/30';
-                        const rowSourceUrl: string = (f as any).sourceUrl ?? seed.sourceUrl ?? `https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(f.provider)}%22&forms=10-K%2C8-K&dateRange=custom&startdt=2020-01-01&enddt=2026-12-31`;
-                        return (
-                          <div key={i} className="p-4 space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-base font-black text-white">${f.amount_m}M</span>
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${mechColor}`}>{f.creditMechanism}</span>
-                            </div>
-                            <div className="text-sm font-semibold text-slate-200">{f.instrument}</div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-slate-400">{f.provider}</span>
-                              <a href={rowSourceUrl} target="_blank" rel="noopener noreferrer"
-                                className="text-[10px] font-bold text-blue-500/60 hover:text-blue-400 transition-colors flex items-center gap-1">
-                                {seed.sourceUrl ? 'Source' : 'EDGAR'}
-                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                              </a>
-                            </div>
-                            {f.notes && <div className="text-[11px] text-slate-600 leading-relaxed">{f.notes}</div>}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {!isConfirmed && (
-                    <p className="text-[10px] text-slate-600 italic px-1">
-                      {isPortfolioLevel
-                        ? '⚠ Lender names are confirmed at the portfolio or project-series level per public filings — facility amounts represent estimated allocations to this specific asset. Confirm asset-level terms with the lead arranger or operator directly.'
-                        : '⚠ Facility amounts and lender names are research-based estimates derived from market comparables. No confirmed public filing has been identified for this specific project. Confirm exact terms with the project lender or operator before making investment decisions.'}
-                    </p>
-                  )}
-                </div>
-              );
-            })()}
-
-            {loadingLenders && (
+            {/* Loading state */}
+            {loadingFinancing && (
               <div className="flex items-center justify-center py-20 gap-3 text-slate-400">
                 <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-blue-500"></div>
-                <span className="text-sm font-medium">Loading financing data...</span>
+                <span className="text-sm font-medium">Loading financing intelligence...</span>
               </div>
             )}
 
-            {lendersFetched && lenders.length === 0 && (
+            {/* AI Financing Summary */}
+            {loadingFinancingSummary && (
+              <div className="flex items-center gap-2 text-slate-500 text-xs py-2">
+                <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-violet-500"></div>
+                <span>Generating financing synthesis…</span>
+              </div>
+            )}
+            {financingSummary && !loadingFinancingSummary && (
+              <div className="bg-violet-950/20 border border-violet-800/30 rounded-xl p-5">
+                <div className="text-[10px] text-violet-400 font-black uppercase tracking-widest mb-2">AI Financing Summary</div>
+                <p className="text-sm text-slate-300 leading-relaxed italic">{financingSummary}</p>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {financingFetched && financingArticles.length === 0 && !loadingFinancing && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center">
                 <svg className="w-10 h-10 mx-auto text-slate-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <p className="text-slate-500 text-sm font-semibold">No financing data found</p>
-                <p className="text-slate-600 text-xs mt-1">This plant's owner may not file with the SEC, or no credit agreements were identified in processed filings.</p>
-                <div className="flex items-center justify-center gap-3 mt-5 flex-wrap">
-                  <a
-                    href={`https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(plant.owner ?? '')}%22&forms=10-K%2C8-K&dateRange=custom&startdt=2020-01-01&enddt=2026-12-31`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-blue-400 bg-blue-900/20 border border-blue-700/30 hover:bg-blue-900/40 transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                    Search {plant.owner} on EDGAR
-                  </a>
-                  <a
-                    href={`https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(plant.owner ?? '')}&CIK=&type=10-K&dateb=&owner=include&count=20&search_text=&action=getcompany`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-slate-400 bg-slate-800 border border-slate-700 hover:bg-slate-700 transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
-                    EDGAR Company Search
-                  </a>
-                </div>
+                <p className="text-slate-500 text-sm font-semibold">No financing articles found</p>
+                <p className="text-slate-600 text-xs mt-1">The lender pipeline has not yet ingested articles for this plant, or no financing-related news was identified.</p>
               </div>
             )}
 
-            {lendersFetched && lenders.length > 0 && (
-              <div className="space-y-4">
-                {lenders.map((row: PlantLender) => {
-                  const facilityColors: Record<string, string> = {
-                    term_loan: 'text-blue-400 bg-blue-900/20 border-blue-500/20',
-                    revolver: 'text-violet-400 bg-violet-900/20 border-violet-500/20',
-                    letter_of_credit: 'text-amber-400 bg-amber-900/20 border-amber-500/20',
-                    bond: 'text-green-400 bg-green-900/20 border-green-500/20',
-                    tax_equity: 'text-emerald-400 bg-emerald-900/20 border-emerald-500/20',
-                    construction_loan: 'text-orange-400 bg-orange-900/20 border-orange-500/20',
-                    bridge_loan: 'text-rose-400 bg-rose-900/20 border-rose-500/20',
-                    mezzanine: 'text-pink-400 bg-pink-900/20 border-pink-500/20',
-                    preferred_equity: 'text-indigo-400 bg-indigo-900/20 border-indigo-500/20',
-                    other: 'text-slate-400 bg-slate-800/40 border-slate-700/30',
+            {/* Financing article cards */}
+            {financingFetched && financingArticles.length > 0 && (
+              <div className="space-y-3">
+                {financingArticles.map(article => {
+                  const categoryColors: Record<string, string> = {
+                    refinancing: 'text-blue-400 bg-blue-900/20 border-blue-700/30',
+                    credit_facility: 'text-sky-400 bg-sky-900/20 border-sky-700/30',
+                    tax_equity: 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30',
+                    sponsor_change: 'text-violet-400 bg-violet-900/20 border-violet-700/30',
+                    project_sale: 'text-amber-400 bg-amber-900/20 border-amber-700/30',
+                    credit_rating: 'text-orange-400 bg-orange-900/20 border-orange-700/30',
+                    construction_financing: 'text-teal-400 bg-teal-900/20 border-teal-700/30',
+                    ppa_offtake: 'text-green-400 bg-green-900/20 border-green-700/30',
+                    regulatory_impact: 'text-rose-400 bg-rose-900/20 border-rose-700/30',
+                    default_risk: 'text-red-400 bg-red-900/20 border-red-700/30',
                   };
-                  const facilityColor = facilityColors[row.facility_type] ?? facilityColors.other;
-                  const confidenceColor = row.confidence === 'high' ? 'text-green-400' : row.confidence === 'medium' ? 'text-amber-400' : 'text-slate-500';
-                  const facilityLabel = row.facility_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+
+                  const tierColor = article.assetLinkageTier === 'high'
+                    ? 'text-green-400 bg-green-900/20 border-green-700/30'
+                    : article.assetLinkageTier === 'medium'
+                      ? 'text-amber-400 bg-amber-900/20 border-amber-700/30'
+                      : 'text-slate-500 bg-slate-800/40 border-slate-700/30';
 
                   return (
-                    <div key={row.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-5">
-                      {/* Header row */}
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="text-base font-black text-white">{row.lender_name}</div>
-                          <div className="flex items-center gap-2 mt-1.5">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${facilityColor}`}>
-                              {facilityLabel}
-                            </span>
-                            <span className={`text-[10px] font-bold ${confidenceColor}`}>
-                              {row.confidence.toUpperCase()} CONFIDENCE
-                            </span>
-                          </div>
-                        </div>
-                        {row.loan_amount_usd && (
-                          <div className="text-right shrink-0">
-                            <div className="text-2xl font-black text-white">
-                              ${(row.loan_amount_usd / 1_000_000).toFixed(0)}M
-                            </div>
-                            <div className="text-[10px] text-slate-500 font-bold">FACILITY SIZE</div>
-                          </div>
+                    <div key={article.id} className={`flex flex-col p-4 rounded-xl border transition-all hover:border-slate-600/60 ${
+                      article.sentimentLabel === 'negative' ? 'bg-red-950/10 border-red-900/30' :
+                      article.sentimentLabel === 'positive' ? 'bg-emerald-950/10 border-emerald-900/30' :
+                      'bg-slate-800/20 border-slate-700/40'
+                    }`}>
+                      {/* Title row */}
+                      <div className="flex items-start justify-between gap-3 mb-1.5">
+                        <a href={article.url} target="_blank" rel="noopener noreferrer"
+                           className="text-sm font-bold text-slate-200 hover:text-white leading-snug line-clamp-2 flex-1">
+                          {article.title}
+                        </a>
+                        {article.assetLinkageTier && article.assetLinkageTier !== 'none' && (
+                          <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded border uppercase tracking-wide ${tierColor}`}>
+                            {article.assetLinkageTier}
+                          </span>
                         )}
                       </div>
 
-                      {/* Details grid */}
-                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                        <div className="bg-slate-800/50 rounded-xl p-3">
-                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Rate</div>
-                          <div className="text-xs font-semibold text-slate-200">{row.interest_rate_text ?? '—'}</div>
-                        </div>
-                        <div className="bg-slate-800/50 rounded-xl p-3">
-                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Maturity</div>
-                          <div className="text-xs font-semibold text-slate-200">{row.maturity_text ?? '—'}</div>
-                        </div>
-                        <div className="bg-slate-800/50 rounded-xl p-3">
-                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Filing</div>
-                          <div className="text-xs font-semibold text-slate-200">{row.filing_type} · {row.filing_date.slice(0, 7)}</div>
-                        </div>
-                        <div className="bg-slate-800/50 rounded-xl p-3">
-                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Source</div>
-                          <a
-                            href={row.filing_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs font-semibold text-blue-400 hover:text-blue-300 transition-colors flex items-center gap-1"
-                          >
-                            SEC EDGAR
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                          </a>
-                        </div>
+                      {/* Summary or description */}
+                      {(article.articleSummary || article.description) && (
+                        <p className="text-xs text-slate-500 leading-relaxed line-clamp-3 mb-2">
+                          {article.articleSummary ?? article.description}
+                        </p>
+                      )}
+
+                      {/* Meta row */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {article.sourceName && (
+                          <span className="text-[10px] text-slate-600 font-medium">{article.sourceName}</span>
+                        )}
+                        {article.publishedAt && (
+                          <>
+                            <span className="text-[10px] text-slate-700">•</span>
+                            <span className="text-[10px] text-slate-700">
+                              {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </span>
+                          </>
+                        )}
+                        {article.relevanceScore != null && (
+                          <>
+                            <span className="text-[10px] text-slate-700">•</span>
+                            <span className="text-[10px] text-slate-600 font-bold">{(article.relevanceScore * 100).toFixed(0)}% relevant</span>
+                          </>
+                        )}
                       </div>
 
-                      {/* Excerpt */}
-                      {row.excerpt_text && (
-                        <div className="border-t border-slate-800 pt-4">
-                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2">Filing Excerpt</div>
-                          <p className="text-xs text-slate-400 leading-relaxed italic">"{row.excerpt_text}"</p>
+                      {/* Categories + tags */}
+                      {((article.categories && article.categories.length > 0) || (article.tags && article.tags.length > 0) || (article.lenders && article.lenders.length > 0)) && (
+                        <div className="flex items-center gap-1.5 flex-wrap mt-2 pt-2 border-t border-slate-800/40">
+                          {(article.categories ?? []).map(c => (
+                            <span key={c} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-widest ${categoryColors[c] ?? 'text-slate-400 bg-slate-800/40 border-slate-700/30'}`}>
+                              {c.replace(/_/g, ' ')}
+                            </span>
+                          ))}
+                          {(article.lenders ?? []).map((l: string) => (
+                            <span key={l} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/30">{l}</span>
+                          ))}
+                          {(article.tags ?? []).slice(0, 4).map(t => (
+                            <span key={t} className="text-[8px] px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-400 border border-slate-600/30 font-bold">{t}</span>
+                          ))}
                         </div>
                       )}
                     </div>
                   );
                 })}
-              </div>
-            )}
-
-            {/* ── Financing Context — News & Market Intelligence ──────── */}
-            {lendersFetched && (
-              <div className="space-y-6 pt-6 border-t border-slate-800 mt-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Financing Context — News & Market Intelligence</h3>
-                    <p className="text-[10px] text-slate-600 mt-1">Supplemental to SEC filings — sourced from news search</p>
-                  </div>
-                </div>
-
-                {/* AI Financing Summary */}
-                {loadingFinancingSummary && (
-                  <div className="flex items-center gap-2 text-slate-500 text-xs py-2">
-                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-violet-500"></div>
-                    <span>Generating financing synthesis…</span>
-                  </div>
-                )}
-                {financingSummary && !loadingFinancingSummary && (
-                  <div className="bg-violet-950/20 border border-violet-800/30 rounded-xl p-5">
-                    <div className="text-[10px] text-violet-400 font-black uppercase tracking-widest mb-2">AI Financing Summary</div>
-                    <p className="text-sm text-slate-300 leading-relaxed italic">{financingSummary}</p>
-                  </div>
-                )}
-
-                {/* Dedicated Financing Search */}
-                <div>
-                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-3">Financing Search</div>
-                  {financingNews.length === 0 && (
-                    <div className="py-6 text-center bg-slate-800/10 rounded-xl border border-dashed border-slate-800">
-                      <p className="text-xs text-slate-600 italic">No dedicated financing articles found.</p>
-                      <p className="text-[10px] text-slate-700 mt-1">Run <code className="font-mono">ingest_financing_articles()</code> for this plant to populate.</p>
-                    </div>
-                  )}
-                  {financingNews.length > 0 && (
-                    <div className="space-y-3">
-                      {financingNews.map(article => (
-                        <div key={article.id} className={`flex flex-col p-4 rounded-xl border transition-all ${
-                          article.sentimentLabel === 'negative' ? 'bg-red-950/10 border-red-900/30' :
-                          article.sentimentLabel === 'positive' ? 'bg-emerald-950/10 border-emerald-900/30' :
-                          'bg-slate-800/20 border-slate-700/40'
-                        }`}>
-                          <div className="flex items-start justify-between gap-3 mb-1.5">
-                            <a href={article.url} target="_blank" rel="noopener noreferrer"
-                               className="text-sm font-bold text-slate-200 hover:text-white leading-snug line-clamp-2 flex-1">
-                              {article.title}
-                            </a>
-                            <span className="shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide text-violet-400 bg-violet-900/30 border border-violet-700/30">FINANCE</span>
-                          </div>
-                          {article.description && (
-                            <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 mb-2">{article.description}</p>
-                          )}
-                          <div className="flex items-center gap-3 flex-wrap">
-                            <span className="text-[10px] text-slate-600 font-medium">{article.sourceName}</span>
-                            {article.publishedAt && (
-                              <span className="text-[10px] text-slate-700">
-                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
-                              </span>
-                            )}
-                            {article.lenders && article.lenders.length > 0 && article.lenders.map((l: string) => (
-                              <span key={l} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/30">{l}</span>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* From General News */}
-                <div>
-                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-3">From General News</div>
-                  {loadingFinancingContext && (
-                    <div className="flex items-center gap-2 text-slate-600 text-xs py-3">
-                      <div className="animate-spin rounded-full h-3.5 w-3.5 border-t-2 border-b-2 border-slate-500"></div>
-                      <span>Filtering articles for financing relevance…</span>
-                    </div>
-                  )}
-                  {!loadingFinancingContext && financingGeneralArticles.length === 0 && (
-                    <div className="py-6 text-center bg-slate-800/10 rounded-xl border border-dashed border-slate-800">
-                      <p className="text-xs text-slate-600 italic">No general articles mention financing for this plant.</p>
-                    </div>
-                  )}
-                  {!loadingFinancingContext && financingGeneralArticles.length > 0 && (
-                    <div className="space-y-3">
-                      {financingGeneralArticles.map(article => (
-                        <div key={article.id} className={`flex flex-col p-4 rounded-xl border transition-all ${
-                          article.sentimentLabel === 'negative' ? 'bg-red-950/10 border-red-900/30' :
-                          article.sentimentLabel === 'positive' ? 'bg-emerald-950/10 border-emerald-900/30' :
-                          'bg-slate-800/20 border-slate-700/40'
-                        }`}>
-                          <div className="flex items-start justify-between gap-3 mb-1.5">
-                            <a href={article.url} target="_blank" rel="noopener noreferrer"
-                               className="text-sm font-bold text-slate-200 hover:text-white leading-snug line-clamp-2 flex-1">
-                              {article.title}
-                            </a>
-                            {article.sentimentLabel && (
-                              <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide ${
-                                article.sentimentLabel === 'negative' ? 'text-red-400 bg-red-900/30' :
-                                article.sentimentLabel === 'positive' ? 'text-emerald-400 bg-emerald-900/30' :
-                                'text-slate-500 bg-slate-800/60'
-                              }`}>{article.sentimentLabel}</span>
-                            )}
-                          </div>
-                          {article.description && (
-                            <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 mb-2">{article.description}</p>
-                          )}
-                          <div className="flex items-center gap-3 flex-wrap">
-                            <span className="text-[10px] text-slate-600 font-medium">{article.sourceName}</span>
-                            {article.publishedAt && (
-                              <span className="text-[10px] text-slate-700">
-                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
-                              </span>
-                            )}
-                            {article.lenders && article.lenders.length > 0 && article.lenders.map((l: string) => (
-                              <span key={l} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/30">{l}</span>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
               </div>
             )}
           </div>
