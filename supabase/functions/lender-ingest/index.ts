@@ -148,11 +148,24 @@ async function decodeGoogleNewsUrl(url: string): Promise<string> {
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface PlantInfo {
-  eia_plant_code: string;
-  name:           string;
-  owner:          string;
-  state:          string;
-  fuel_source:    string;
+  eia_plant_code:       string;
+  name:                 string;
+  owner:                string;
+  state:                string;
+  fuel_source:          string;
+  nameplate_capacity_mw: number;
+}
+
+const MIN_CAPACITY_FOR_OWNER_FALLBACK = 20; // MW — skip owner fallback for small behind-the-meter plants
+
+function fuelLabel(fuelSource: string): string {
+  const map: Record<string, string> = {
+    'Solar': 'solar', 'Wind': 'wind', 'Natural Gas': 'gas',
+    'Nuclear': 'nuclear', 'Hydro': 'hydro', 'Coal': 'coal',
+    'Petroleum': 'petroleum', 'Geothermal': 'geothermal',
+    'Biomass': 'biomass', 'Other': 'energy',
+  };
+  return map[fuelSource] ?? 'energy';
 }
 
 interface RawArticle {
@@ -254,8 +267,9 @@ async function fetchGoogleRSS(
   plant: PlantInfo,
   afterDate: string | null,
 ): Promise<RawArticle[]> {
+  const fuel = fuelLabel(plant.fuel_source);
   const financingTerms = 'financing OR lender OR "tax equity" OR refinancing OR "credit facility"';
-  const plantQuery = `"${plant.name}" ${financingTerms}`;
+  const plantQuery = `"${plant.name}" ${fuel} ${financingTerms}`;
 
   const queries: string[] = [];
   if (afterDate) {
@@ -337,9 +351,10 @@ async function fetchGoogleRSSOwnerFallback(
   plant: PlantInfo,
   afterDate: string | null,
 ): Promise<RawArticle[]> {
+  const fuel = fuelLabel(plant.fuel_source);
   const ownerQuery = afterDate
-    ? `"${plant.owner}" power plant financing after:${afterDate}`
-    : `"${plant.owner}" power plant financing`;
+    ? `"${plant.owner}" ${fuel} ${plant.state} financing OR lender OR "tax equity" after:${afterDate}`
+    : `"${plant.owner}" ${fuel} ${plant.state} financing OR lender OR "tax equity"`;
 
   const allArticles: RawArticle[] = [];
   const seenUrls = new Set<string>();
@@ -412,10 +427,11 @@ async function fetchBingRSS(
     else freshness = '&freshness=Month';
   }
 
+  const fuel = fuelLabel(plant.fuel_source);
   const queries = [
-    `"${plant.name}" financing OR lender OR "tax equity"`,
-    `"${plant.name}" refinancing OR "credit facility" OR loan`,
-    `"${plant.name}" sponsor OR "project finance" OR PPA`,
+    `"${plant.name}" ${fuel} financing OR lender OR "tax equity"`,
+    `"${plant.name}" ${fuel} refinancing OR "credit facility" OR loan`,
+    `"${plant.name}" ${fuel} sponsor OR "project finance" OR PPA`,
   ];
 
   const allArticles: RawArticle[] = [];
@@ -555,14 +571,15 @@ async function upsertArticles(
 
   for (let i = 0; i < rows.length; i += UPSERT_BATCH_SIZE) {
     const batch = rows.slice(i, i + UPSERT_BATCH_SIZE);
-    const { error } = await sb
+    const { data, error } = await sb
       .from('news_articles')
-      .upsert(batch, { onConflict: 'external_id', ignoreDuplicates: true });
+      .upsert(batch, { onConflict: 'external_id' })
+      .select('id');
 
     if (error) {
       console.error(`Upsert error at batch ${i}: ${error.message}`);
     } else {
-      inserted += batch.length;
+      inserted += (data?.length ?? 0);
     }
   }
 
@@ -653,9 +670,11 @@ Deno.serve(async (req: Request) => {
 
       // Owner-name fallback if plant-name query returned sparse results
       let ownerFallbackArticles: RawArticle[] = [];
-      if (googleArticles.length < MIN_ARTICLES_FOR_OWNER_FALLBACK) {
+      if (googleArticles.length < MIN_ARTICLES_FOR_OWNER_FALLBACK && plant.nameplate_capacity_mw >= MIN_CAPACITY_FOR_OWNER_FALLBACK) {
         console.log(`  Plant query sparse (${googleArticles.length}) — trying owner fallback: "${plant.owner}"`);
         ownerFallbackArticles = await fetchGoogleRSSOwnerFallback(plant, googleAfterDate);
+      } else if (googleArticles.length < MIN_ARTICLES_FOR_OWNER_FALLBACK) {
+        console.log(`  Plant query sparse (${googleArticles.length}) — skipping owner fallback (${plant.nameplate_capacity_mw} MW < ${MIN_CAPACITY_FOR_OWNER_FALLBACK} MW gate)`);
       }
 
       console.log(`  Google: ${googleArticles.length}, Bing: ${bingArticles.length}, Owner fallback: ${ownerFallbackArticles.length}`);
