@@ -557,10 +557,12 @@ Deno.serve(async (req: Request) => {
       console.log(`Batch ranking ${codes.length} plants with unranked articles`);
 
       const results = [];
+      let totalIncluded = 0;
       for (const code of codes) {
         try {
           const r = await rankPlant(sb, geminiKey, code, 'initial_backfill');
           results.push(r);
+          totalIncluded += r.articlesIncluded;
           console.log(`Ranked ${r.plant}: ${r.articlesProcessed} articles, ${r.articlesIncluded} included`);
         } catch (err) {
           console.error(`Failed to rank plant ${code}:`, err);
@@ -568,6 +570,21 @@ Deno.serve(async (req: Request) => {
         }
         // Rate limit between Gemini calls
         await new Promise(r => setTimeout(r, 1000));
+      }
+
+      // Chain to embed-articles if any articles were included for embedding
+      if (totalIncluded > 0) {
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+        const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+        console.log(`Chaining to embed-articles (${totalIncluded} articles included for embedding)`);
+        fetch(`${supabaseUrl}/functions/v1/embed-articles`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${serviceRoleKey}`,
+          },
+          body: JSON.stringify({}),
+        }).catch(err => console.error('Chain to embed-articles failed:', err));
       }
 
       return new Response(JSON.stringify({ ok: true, results }), { headers: CORS });

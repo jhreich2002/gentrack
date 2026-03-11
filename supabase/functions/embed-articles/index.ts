@@ -154,6 +154,20 @@ Deno.serve(async (_req) => {
 
     const result = { ok: true, embedded, errors };
     console.log('embed-articles complete:', result);
+
+    // Chain to compute-ratings if any articles were embedded
+    if (embedded > 0) {
+      console.log(`Chaining to compute-ratings (${embedded} articles embedded)`);
+      fetch(`${supabaseUrl}/functions/v1/compute-ratings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${serviceRoleKey}`,
+        },
+        body: JSON.stringify({}),
+      }).catch(err => console.error('Chain to compute-ratings failed:', err));
+    }
+
     return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
 
   } catch (err) {
