@@ -58,6 +58,7 @@ export async function fetchPlantNewsArticles(
       relevance_score, include_for_embedding, categories, tags, article_summary
     `)
     .contains('plant_codes', [eiaPlantCode])
+    .or('asset_linkage_tier.neq.none,asset_linkage_tier.is.null')
     .order('published_at', { ascending: false, nullsFirst: false })
     .limit(limit);
 
