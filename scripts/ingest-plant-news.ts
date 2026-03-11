@@ -21,6 +21,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import GoogleNewsDecoder from 'google-news-decoder';
 
 // ── Env loader ─────────────────────────────────────────────────────────────────
 
@@ -67,6 +68,19 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 32);
+
+const gnewsDecoder = new GoogleNewsDecoder();
+
+/** Decode a Google News article URL to the actual publisher URL */
+async function decodeGoogleNewsUrl(url: string): Promise<string> {
+  try {
+    const result = await gnewsDecoder.decodeGoogleNewsUrl(url);
+    if (result.status && result.decodedUrl) return result.decodedUrl;
+    return url;
+  } catch {
+    return url;
+  }
+}
 
 function decodeHtmlEntities(s: string): string {
   return s
@@ -296,10 +310,10 @@ async function fetchGoogleRSS(plant: PlantInfo, backfillYears: number): Promise<
 
         if (titleMatch && linkMatch) {
           let rawUrl = linkMatch[1].trim();
-          // Google News URLs are redirects — extract actual URL if possible
+          // Google News URLs are redirects — decode to actual article URL
           if (rawUrl.includes('news.google.com')) {
-            // Keep as-is; we can resolve later or use the Google URL
-            // The important thing is title + publish date for ranking
+            rawUrl = await decodeGoogleNewsUrl(rawUrl);
+            await sleep(150); // rate-limit Google News decode requests
           }
           const url = normalizeUrl(rawUrl);
 
