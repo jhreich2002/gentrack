@@ -99,6 +99,16 @@ export interface NewsArticle {
   importance:           'low' | 'medium' | 'high' | null;
   entityCompanyNames:   string[];         // ult_parent names mentioned in article
   lenders?:             string[];         // lender/financier names extracted from article
+  // plant-news-rank classification
+  assetLinkageTier?:      'high' | 'medium' | 'none' | null;
+  assetLinkageRationale?: string | null;
+  curtailmentRelevant?:   boolean;
+  curtailmentRationale?:  string | null;
+  relevanceScore?:        number | null;   // 0.0–1.0
+  includeForEmbedding?:   boolean;
+  categories?:            string[];
+  tags?:                  string[];
+  articleSummary?:        string | null;
 }
 
 /** Precomputed risk rating from the plant_news_ratings Supabase table. */
@@ -127,6 +137,8 @@ export interface PlantNewsState {
   summaryLastUpdatedAt:   string | null;
   lastEventTypes:         string[];         // event_types seen recently
   lastSentiment:          string | null;
+  plantSummary?:          string | null;    // from plant-news-rank
+  rankingLastRunAt?:      string | null;
 }
 
 /** Per-ult_parent nightly-computed metrics from company_stats table. */

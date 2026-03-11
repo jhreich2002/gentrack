@@ -53,7 +53,9 @@ export async function fetchPlantNewsArticles(
     .select(`
       id, title, description, url, source_name,
       published_at, topics, sentiment_label, plant_codes,
-      event_type, impact_tags, fti_relevance_tags, importance, entity_company_names, lenders
+      event_type, impact_tags, fti_relevance_tags, importance, entity_company_names, lenders,
+      asset_linkage_tier, asset_linkage_rationale, curtailment_relevant, curtailment_rationale,
+      relevance_score, include_for_embedding, categories, tags, article_summary
     `)
     .contains('plant_codes', [eiaPlantCode])
     .order('published_at', { ascending: false, nullsFirst: false })
@@ -91,6 +93,15 @@ export async function fetchPlantNewsArticles(
     importance:         row.importance as 'low' | 'medium' | 'high' | null,
     entityCompanyNames: (row.entity_company_names as string[]) ?? [],
     lenders:            (row.lenders as string[]) ?? [],
+    assetLinkageTier:      row.asset_linkage_tier as 'high' | 'medium' | 'none' | null,
+    assetLinkageRationale: row.asset_linkage_rationale as string | null,
+    curtailmentRelevant:   row.curtailment_relevant as boolean ?? false,
+    curtailmentRationale:  row.curtailment_rationale as string | null,
+    relevanceScore:        row.relevance_score as number | null,
+    includeForEmbedding:   row.include_for_embedding as boolean ?? false,
+    categories:            (row.categories as string[]) ?? [],
+    tags:                  (row.tags as string[]) ?? [],
+    articleSummary:        row.article_summary as string | null,
   }));
 }
 
@@ -221,6 +232,8 @@ export async function fetchPlantNewsState(
     summaryLastUpdatedAt: data.summary_last_updated_at,
     lastEventTypes:       data.last_event_types ?? [],
     lastSentiment:        data.last_sentiment,
+    plantSummary:         data.plant_summary ?? null,
+    rankingLastRunAt:     data.ranking_last_run_at ?? null,
   };
 }
 

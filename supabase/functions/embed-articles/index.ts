@@ -77,10 +77,13 @@ Deno.serve(async (_req) => {
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     // ── Fetch articles that need embeddings ───────────────────────────────
+    // Only embed articles that plant-news-rank has approved (include_for_embedding = true)
+    // or articles that haven't been ranked yet (backwards compat)
     const { data: rows, error: fetchErr } = await supabase
       .from('news_articles')
       .select('id, title, description')
       .is('embedded_at', null)
+      .or('include_for_embedding.is.true,ranked_at.is.null')
       .order('created_at', { ascending: true })
       .limit(FETCH_LIMIT);
 
