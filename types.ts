@@ -111,6 +111,15 @@ export interface NewsArticle {
   articleSummary?:        string | null;
 }
 
+/** Structured financing deal extracted by LLM from article context. */
+export interface FinancingDeal {
+  amount:          string;        // e.g. "$440M", "undisclosed"
+  type:            string;        // e.g. "Tax Equity", "Credit Facility", "Construction Loan"
+  lenderInvestor:  string;        // e.g. "U.S. Bank", "JPMorgan"
+  sourceTitle:     string;        // article title for display
+  sourceUrl:       string;        // article URL — clickable link
+}
+
 /** Precomputed risk rating from the plant_news_ratings Supabase table. */
 export interface PlantNewsRating {
   eiaPlantCode:  string;

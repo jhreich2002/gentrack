@@ -6,6 +6,7 @@
  */
 
 import { supabase } from './supabaseClient';
+import type { FinancingDeal } from '../types';
 
 export async function fetchPlantFinancingArticles(eiaPlantCode: string): Promise<import('../types').NewsArticle[]> {
   const { data, error } = await supabase
@@ -55,15 +56,16 @@ export async function fetchPlantFinancingArticles(eiaPlantCode: string): Promise
 export async function callFinancingSummarize(
   plant: { name: string; owner: string },
   articles: import('../types').NewsArticle[],
-): Promise<string | null> {
+): Promise<{ summary: string | null; deals: FinancingDeal[] }> {
+  const empty = { summary: null, deals: [] };
   const apiKey = (import.meta as Record<string, Record<string, string>>).env?.VITE_GEMINI_API_KEY
              ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) return empty;
 
-  const articleContext = articles
-    .slice(0, 10)
-    .map(a => {
-      let entry = `- ${a.title}`;
+  const topArticles = articles.slice(0, 10);
+  const articleContext = topArticles
+    .map((a, i) => {
+      let entry = `[${i}] ${a.title}`;
       if (a.articleSummary) entry += `: ${a.articleSummary}`;
       else if (a.description) entry += `: ${a.description.slice(0, 200)}`;
       if (a.tags && a.tags.length > 0) entry += ` [${a.tags.join(', ')}]`;
@@ -71,11 +73,11 @@ export async function callFinancingSummarize(
     })
     .join('\n');
 
-  const prompt = `Synthesize the financing and lender exposure for the "${plant.name}" power plant (owner: ${
+  const prompt = `Analyze the financing and lender exposure for the "${plant.name}" power plant (owner: ${
     plant.owner || 'unknown'
-  }).\n\nFinancing-Related Articles:\n${
+  }).\n\nFinancing-Related Articles (prefixed with [index]):\n${
     articleContext || 'No financing news found.'
-  }\n\nIn 2–3 concise sentences, summarize: known lenders or investors, financing events, tax equity structures, and any recent refinancing or credit changes. Be specific with names and numbers. If data is limited, note what is known and acknowledge the gap.`;
+  }\n\nReturn a JSON object with exactly two fields:\n1. "summary": 2–3 concise sentences summarizing known lenders or investors, financing events, tax equity structures, and any recent refinancing or credit changes. Be specific with names and dollar amounts. If data is limited, note what is known and acknowledge the gap.\n2. "deals": an array of financing deals extracted from the articles. Each deal has:\n   - "amount": dollar amount as a string (e.g. "$440M", "$200 million"). Use "undisclosed" if the amount is not mentioned.\n   - "type": the financing type (e.g. "Tax Equity", "Credit Facility", "Construction Loan", "Project Sale", "Refinancing", "Revenue Bond", "Bankruptcy Funding", "PPA"). Use the most specific label.\n   - "lender_investor": name of the lender, investor, or counterparty. Use "undisclosed" if not named.\n   - "source_index": the integer index [i] of the article this deal was extracted from.\n\nOnly include deals where a concrete financing event is described. Do not fabricate deals — if no deals are identifiable, return an empty array.`;
 
   try {
     const resp = await fetch(
@@ -85,7 +87,11 @@ export async function callFinancingSummarize(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 512 },
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 1024,
+            responseMimeType: 'application/json',
+          },
         }),
       }
     );
@@ -93,9 +99,28 @@ export async function callFinancingSummarize(
     const data = await resp.json();
     const parts: Record<string, unknown>[] = data?.candidates?.[0]?.content?.parts ?? [];
     const text = (parts.find(p => 'text' in p && !p.thought) as Record<string, string> | undefined)?.text ?? '';
-    return text.trim() || null;
+    const parsed = JSON.parse(text);
+
+    const summary: string | null = typeof parsed.summary === 'string' ? parsed.summary.trim() || null : null;
+    const rawDeals: Array<{ amount?: string; type?: string; lender_investor?: string; source_index?: number }> = Array.isArray(parsed.deals) ? parsed.deals : [];
+
+    const deals: FinancingDeal[] = rawDeals
+      .filter(d => d.type || d.amount || d.lender_investor)
+      .map(d => {
+        const idx = typeof d.source_index === 'number' && d.source_index >= 0 && d.source_index < topArticles.length
+          ? d.source_index : 0;
+        return {
+          amount:         d.amount ?? 'undisclosed',
+          type:           d.type ?? 'Unknown',
+          lenderInvestor: d.lender_investor ?? 'undisclosed',
+          sourceTitle:    topArticles[idx].title,
+          sourceUrl:      topArticles[idx].url,
+        };
+      });
+
+    return { summary, deals };
   } catch (err) {
     console.error('callFinancingSummarize error:', err);
-    return null;
+    return empty;
   }
 }

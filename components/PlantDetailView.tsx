@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { PowerPlant, CapacityFactorStats, FuelSource, PlantOwner, PlantOwnership, NewsArticle, PlantNewsRating } from '../types';
+import { PowerPlant, CapacityFactorStats, FuelSource, PlantOwner, PlantOwnership, NewsArticle, PlantNewsRating, FinancingDeal } from '../types';
 import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } from '../constants';
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
@@ -64,6 +64,7 @@ const PlantDetailView: React.FC<Props> = ({
   const [loadingFinancing, setLoadingFinancing] = useState(false);
   const [financingFetched, setFinancingFetched] = useState(false);
   const [financingSummary, setFinancingSummary] = useState<string | null>(null);
+  const [financingDeals, setFinancingDeals] = useState<FinancingDeal[]>([]);
   const [loadingFinancingSummary, setLoadingFinancingSummary] = useState(false);
 
   const handleLoadLenders = async () => {
@@ -79,7 +80,11 @@ const PlantDetailView: React.FC<Props> = ({
     if (articles.length > 0) {
       setLoadingFinancingSummary(true);
       callFinancingSummarize({ name: plant.name, owner: ownerName }, articles)
-        .then(s => { setFinancingSummary(s); setLoadingFinancingSummary(false); });
+        .then(({ summary, deals }) => {
+          setFinancingSummary(summary);
+          setFinancingDeals(deals);
+          setLoadingFinancingSummary(false);
+        });
     }
   };
 
@@ -1168,6 +1173,53 @@ const PlantDetailView: React.FC<Props> = ({
               <div className="bg-violet-950/20 border border-violet-800/30 rounded-xl p-5">
                 <div className="text-[10px] text-violet-400 font-black uppercase tracking-widest mb-2">AI Financing Summary</div>
                 <p className="text-sm text-slate-300 leading-relaxed italic">{financingSummary}</p>
+              </div>
+            )}
+
+            {/* Financing Deals Table */}
+            {financingDeals.length > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div className="px-5 py-3 border-b border-slate-800">
+                  <h4 className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Extracted Financing Deals</h4>
+                </div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-800/60">
+                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Amount</th>
+                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Type</th>
+                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Lender / Investor</th>
+                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {financingDeals.map((deal, i) => (
+                      <tr key={i} className="border-b border-slate-800/30 last:border-b-0 hover:bg-slate-800/30 transition-colors">
+                        <td className="px-5 py-3 text-slate-200 font-bold whitespace-nowrap">{deal.amount}</td>
+                        <td className="px-5 py-3">
+                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-widest ${
+                            deal.type.toLowerCase().includes('tax equity') ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
+                            deal.type.toLowerCase().includes('credit') || deal.type.toLowerCase().includes('loan') ? 'text-sky-400 bg-sky-900/20 border-sky-700/30' :
+                            deal.type.toLowerCase().includes('refinanc') ? 'text-blue-400 bg-blue-900/20 border-blue-700/30' :
+                            deal.type.toLowerCase().includes('bankrupt') || deal.type.toLowerCase().includes('default') ? 'text-red-400 bg-red-900/20 border-red-700/30' :
+                            deal.type.toLowerCase().includes('sale') ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
+                            deal.type.toLowerCase().includes('ppa') ? 'text-green-400 bg-green-900/20 border-green-700/30' :
+                            deal.type.toLowerCase().includes('construction') ? 'text-teal-400 bg-teal-900/20 border-teal-700/30' :
+                            'text-slate-400 bg-slate-800/40 border-slate-700/30'
+                          }`}>
+                            {deal.type}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-slate-300">{deal.lenderInvestor}</td>
+                        <td className="px-5 py-3">
+                          <a href={deal.sourceUrl} target="_blank" rel="noopener noreferrer"
+                             className="text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2 line-clamp-1">
+                            {deal.sourceTitle.length > 50 ? deal.sourceTitle.slice(0, 50) + '…' : deal.sourceTitle}
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
 
