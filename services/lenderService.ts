@@ -59,7 +59,9 @@ export async function callFinancingSummarize(
 ): Promise<{ summary: string | null; deals: FinancingDeal[] }> {
   const empty = { summary: null, deals: [] };
   const apiKey = (import.meta as Record<string, Record<string, string>>).env?.VITE_GEMINI_API_KEY
-             ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY;
+             ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY
+             ?? (typeof process !== 'undefined' && (process.env as Record<string, string>)?.GEMINI_API_KEY)
+             || undefined;
   if (!apiKey) return empty;
 
   const topArticles = articles.slice(0, 10);

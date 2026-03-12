@@ -122,7 +122,8 @@ export async function filterFinancingRelevantArticles(
   if (articles.length === 0) return [];
 
   const apiKey = (import.meta as Record<string, Record<string, string>>).env?.VITE_GEMINI_API_KEY
-             ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY;
+             ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY
+             ?? ((typeof process !== 'undefined' && (process.env as Record<string, string>)?.GEMINI_API_KEY) || undefined);
 
   // Fallback: use existing structured fields if no API key
   const fallback = () => articles.filter(a =>
