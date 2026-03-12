@@ -121,9 +121,11 @@ export async function filterFinancingRelevantArticles(
 ): Promise<NewsArticle[]> {
   if (articles.length === 0) return [];
 
+  // Vite `define` replaces the bare token `process.env.GEMINI_API_KEY` at build time.
   const apiKey = (import.meta as Record<string, Record<string, string>>).env?.VITE_GEMINI_API_KEY
              ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY
-             ?? ((typeof process !== 'undefined' && (process.env as Record<string, string>)?.GEMINI_API_KEY) || undefined);
+             // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             ?? ((process as any).env.GEMINI_API_KEY || undefined);
 
   // Fallback: use existing structured fields if no API key
   const fallback = () => articles.filter(a =>
