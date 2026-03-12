@@ -168,6 +168,54 @@ function fuelLabel(fuelSource: string): string {
   return map[fuelSource] ?? 'energy';
 }
 
+// Roman ↔ Arabic numeral maps for plant name variants
+const ROMAN_TO_ARABIC: Record<string, string> = { I: '1', II: '2', III: '3', IV: '4', V: '5', VI: '6', VII: '7', VIII: '8', IX: '9', X: '10' };
+const ARABIC_TO_ROMAN: Record<string, string> = Object.fromEntries(Object.entries(ROMAN_TO_ARABIC).map(([r, a]) => [a, r]));
+
+/**
+ * Generate search name variants from a plant name.
+ * Returns an array of { quoted, label } where quoted is the search string
+ * and label describes the variant for logging.
+ *
+ * Example for "Appaloosa Solar I":
+ *   1. "Appaloosa Solar I"   (exact)
+ *   2. "Appaloosa Solar"     (suffix stripped)
+ *   3. "Appaloosa Solar 1"   (roman→arabic swap)
+ */
+function buildNameVariants(name: string): string[] {
+  const variants: string[] = [name]; // always include exact name
+
+  // Try to detect trailing Roman or Arabic numeral suffix
+  const romanSuffixMatch = name.match(/^(.+?)\s+(I{1,3}|IV|VI{0,3}|IX|X)$/i);
+  const arabicSuffixMatch = name.match(/^(.+?)\s+(\d{1,2})$/);
+
+  if (romanSuffixMatch) {
+    const base = romanSuffixMatch[1].trim();
+    const roman = romanSuffixMatch[2].toUpperCase();
+    // Variant: stripped suffix
+    if (!variants.includes(base)) variants.push(base);
+    // Variant: Roman → Arabic swap
+    const arabic = ROMAN_TO_ARABIC[roman];
+    if (arabic) {
+      const swapped = `${base} ${arabic}`;
+      if (!variants.includes(swapped)) variants.push(swapped);
+    }
+  } else if (arabicSuffixMatch) {
+    const base = arabicSuffixMatch[1].trim();
+    const arabic = arabicSuffixMatch[2];
+    // Variant: stripped suffix
+    if (!variants.includes(base)) variants.push(base);
+    // Variant: Arabic → Roman swap
+    const roman = ARABIC_TO_ROMAN[arabic];
+    if (roman) {
+      const swapped = `${base} ${roman}`;
+      if (!variants.includes(swapped)) variants.push(swapped);
+    }
+  }
+
+  return variants;
+}
+
 interface RawArticle {
   title:        string;
   url:          string;
@@ -269,14 +317,28 @@ async function fetchGoogleRSS(
 ): Promise<RawArticle[]> {
   const fuel = fuelLabel(plant.fuel_source);
   const financingTerms = 'financing OR lender OR "tax equity" OR refinancing OR "credit facility"';
-  const plantQuery = `"${plant.name}" ${fuel} ${financingTerms}`;
+  const nameVariants = buildNameVariants(plant.name);
 
+  // Build queries from name variants:
+  //   1. Exact quoted name + fuel + financing terms
+  //   2. Stripped-suffix quoted name + fuel + financing terms (if different)
+  //   3. Unquoted base name + state for broader reach with disambiguation
   const queries: string[] = [];
-  if (afterDate) {
-    queries.push(`${plantQuery} after:${afterDate}`);
-  } else {
-    queries.push(plantQuery);
+  const afterClause = afterDate ? ` after:${afterDate}` : '';
+
+  // Query 1: exact quoted name
+  queries.push(`"${nameVariants[0]}" ${fuel} ${financingTerms}${afterClause}`);
+
+  // Query 2: stripped suffix (if we have one)
+  if (nameVariants.length >= 2) {
+    queries.push(`"${nameVariants[1]}" ${fuel} ${financingTerms}${afterClause}`);
   }
+
+  // Query 3: unquoted base name + state for broadest match
+  const baseName = nameVariants.length >= 2 ? nameVariants[1] : nameVariants[0];
+  queries.push(`${baseName} ${plant.state} ${fuel} financing OR lender OR "tax equity"${afterClause}`);
+
+  console.log(`  [google] ${queries.length} queries for ${plant.name}`);
 
   const allArticles: RawArticle[] = [];
   const seenUrls = new Set<string>();
@@ -428,10 +490,19 @@ async function fetchBingRSS(
   }
 
   const fuel = fuelLabel(plant.fuel_source);
+  const nameVariants = buildNameVariants(plant.name);
+  const exactName = nameVariants[0];
+  const broadName = nameVariants.length >= 2 ? nameVariants[1] : exactName;
+
   const queries = [
-    `"${plant.name}" ${fuel} financing OR lender OR "tax equity"`,
-    `"${plant.name}" ${fuel} refinancing OR "credit facility" OR loan`,
-    `"${plant.name}" ${fuel} sponsor OR "project finance" OR PPA`,
+    `"${exactName}" ${fuel} financing OR lender OR "tax equity"`,
+    `"${exactName}" ${fuel} refinancing OR "credit facility" OR loan`,
+    `"${exactName}" ${fuel} sponsor OR "project finance" OR PPA`,
+    // Broader variants with stripped suffix
+    ...(broadName !== exactName ? [
+      `"${broadName}" ${fuel} financing OR lender OR "tax equity"`,
+      `"${broadName}" ${fuel} refinancing OR "credit facility" OR loan`,
+    ] : []),
   ];
 
   const allArticles: RawArticle[] = [];
