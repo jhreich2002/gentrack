@@ -144,6 +144,7 @@ function mapRow(data: Record<string, unknown>): CompanyStats {
     analysisText:          (data.analysis_text          as string | null) ?? null,
     analysisAngleBullets:  (data.analysis_angle_bullets as string[])     ?? [],
     analysisUpdatedAt:     (data.analysis_updated_at    as string | null) ?? null,
+    portfolioSynopsis:     (data.portfolio_synopsis     as string | null) ?? null,
   };
 }
 
@@ -152,6 +153,7 @@ function mapRow(data: Record<string, unknown>): CompanyStats {
 export interface CompanyAnalysisResponse {
   analysis_text:          string;
   analysis_angle_bullets: string[];
+  portfolio_synopsis:     string | null;
   analysis_updated_at:    string;
   from_cache:             boolean;
 }

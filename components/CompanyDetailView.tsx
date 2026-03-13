@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { CompanyStats } from '../types';
+import { CompanyStats, NewsArticle } from '../types';
 import { fetchCompanyStats, callCompanyAnalyze, CompanyAnalysisResponse, fetchCompanyPlants, CompanyPlant } from '../services/companyService';
+import { fetchEntityNews } from '../services/lenderStatsService';
 
-type CompanyTab = 'overview' | 'portfolio';
+type CompanyTab = 'overview' | 'portfolio' | 'news';
 
 interface Props {
   ultParentName: string;
@@ -52,6 +53,7 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack, onPlantClic
   const [stats, setStats]       = useState<CompanyStats | null>(null);
   const [loading, setLoading]   = useState(true);
   const [analysis, setAnalysis] = useState<CompanyAnalysisResponse | null>(null);
+  const [portfolioSynopsis, setPortfolioSynopsis] = useState<string | null>(null);
   const [loadingAnalysis, setLoadingAnalysis] = useState(false);
 
   // Portfolio state
@@ -59,26 +61,35 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack, onPlantClic
   const [loadingPlants, setLoadingPlants] = useState(false);
   const [plantsFetched, setPlantsFetched] = useState(false);
 
+  // News state
+  const [articles, setArticles]       = useState<NewsArticle[]>([]);
+  const [loadingNews, setLoadingNews] = useState(false);
+  const [newsFetched, setNewsFetched] = useState(false);
+
   useEffect(() => {
     setStats(null);
     setLoading(true);
     setAnalysis(null);
+    setPortfolioSynopsis(null);
     setActiveTab(initialTab ?? 'overview');
     setPlants([]);
     setPlantsFetched(false);
+    setArticles([]);
+    setNewsFetched(false);
 
     fetchCompanyStats(ultParentName).then(s => {
       setStats(s);
       setLoading(false);
-      // Pre-populate analysis from cached company_stats row if available
       if (s?.analysisText) {
         setAnalysis({
           analysis_text:          s.analysisText,
           analysis_angle_bullets: s.analysisAngleBullets,
+          portfolio_synopsis:     s.portfolioSynopsis ?? null,
           analysis_updated_at:    s.analysisUpdatedAt ?? '',
           from_cache:             true,
         });
       }
+      if (s?.portfolioSynopsis) setPortfolioSynopsis(s.portfolioSynopsis);
     });
   }, [ultParentName]);
 
@@ -95,8 +106,20 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack, onPlantClic
     if (loadingAnalysis) return;
     setLoadingAnalysis(true);
     const result = await callCompanyAnalyze(ultParentName);
-    if (result) setAnalysis(result);
+    if (result) {
+      setAnalysis(result);
+      if (result.portfolio_synopsis) setPortfolioSynopsis(result.portfolio_synopsis);
+    }
     setLoadingAnalysis(false);
+  };
+
+  const handleLoadNews = async () => {
+    if (loadingNews || newsFetched) return;
+    setLoadingNews(true);
+    const data = await fetchEntityNews(ultParentName, 90, 50);
+    setArticles(data);
+    setLoadingNews(false);
+    setNewsFetched(true);
   };
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -145,6 +168,13 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack, onPlantClic
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
           PORTFOLIO ({stats?.plantCount ?? 0})
+        </button>
+        <button
+          onClick={() => { setActiveTab('news'); onTabChange?.('news' as CompanyTab); handleLoadNews(); }}
+          className={`px-6 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'news' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" /></svg>
+          NEWS
         </button>
       </div>
 
@@ -287,6 +317,33 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack, onPlantClic
               </div>
             </section>
           )}
+
+          {/* ── Portfolio Intelligence ───────────────────────────────────────── */}
+          <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="bg-emerald-800 p-2.5 rounded-xl shadow-lg shadow-emerald-900/20">
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-white tracking-tight">Portfolio Intelligence</h2>
+                <p className="text-xs text-slate-500 font-medium">Per-asset signal breakdown from news and capacity factor data</p>
+              </div>
+            </div>
+            {portfolioSynopsis ? (
+              <div className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap font-mono bg-slate-800/30 rounded-xl p-4 border border-slate-700/40">
+                {portfolioSynopsis}
+              </div>
+            ) : (
+              <div className="py-6 text-center text-slate-600 bg-slate-800/10 rounded-xl border border-dashed border-slate-800">
+                <p className="text-xs font-bold italic">No portfolio synopsis generated yet.</p>
+                <p className="text-[10px] text-slate-700 mt-1">
+                  Click <span className="text-violet-500">Analyze Company</span> to generate a per-asset breakdown.
+                </p>
+              </div>
+            )}
+          </section>
 
           {/* ── Company Analysis (Gemini) ────────────────────────────────────── */}
           <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
@@ -481,6 +538,90 @@ const CompanyDetailView: React.FC<Props> = ({ ultParentName, onBack, onPlantClic
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+        )}
+        {/* ── NEWS TAB ───────────────────────────────────────────────────────── */}
+        {activeTab === 'news' && (
+          <div className="animate-in fade-in duration-500 space-y-4">
+            {loadingNews && (
+              <div className="py-24 flex flex-col items-center justify-center space-y-4">
+                <div className="w-12 h-12 rounded-full border-2 border-blue-500/20 border-t-blue-500 animate-spin" />
+                <p className="text-slate-400 text-sm font-bold">Loading company news...</p>
+              </div>
+            )}
+
+            {newsFetched && articles.length === 0 && (
+              <div className="py-20 text-center bg-slate-900 rounded-2xl border border-slate-800">
+                <p className="text-sm font-bold text-slate-400">No news articles found for this company in the last 90 days.</p>
+                <p className="text-xs text-slate-600 mt-1">News matching uses entity_company_names from classified articles.</p>
+              </div>
+            )}
+
+            {newsFetched && articles.length > 0 && (
+              <>
+                <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                  {articles.length} article{articles.length !== 1 ? 's' : ''} • Last 90 days
+                </div>
+                {articles.map(article => (
+                  <div key={article.id} className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg hover:border-slate-700 transition-all">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <a
+                          href={article.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm font-bold text-slate-200 hover:text-white hover:underline line-clamp-2 leading-tight"
+                        >
+                          {article.title}
+                        </a>
+                        <div className="flex items-center gap-2 mt-2 flex-wrap">
+                          {article.sourceName && (
+                            <span className="text-[9px] text-slate-500 font-medium">{article.sourceName}</span>
+                          )}
+                          <span className="text-[9px] text-slate-600">
+                            {article.publishedAt ? new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }) : ''}
+                          </span>
+                          {article.sentimentLabel && (
+                            <span className={`text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wider border ${
+                              article.sentimentLabel === 'positive' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' :
+                              article.sentimentLabel === 'negative' ? 'text-red-400 border-red-500/30 bg-red-500/10' :
+                              'text-slate-400 border-slate-500/30 bg-slate-500/10'
+                            }`}>
+                              {article.sentimentLabel}
+                            </span>
+                          )}
+                          {article.eventType && article.eventType !== 'none' && (
+                            <span className="text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wider bg-slate-800 border border-slate-700/50 text-slate-400">
+                              {article.eventType.replace('_', ' ')}
+                            </span>
+                          )}
+                          {article.importance && article.importance !== 'low' && (
+                            <span className={`text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wider border ${
+                              article.importance === 'high' ? 'text-red-400 border-red-500/30 bg-red-500/10' :
+                              'text-amber-400 border-amber-500/30 bg-amber-500/10'
+                            }`}>
+                              {article.importance}
+                            </span>
+                          )}
+                        </div>
+                        {article.articleSummary && (
+                          <p className="text-xs text-slate-400 mt-2 leading-relaxed line-clamp-2">{article.articleSummary}</p>
+                        )}
+                        {article.ftiRelevanceTags.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {article.ftiRelevanceTags.map(tag => (
+                              <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-indigo-900/20 border border-indigo-500/20 text-indigo-400 font-medium">
+                                {tag.replace('_', ' ')}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </>
             )}
           </div>
         )}

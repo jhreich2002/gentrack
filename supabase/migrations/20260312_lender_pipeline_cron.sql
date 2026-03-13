@@ -28,7 +28,7 @@ SELECT cron.schedule(
         'Content-Type', 'application/json',
         'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key')
       ),
-      body    := '{"plantCount": 30}'::jsonb
+      body    := '{"plantCount": 300}'::jsonb
     ) AS request_id;
   $$
 );

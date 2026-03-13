@@ -72,6 +72,7 @@ interface RankedArticle {
   categories: string[];
   tags: string[];
   article_summary: string | null;
+  lender_entity_names?: string[];  // named financing counterparties for entity_company_names
 }
 
 interface RankingResult {
@@ -186,6 +187,9 @@ Rules:
 Categories (1–3): "refinancing", "credit_facility", "tax_equity", "sponsor_change", "project_sale", "credit_rating", "construction_financing", "ppa_offtake", "regulatory_impact", "default_risk"
 Tags: free-text strings — lender names, bank names, fund names, law firm names, deal amounts, instrument types, key counterparties.
 
+5b) NAMED FINANCING ENTITIES
+For articles where asset_linkage_tier is "high" or "medium", extract lender_entity_names: a flat array of all NAMED financial institutions or investors mentioned as financing counterparties (lenders, tax equity investors, sponsors, co-investors). Only include real named entities — no generic terms like "a bank" or "the lender". These will be used to index the article for entity search.
+
 6) ARTICLE SUMMARIES
 For each article where include_for_embedding = true, produce article_summary (1–3 sentences): what financing event occurred, which parties are involved, how it affects THIS plant's capital structure or credit profile. Concise, neutral, information-dense.
 
@@ -219,7 +223,8 @@ Return ONLY valid JSON (no markdown fences, no commentary):
       "include_for_embedding": true_or_false,
       "categories": ["...", "..."],
       "tags": ["...", "..."],
-      "article_summary": "..." 
+      "lender_entity_names": ["JPMorgan Chase", "US Bancorp"],
+      "article_summary": "..."
     }
   ],
   "plant_summary": "..."
@@ -425,6 +430,24 @@ async function persistRankings(
     } else {
       updated++;
     }
+
+    // Populate entity_company_names for high/medium articles so they feed into entity scoring
+    if (a.asset_linkage_tier !== 'none' && a.lender_entity_names && a.lender_entity_names.length > 0) {
+      // Fetch existing names and merge
+      const { data: existing } = await sb
+        .from('news_articles')
+        .select('entity_company_names')
+        .eq('id', a.id)
+        .single();
+
+      const existingNames: string[] = (existing?.entity_company_names as string[]) ?? [];
+      const merged = [...new Set([...existingNames, ...a.lender_entity_names.map((n: string) => n.trim()).filter((n: string) => n.length >= 3)])];
+
+      await sb
+        .from('news_articles')
+        .update({ entity_company_names: merged })
+        .eq('id', a.id);
+    }
   }
 
   // Upsert plant_news_state with financing summary
@@ -550,10 +573,11 @@ Deno.serve(async (req: Request) => {
         await new Promise(r => setTimeout(r, 1000));
       }
 
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
       // Chain to embed-articles if any articles were included for embedding
       if (totalIncluded > 0) {
-        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-        const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         console.log(`Chaining to embed-articles (${totalIncluded} financing articles included for embedding)`);
         fetch(`${supabaseUrl}/functions/v1/embed-articles`, {
           method: 'POST',
@@ -564,6 +588,17 @@ Deno.serve(async (req: Request) => {
           body: JSON.stringify({}),
         }).catch(err => console.error('Chain to embed-articles failed:', err));
       }
+
+      // Always chain to lender-extract to process high/medium articles into plant_lenders
+      console.log('Chaining to lender-extract');
+      fetch(`${supabaseUrl}/functions/v1/lender-extract`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${serviceRoleKey}`,
+        },
+        body: JSON.stringify({}),
+      }).catch(err => console.error('Chain to lender-extract failed:', err));
 
       return new Response(JSON.stringify({ ok: true, results }), { headers: CORS });
     } catch (err) {

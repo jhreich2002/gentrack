@@ -165,6 +165,72 @@ export interface CompanyStats {
   analysisText:          string | null;
   analysisAngleBullets:  string[];
   analysisUpdatedAt:     string | null;
+  portfolioSynopsis:     string | null;  // per-asset breakdown from company-analyze
+}
+
+// ── Entity Stats (Lenders & Tax Equity Investors) ────────────────────────────
+
+/** Nightly-computed aggregate for a lender entity from plant_lenders. */
+export interface LenderStats {
+  lenderName:          string;
+  assetCount:          number;
+  totalExposureUsd:    number | null;
+  plantCodes:          string[];
+  facilityTypes:       string[];
+  avgPlantCf:          number | null;
+  pctCurtailed:        number;
+  newsSentimentScore:  number | null;  // 0–100 (% positive articles × 100)
+  distressScore:       number | null;  // 0–100 composite
+  relevanceScores:     Record<string, number>;  // { restructuring, transactions, ... }
+  analysisText:        string | null;
+  analysisAngleBullets: string[];
+  analysisUpdatedAt:   string | null;
+  portfolioSynopsis:   string | null;  // per-asset breakdown from lender-analyze
+  lastNewsDate:        string | null;
+  computedAt:          string;
+}
+
+/** Nightly-computed aggregate for a tax equity investor from plant_lenders. */
+export interface TaxEquityStats {
+  investorName:          string;
+  assetCount:            number;
+  totalCommittedUsd:     number | null;
+  plantCodes:            string[];
+  portfolioAvgCf:        number | null;
+  portfolioBenchmarkCf:  number | null;  // weighted regional avg
+  pctCurtailed:          number;
+  newsSentimentScore:    number | null;
+  distressScore:         number | null;
+  relevanceScores:       Record<string, number>;
+  analysisText:          string | null;
+  analysisAngleBullets:  string[];
+  analysisUpdatedAt:     string | null;
+  portfolioSynopsis:     string | null;  // per-asset breakdown from tax-equity-analyze
+  lastNewsDate:          string | null;
+  computedAt:            string;
+}
+
+/** Unified opportunity item for the Opportunities tab. */
+export interface OpportunityItem {
+  entityId:       string;   // lenderName | investorName | ult_parent_name | eia_plant_code
+  entityType:     'plant' | 'owner' | 'tax_equity' | 'lender';
+  entityName:     string;
+  opportunityScore: number;       // 0–100 composite
+  distressScore:  number | null;
+  keySignal:      string | null;  // top recent headline or distress reason
+  dollarsAtRisk:  number | null;  // total_exposure_usd or total_committed_usd or null
+  lastNewsDate:   string | null;
+  ftiServiceLines: string[];      // e.g. ['restructuring', 'disputes']
+}
+
+// ── Response types for entity analyze edge functions ─────────────────────────
+
+export interface EntityAnalysisResponse {
+  analysisText:        string;
+  analysisAngleBullets: string[];
+  portfolioSynopsis:   string | null;
+  analysisUpdatedAt:   string;
+  fromCache:           boolean;
 }
 
 export interface PlantOwnership {

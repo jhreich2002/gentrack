@@ -232,6 +232,7 @@ async function loadTopCurtailedPlants(
   plantCount: number,
   offset: number,
   limit: number,
+  tier?: string,
 ): Promise<{ plants: PlantInfo[]; totalEligible: number }> {
   const { data: maxRow } = await sb
     .from('monthly_generation')
@@ -241,7 +242,7 @@ async function loadTopCurtailedPlants(
     .limit(1);
 
   const latestMonth = maxRow?.[0]?.month ?? '2025-11';
-  console.log(`Latest generation month: ${latestMonth}`);
+  console.log(`Latest generation month: ${latestMonth} (tier=${tier ?? 'A'})`);
 
   const { data: genData } = await sb
     .from('monthly_generation')
@@ -251,25 +252,35 @@ async function loadTopCurtailedPlants(
 
   const eligibleIds = new Set((genData ?? []).map((r: { plant_id: string }) => r.plant_id));
 
-  const { data: plantsData, error } = await sb
+  let plantsQuery = sb
     .from('plants')
     .select('id, eia_plant_code, name, owner, state, fuel_source, curtailment_score, nameplate_capacity_mw')
-    .eq('is_likely_curtailed', true)
     .eq('is_maintenance_offline', false)
     .eq('trailing_zero_months', 0)
     .neq('eia_plant_code', '99999')
     .not('owner', 'is', null)
-    .order('curtailment_score', { ascending: false })
-    .order('nameplate_capacity_mw', { ascending: false })
     .limit(10000);
 
+  if (tier === 'B') {
+    plantsQuery = plantsQuery
+      .eq('is_likely_curtailed', false)
+      .gte('nameplate_capacity_mw', 200)
+      .order('nameplate_capacity_mw', { ascending: false });
+  } else {
+    plantsQuery = plantsQuery
+      .eq('is_likely_curtailed', true)
+      .order('curtailment_score', { ascending: false })
+      .order('nameplate_capacity_mw', { ascending: false });
+  }
+
+  const { data: plantsData, error } = await plantsQuery;
   if (error) throw new Error(`Failed to load plants: ${error.message}`);
 
   const all = (plantsData ?? []).filter((p: { id: string }) => eligibleIds.has(p.id));
   const totalEligible = Math.min(all.length, plantCount);
   const batch = all.slice(offset, Math.min(offset + limit, plantCount));
 
-  console.log(`Eligible curtailed: ${all.length}, plantCount cap: ${plantCount}, batch offset=${offset} limit=${limit} → ${batch.length} plants this call`);
+  console.log(`Eligible (tier ${tier ?? 'A'}): ${all.length}, plantCount cap: ${plantCount}, batch offset=${offset} limit=${limit} → ${batch.length} plants this call`);
 
   return { plants: batch as PlantInfo[], totalEligible };
 }
@@ -686,7 +697,7 @@ Deno.serve(async (req: Request) => {
 
   const CORS = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
 
-  let body: { plantCount?: number; offset?: number; limit?: number };
+  let body: { plantCount?: number; offset?: number; limit?: number; tier?: string };
   try {
     body = await req.json();
   } catch {
@@ -696,12 +707,13 @@ Deno.serve(async (req: Request) => {
   const plantCount = body.plantCount ?? DEFAULT_PLANT_COUNT;
   const offset = body.offset ?? 0;
   const limit = body.limit ?? DEFAULT_BATCH_LIMIT;
+  const tier = body.tier;
 
   const sb = makeSupabase();
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 
   try {
-    const { plants, totalEligible } = await loadTopCurtailedPlants(sb, plantCount, offset, limit);
+    const { plants, totalEligible } = await loadTopCurtailedPlants(sb, plantCount, offset, limit, tier);
 
     if (plants.length === 0) {
       console.log('No plants in this batch — done.');
@@ -788,6 +800,7 @@ Deno.serve(async (req: Request) => {
         plantCount,
         offset: nextOffset,
         limit,
+        ...(tier ? { tier } : {}),
       });
     }
 

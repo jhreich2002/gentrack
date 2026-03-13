@@ -12,7 +12,7 @@
 --
 -- Each step fires the next only when it has work to pass along.
 -- Self-batching: news-ingest processes 15 plants/call, auto-paginates.
--- Plant selection: top 30 curtailed plants with latest generation data.
+-- Plant selection: top 300 curtailed plants with latest generation data.
 -- Incremental: each plant checked only for articles since last_checked_at.
 -- ============================================================
 
@@ -62,7 +62,7 @@ SELECT cron.schedule(
         'Content-Type', 'application/json',
         'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key')
       ),
-      body    := '{"plantCount": 30}'::jsonb
+      body    := '{"plantCount": 300}'::jsonb
     ) AS request_id;
   $$
 );

@@ -59,11 +59,12 @@ export async function callFinancingSummarize(
 ): Promise<{ summary: string | null; deals: FinancingDeal[] }> {
   const empty = { summary: null, deals: [] };
   // Vite `define` replaces the bare token `process.env.GEMINI_API_KEY` at build time.
-  const apiKey = (import.meta as Record<string, Record<string, string>>).env?.VITE_GEMINI_API_KEY
-             ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY
-             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-             ?? (process as any).env.GEMINI_API_KEY
-             || undefined;
+  const apiKey = (
+    (import.meta as Record<string, Record<string, string>>).env?.VITE_GEMINI_API_KEY
+    ?? (import.meta as Record<string, Record<string, string>>).env?.GEMINI_API_KEY
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ?? (process as any).env.GEMINI_API_KEY
+  ) || undefined;
   if (!apiKey) return empty;
 
   const topArticles = articles.slice(0, 10);

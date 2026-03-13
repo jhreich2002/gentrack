@@ -158,6 +158,25 @@ Deno.serve(async (_req) => {
 
     const result = { ok: true, plantsRated: upserted, errors };
     console.log('compute-ratings complete:', result);
+
+    // ── Chain to refresh-entity-stats ─────────────────────────────────────────
+    if (upserted > 0) {
+      try {
+        const fnUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/refresh-entity-stats`;
+        fetch(fnUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+          },
+          body: '{}',
+        });
+        console.log('Chained refresh-entity-stats');
+      } catch (chainErr) {
+        console.warn('Chain to refresh-entity-stats failed (non-fatal):', chainErr);
+      }
+    }
+
     return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
 
   } catch (err) {
