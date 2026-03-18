@@ -567,14 +567,6 @@ const App: React.FC = () => {
                   }
                 </p>
               </div>
-              <button 
-                onClick={handleGenerateInsights}
-                disabled={analyzing}
-                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-all flex items-center gap-2 border border-blue-400/20"
-              >
-                {analyzing ? <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white"></div> : <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>}
-                AI ANALYTICS
-              </button>
             </header>
 
             <FilterControls 
