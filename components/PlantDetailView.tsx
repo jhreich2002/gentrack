@@ -848,7 +848,7 @@ const PlantDetailView: React.FC<Props> = ({
                             <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{article.sourceName}</span>
                             {article.publishedAt && (
                               <span className="text-[9px] text-slate-600">
-                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                                {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                               </span>
                             )}
                             {article.topics?.slice(0,2).map(t => (
@@ -1060,11 +1060,12 @@ const PlantDetailView: React.FC<Props> = ({
                             ) : (
                               <div className="text-sm font-bold text-slate-200 group-hover:text-white line-clamp-2 leading-snug">{article.title}</div>
                             )}
-                            {expandedArticleId === article.id && article.description ? (
+                            {article.articleSummary && (
+                              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed line-clamp-2">{article.articleSummary}</p>
+                            )}
+                            {expandedArticleId === article.id && article.description && (
                               <div className="text-xs text-slate-300 mt-2 leading-relaxed whitespace-pre-wrap">{article.description}</div>
-                            ) : article.description ? (
-                              <div className="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">{article.description}</div>
-                            ) : null}
+                            )}
                           </div>
                           <svg className={`w-4 h-4 shrink-0 text-slate-600 group-hover:text-slate-400 transition-all mt-0.5 ${expandedArticleId === article.id ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
                         </div>
@@ -1074,7 +1075,7 @@ const PlantDetailView: React.FC<Props> = ({
                           )}
                           <span className="text-[9px] text-slate-600">•</span>
                           <span className="text-[9px] text-slate-600">
-                            {article.publishedAt ? new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'Date unknown'}
+                            {article.publishedAt ? new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Date unknown'}
                           </span>
                           {(article.topics ?? []).map(t => (
                             <span key={t} className={`text-[9px] px-1.5 py-0.5 rounded border font-bold uppercase tracking-widest ${TOPIC_COLORS[t] ?? TOPIC_COLORS.other}`}>{t}</span>

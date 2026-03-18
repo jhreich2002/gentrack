@@ -164,6 +164,53 @@ async function loadPlants(
   return { plants: (plantsData ?? []) as PlantInfo[], totalEligible };
 }
 
+// ── Article metadata enrichment ────────────────────────────────────────────────
+
+const USER_AGENT = 'Mozilla/5.0 (compatible; Googlebot/2.1)';
+
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'");
+}
+
+async function fetchArticleMetadata(url: string): Promise<{
+  title: string | null;
+  published_at: string | null;
+  description: string | null;
+}> {
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return { title: null, published_at: null, description: null };
+    const html = await res.text();
+
+    const ogTitle    = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i)?.[1];
+    const tagTitle   = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1];
+    const title      = ogTitle || tagTitle || null;
+
+    const publishedMeta =
+      html.match(/<meta[^>]+property="article:published_time"[^>]+content="([^"]+)"/i)?.[1] ||
+      html.match(/<meta[^>]+name="publication_date"[^>]+content="([^"]+)"/i)?.[1] ||
+      html.match(/<time[^>]+datetime="([^"]+)"/i)?.[1];
+    const published_at = publishedMeta ? new Date(publishedMeta).toISOString() : null;
+
+    const ogDesc   = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]+)"/i)?.[1];
+    const metaDesc = html.match(/<meta[^>]+name="description"[^>]+content="([^"]+)"/i)?.[1];
+    const description = ogDesc || metaDesc || null;
+
+    return {
+      title:       title       ? decodeHtmlEntities(title.trim()).slice(0, 500)       : null,
+      published_at,
+      description: description ? decodeHtmlEntities(description.trim()).slice(0, 2000) : null,
+    };
+  } catch {
+    return { title: null, published_at: null, description: null };
+  }
+}
+
 // ── Save results ───────────────────────────────────────────────────────────────
 
 async function saveResults(
@@ -175,20 +222,23 @@ async function saveResults(
   const now = new Date().toISOString();
   let inserted = 0;
 
-  // 1. Insert each citation as a news_articles row
+  // 1. Insert each citation as a news_articles row, enriched with real metadata
   for (const url of citations) {
     const externalId = await sha256(url);
     let hostname = url;
     try { hostname = new URL(url).hostname.replace(/^www\./, ''); } catch { /* keep */ }
 
+    const meta = await fetchArticleMetadata(url);
+    console.log(`  [citation] ${hostname} → title: ${meta.title ? meta.title.slice(0, 60) : 'none'}, date: ${meta.published_at ?? 'none'}`);
+
     const { error } = await sb.from('news_articles').upsert({
       external_id:     externalId,
-      title:           hostname,   // will be enriched by downstream ranking
-      description:     null,
+      title:           meta.title ?? hostname,
+      description:     meta.description,
       content:         null,
       source_name:     hostname,
       url,
-      published_at:    null,
+      published_at:    meta.published_at,
       query_tag:       `news-search:${plant.eia_plant_code}`,
       plant_codes:     [plant.eia_plant_code],
       owner_names:     plant.owner ? [plant.owner] : [],
@@ -200,6 +250,7 @@ async function saveResults(
     }, { onConflict: 'external_id', ignoreDuplicates: true });
 
     if (!error) inserted++;
+    await sleep(300);
   }
 
   // 2. Save Perplexity overview as plant news summary
