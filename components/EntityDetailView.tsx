@@ -120,6 +120,19 @@ const EntityDetailView: React.FC<Props> = ({ entityName, entityType, onBack, onP
       setPlants(plantData);
       setLoadingPlants(false);
       setPlantsFetched(true);
+
+      // Auto-generate briefing if no cached analysis exists
+      if (!s?.analysisText) {
+        setLoadingAnalysis(true);
+        const result = entityType === 'lender'
+          ? await callLenderAnalyze(entityName)
+          : await callTaxEquityAnalyze(entityName);
+        if (result) {
+          setAnalysis(result);
+          if (result.portfolioSynopsis) setPortfolioSynopsis(result.portfolioSynopsis);
+        }
+        setLoadingAnalysis(false);
+      }
     });
   }, [entityName, entityType]);
 
