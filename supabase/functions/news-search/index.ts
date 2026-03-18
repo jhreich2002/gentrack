@@ -217,11 +217,12 @@ async function saveResults(
 
 function fireAndForget(url: string, body: Record<string, unknown>): void {
   const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-  fetch(url, {
+  const p = fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
     body:    JSON.stringify(body),
   }).catch(err => console.error('Chain call failed:', err));
+  EdgeRuntime.waitUntil(p);
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -284,8 +285,8 @@ Deno.serve(async (req: Request) => {
     const isLastBatch = nextOffset >= totalEligible;
 
     if (!isLastBatch) {
-      console.log(`Self-batching: next offset=${nextOffset}`);
-      fireAndForget(`${supabaseUrl}/functions/v1/news-search`, { plantCount, offset: nextOffset, limit });
+      console.log(`Self-batching: next call (offset=0, ${totalEligible - limit} remaining)`);
+      fireAndForget(`${supabaseUrl}/functions/v1/news-search`, { plantCount, offset: 0, limit });
     }
 
     return new Response(JSON.stringify({

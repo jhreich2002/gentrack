@@ -124,19 +124,59 @@ Deno.serve(async (req: Request) => {
     );
     console.log(`Loaded ${lendersFoundSet.size} plants with confirmed lenders`);
 
-    // ── 3b. Compute plant distress scores and upsert ──────────────────────────
+    // ── 3b. Load plant_news_state summaries (Perplexity prose) ───────────────
+    const summaryRows = await fetchAll<{
+      eia_plant_code: string;
+      summary_text: string | null;
+    }>(sb, 'plant_news_state', 'eia_plant_code, summary_text',
+      (q: any) => q.not('summary_text', 'is', null)
+    );
+
+    const NEG_TERMS = [
+      'curtailment','curtailed','curtailing','shutdown','shut down','shutting down',
+      'offline','taken offline','bankrupt','bankruptcy','default','defaulted',
+      'distress','financial distress','grid congestion','grid constraint',
+      'output reduction','reduced output','struggling','financial loss',
+      'halted','suspended operations','decommission','decommissioned',
+      'foreclosure','receivership','write-down','impairment',
+    ];
+    const POS_TERMS = [
+      'fully operational','record output','record generation','expanding',
+      'upgraded','refinanced','new ppa','long-term contract','repowered',
+    ];
+
+    function scoreSummary(text: string): number {
+      const lower = text.toLowerCase();
+      let score = 0;
+      for (const t of NEG_TERMS) if (lower.includes(t)) score += 4;
+      for (const t of POS_TERMS) if (lower.includes(t)) score -= 3;
+      return Math.max(0, Math.min(25, score));
+    }
+
+    const summaryRiskByCode = new Map<string, number>();
+    for (const r of summaryRows) {
+      if (r.summary_text) summaryRiskByCode.set(r.eia_plant_code, scoreSummary(r.summary_text));
+    }
+    console.log(`Loaded ${summaryRows.length} Perplexity news summaries for scoring`);
+
+    // ── 3c. Compute plant distress scores and upsert ──────────────────────────
     const plantDistress = new Map<string, number>();
     const plantDistressUpdates: { eia_plant_code: string; distress_score: number; pursuit_status: string | null }[] = [];
 
     for (const p of plantRows) {
       const curtailment  = p.curtailment_score ?? 0;
       const newsRisk     = ratingByCode.get(p.eia_plant_code) ?? 0;
+      const summaryRisk  = summaryRiskByCode.get(p.eia_plant_code);
       const lendersFound = lendersFoundSet.has(p.eia_plant_code);
 
-      // Base score: curtailment × 0.6 + news_risk × 0.4
-      // Lender bonus: confirmed lenders add +15 (capped at 100) since it makes the
-      // plant actionable — you can identify who to contact
-      const base    = curtailment * 0.6 + newsRisk * 0.4;
+      // Base: curtailment × 0.6 + news_risk × 0.4
+      // If a Perplexity summary exists, blend it in (replacing some of the news weight)
+      // to incorporate all news sources: curtailment × 0.5 + rssNews × 0.3 + summaryRisk × 0.2
+      const base = summaryRisk != null
+        ? curtailment * 0.5 + newsRisk * 0.3 + summaryRisk * 0.2
+        : curtailment * 0.6 + newsRisk * 0.4;
+
+      // Lender bonus: +15 if confirmed lenders (plant is actionable)
       const bonus   = lendersFound ? 15 : 0;
       const distress = parseFloat(Math.min(100, base + bonus).toFixed(2));
 
