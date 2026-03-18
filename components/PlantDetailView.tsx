@@ -1,12 +1,12 @@
 
 import React, { useEffect, useState } from 'react';
-import { PowerPlant, CapacityFactorStats, FuelSource, PlantOwner, PlantOwnership, NewsArticle, PlantNewsRating, FinancingDeal } from '../types';
+import { PowerPlant, CapacityFactorStats, FuelSource, PlantOwnership, NewsArticle, PlantNewsRating } from '../types';
 import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } from '../constants';
 import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
 import { fetchPlantOwnership } from '../services/ownershipService';
 import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse, semanticSearchPlantNews, SemanticSearchResult } from '../services/newsIntelService';
-import { fetchPlantFinancingArticles, callFinancingSummarize } from '../services/lenderService';
+import { fetchPlantFinancingSummary, PlantFinancingSummary, PlantLenderRow } from '../services/lenderService';
 import { getGlobalLatestMonth } from '../services/dataService';
 
 interface Props {
@@ -60,32 +60,19 @@ const PlantDetailView: React.FC<Props> = ({
   const [expandedArticleId, setExpandedArticleId] = useState<string | null>(null);
 
   // ── Lender / Financing Data ──────────────────────────────────────────────
-  const [financingArticles, setFinancingArticles] = useState<NewsArticle[]>([]);
   const [loadingFinancing, setLoadingFinancing] = useState(false);
   const [financingFetched, setFinancingFetched] = useState(false);
-  const [financingSummary, setFinancingSummary] = useState<string | null>(null);
-  const [financingDeals, setFinancingDeals] = useState<FinancingDeal[]>([]);
-  const [loadingFinancingSummary, setLoadingFinancingSummary] = useState(false);
+  const [financing, setFinancing] = useState<PlantFinancingSummary | null>(null);
+  const [financingLenders, setFinancingLenders] = useState<PlantLenderRow[]>([]);
 
   const handleLoadLenders = async () => {
     if (loadingFinancing || financingFetched) return;
     setLoadingFinancing(true);
-
-    const ownerName = (plant.owners?.[0] as PlantOwner | undefined)?.name ?? plant.owner ?? '';
-    const articles = await fetchPlantFinancingArticles(plant.eiaPlantCode);
-    setFinancingArticles(articles);
+    const { financing: f, lenders } = await fetchPlantFinancingSummary(plant.eiaPlantCode);
+    setFinancing(f);
+    setFinancingLenders(lenders);
     setLoadingFinancing(false);
     setFinancingFetched(true);
-
-    if (articles.length > 0) {
-      setLoadingFinancingSummary(true);
-      callFinancingSummarize({ name: plant.name, owner: ownerName }, articles)
-        .then(({ summary, deals }) => {
-          setFinancingSummary(summary);
-          setFinancingDeals(deals);
-          setLoadingFinancingSummary(false);
-        });
-    }
   };
 
   // ── Semantic Search ──────────────────────────────────────────────────────
@@ -1142,16 +1129,9 @@ const PlantDetailView: React.FC<Props> = ({
         {/* ── Financing Tab ─────────────────────────────────────────── */}
         {activeTab === 'lenders' && (
           <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Financing & Lender Intelligence</h3>
-                <p className="text-[10px] text-slate-600 mt-1">Sourced from financing-focused news pipeline (monthly)</p>
-              </div>
-              {financingFetched && (
-                <div className="text-[10px] text-slate-500 font-bold">
-                  {financingArticles.length} {financingArticles.length === 1 ? 'ARTICLE' : 'ARTICLES'}
-                </div>
-              )}
+            <div>
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Financing & Lender Intelligence</h3>
+              <p className="text-[10px] text-slate-600 mt-1">Sourced from Perplexity sonar-pro web search</p>
             </div>
 
             {/* Loading state */}
@@ -1162,168 +1142,109 @@ const PlantDetailView: React.FC<Props> = ({
               </div>
             )}
 
-            {/* AI Financing Summary */}
-            {loadingFinancingSummary && (
-              <div className="flex items-center gap-2 text-slate-500 text-xs py-2">
-                <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-violet-500"></div>
-                <span>Generating financing synthesis…</span>
-              </div>
-            )}
-            {financingSummary && !loadingFinancingSummary && (
-              <div className="bg-violet-950/20 border border-violet-800/30 rounded-xl p-5">
-                <div className="text-[10px] text-violet-400 font-black uppercase tracking-widest mb-2">AI Financing Summary</div>
-                <p className="text-sm text-slate-300 leading-relaxed italic">{financingSummary}</p>
-              </div>
-            )}
-
-            {/* Financing Deals Table */}
-            {financingDeals.length > 0 && (
-              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                <div className="px-5 py-3 border-b border-slate-800">
-                  <h4 className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Extracted Financing Deals</h4>
-                </div>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-800/60">
-                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Amount</th>
-                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Type</th>
-                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Lender / Investor</th>
-                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Source</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {financingDeals.map((deal, i) => (
-                      <tr key={i} className="border-b border-slate-800/30 last:border-b-0 hover:bg-slate-800/30 transition-colors">
-                        <td className="px-5 py-3 text-slate-200 font-bold whitespace-nowrap">{deal.amount}</td>
-                        <td className="px-5 py-3">
-                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-widest ${
-                            deal.type.toLowerCase().includes('tax equity') ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
-                            deal.type.toLowerCase().includes('credit') || deal.type.toLowerCase().includes('loan') ? 'text-sky-400 bg-sky-900/20 border-sky-700/30' :
-                            deal.type.toLowerCase().includes('refinanc') ? 'text-blue-400 bg-blue-900/20 border-blue-700/30' :
-                            deal.type.toLowerCase().includes('bankrupt') || deal.type.toLowerCase().includes('default') ? 'text-red-400 bg-red-900/20 border-red-700/30' :
-                            deal.type.toLowerCase().includes('sale') ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
-                            deal.type.toLowerCase().includes('ppa') ? 'text-green-400 bg-green-900/20 border-green-700/30' :
-                            deal.type.toLowerCase().includes('construction') ? 'text-teal-400 bg-teal-900/20 border-teal-700/30' :
-                            'text-slate-400 bg-slate-800/40 border-slate-700/30'
-                          }`}>
-                            {deal.type}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3 text-slate-300">{deal.lenderInvestor}</td>
-                        <td className="px-5 py-3">
-                          <a href={deal.sourceUrl} target="_blank" rel="noopener noreferrer"
-                             className="text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2 line-clamp-1">
-                            {deal.sourceTitle.length > 50 ? deal.sourceTitle.slice(0, 50) + '…' : deal.sourceTitle}
-                          </a>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Empty state */}
-            {financingFetched && financingArticles.length === 0 && !loadingFinancing && (
+            {/* Not yet searched */}
+            {financingFetched && !financing && !loadingFinancing && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center">
-                <svg className="w-10 h-10 mx-auto text-slate-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <p className="text-slate-500 text-sm font-semibold">No financing articles found</p>
-                <p className="text-slate-600 text-xs mt-1">The lender pipeline has not yet ingested articles for this plant, or no financing-related news was identified.</p>
+                <p className="text-slate-500 text-sm font-semibold">Not yet searched</p>
+                <p className="text-slate-600 text-xs mt-1">This plant has not been processed by the lender-search pipeline yet.</p>
               </div>
             )}
 
-            {/* Financing article cards */}
-            {financingFetched && financingArticles.length > 0 && (
-              <div className="space-y-3">
-                {financingArticles.map(article => {
-                  const categoryColors: Record<string, string> = {
-                    refinancing: 'text-blue-400 bg-blue-900/20 border-blue-700/30',
-                    credit_facility: 'text-sky-400 bg-sky-900/20 border-sky-700/30',
-                    tax_equity: 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30',
-                    sponsor_change: 'text-violet-400 bg-violet-900/20 border-violet-700/30',
-                    project_sale: 'text-amber-400 bg-amber-900/20 border-amber-700/30',
-                    credit_rating: 'text-orange-400 bg-orange-900/20 border-orange-700/30',
-                    construction_financing: 'text-teal-400 bg-teal-900/20 border-teal-700/30',
-                    ppa_offtake: 'text-green-400 bg-green-900/20 border-green-700/30',
-                    regulatory_impact: 'text-rose-400 bg-rose-900/20 border-rose-700/30',
-                    default_risk: 'text-red-400 bg-red-900/20 border-red-700/30',
-                  };
-
-                  const tierColor = article.assetLinkageTier === 'high'
-                    ? 'text-green-400 bg-green-900/20 border-green-700/30'
-                    : article.assetLinkageTier === 'medium'
-                      ? 'text-amber-400 bg-amber-900/20 border-amber-700/30'
-                      : 'text-slate-500 bg-slate-800/40 border-slate-700/30';
-
-                  return (
-                    <div key={article.id} className={`flex flex-col p-4 rounded-xl border transition-all hover:border-slate-600/60 ${
-                      article.sentimentLabel === 'negative' ? 'bg-red-950/10 border-red-900/30' :
-                      article.sentimentLabel === 'positive' ? 'bg-emerald-950/10 border-emerald-900/30' :
-                      'bg-slate-800/20 border-slate-700/40'
-                    }`}>
-                      {/* Title row */}
-                      <div className="flex items-start justify-between gap-3 mb-1.5">
-                        <a href={article.url} target="_blank" rel="noopener noreferrer"
-                           className="text-sm font-bold text-slate-200 hover:text-white leading-snug line-clamp-2 flex-1">
-                          {article.title}
-                        </a>
-                        {article.assetLinkageTier && article.assetLinkageTier !== 'none' && (
-                          <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded border uppercase tracking-wide ${tierColor}`}>
-                            {article.assetLinkageTier}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Summary or description */}
-                      {(article.articleSummary || article.description) && (
-                        <p className="text-xs text-slate-500 leading-relaxed line-clamp-3 mb-2">
-                          {article.articleSummary ?? article.description}
-                        </p>
-                      )}
-
-                      {/* Meta row */}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {article.sourceName && (
-                          <span className="text-[10px] text-slate-600 font-medium">{article.sourceName}</span>
-                        )}
-                        {article.publishedAt && (
-                          <>
-                            <span className="text-[10px] text-slate-700">•</span>
-                            <span className="text-[10px] text-slate-700">
-                              {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                            </span>
-                          </>
-                        )}
-                        {article.relevanceScore != null && (
-                          <>
-                            <span className="text-[10px] text-slate-700">•</span>
-                            <span className="text-[10px] text-slate-600 font-bold">{(article.relevanceScore * 100).toFixed(0)}% relevant</span>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Categories + tags */}
-                      {((article.categories && article.categories.length > 0) || (article.tags && article.tags.length > 0) || (article.lenders && article.lenders.length > 0)) && (
-                        <div className="flex items-center gap-1.5 flex-wrap mt-2 pt-2 border-t border-slate-800/40">
-                          {(article.categories ?? []).map(c => (
-                            <span key={c} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-widest ${categoryColors[c] ?? 'text-slate-400 bg-slate-800/40 border-slate-700/30'}`}>
-                              {c.replace(/_/g, ' ')}
-                            </span>
-                          ))}
-                          {(article.lenders ?? []).map((l: string) => (
-                            <span key={l} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/30">{l}</span>
-                          ))}
-                          {(article.tags ?? []).slice(0, 4).map(t => (
-                            <span key={t} className="text-[8px] px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-400 border border-slate-600/30 font-bold">{t}</span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+            {/* No lenders found */}
+            {financingFetched && financing && !financing.lendersFound && !loadingFinancing && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center">
+                <p className="text-slate-500 text-sm font-semibold">No public financing data found</p>
+                <p className="text-slate-600 text-xs mt-1">Perplexity search found no press releases or announcements about this plant's debt or equity financing.</p>
+                {financing.searchedAt && (
+                  <p className="text-slate-700 text-[10px] mt-2">Searched {new Date(financing.searchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                )}
               </div>
+            )}
+
+            {/* Lenders found */}
+            {financingFetched && financing?.lendersFound && !loadingFinancing && (
+              <>
+                {/* AI Summary */}
+                {financing.summary && (
+                  <div className="bg-violet-950/20 border border-violet-800/30 rounded-xl p-5">
+                    <div className="text-[10px] text-violet-400 font-black uppercase tracking-widest mb-2">AI Financing Summary</div>
+                    <p className="text-sm text-slate-300 leading-relaxed">{financing.summary}</p>
+                  </div>
+                )}
+
+                {/* Financing Parties Table */}
+                {financingLenders.length > 0 && (
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="px-5 py-3 border-b border-slate-800">
+                      <h4 className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Financing Parties</h4>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-800/60">
+                          <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Party</th>
+                          <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Role</th>
+                          <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Type</th>
+                          <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Confidence</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {financingLenders.map((l, i) => (
+                          <tr key={i} className="border-b border-slate-800/30 last:border-b-0 hover:bg-slate-800/30 transition-colors">
+                            <td className="px-5 py-3">
+                              <div className="text-slate-200 font-semibold">{l.lenderName}</div>
+                              {l.notes && <div className="text-[10px] text-slate-500 mt-0.5 leading-snug max-w-xs">{l.notes}</div>}
+                            </td>
+                            <td className="px-5 py-3">
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-widest ${
+                                l.role === 'tax_equity'   ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
+                                l.role === 'lender'       ? 'text-sky-400 bg-sky-900/20 border-sky-700/30' :
+                                l.role === 'sponsor'      ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
+                                l.role === 'co-investor'  ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
+                                'text-slate-400 bg-slate-800/40 border-slate-700/30'
+                              }`}>
+                                {l.role.replace(/_/g, ' ')}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3 text-slate-400 text-xs">{l.facilityType.replace(/_/g, ' ')}</td>
+                            <td className="px-5 py-3">
+                              <span className={`text-[9px] font-bold uppercase ${
+                                l.confidence === 'high'   ? 'text-green-400' :
+                                l.confidence === 'medium' ? 'text-amber-400' :
+                                'text-slate-500'
+                              }`}>{l.confidence}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Citations */}
+                {financing.citations.length > 0 && (
+                  <div>
+                    <div className="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-2">Sources</div>
+                    <div className="space-y-1.5">
+                      {financing.citations.map((c, i) => {
+                        let display = c.title;
+                        if (!display || display === c.url) {
+                          try { display = new URL(c.url).hostname; } catch { display = c.url; }
+                        }
+                        return (
+                          <a key={i} href={c.url} target="_blank" rel="noopener noreferrer"
+                             className="flex items-center gap-2 text-xs text-blue-400 hover:text-blue-300 transition-colors group">
+                            <span className="text-slate-600 shrink-0">{i + 1}.</span>
+                            <span className="underline underline-offset-2 line-clamp-1">{display}</span>
+                            <svg className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </a>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

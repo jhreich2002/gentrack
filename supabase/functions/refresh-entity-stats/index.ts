@@ -113,16 +113,45 @@ Deno.serve(async (req: Request) => {
     }
     console.log(`Loaded ${ratingRows.length} plant ratings`);
 
-    // ── 3. Compute plant distress scores and upsert ───────────────────────────
+    // ── 3a. Load plant_financing_summary (lenders_found) ─────────────────────
+    const financingRows = await fetchAll<{
+      eia_plant_code: string;
+      lenders_found: boolean;
+    }>(sb, 'plant_financing_summary', 'eia_plant_code, lenders_found');
+
+    const lendersFoundSet = new Set<string>(
+      financingRows.filter(r => r.lenders_found).map(r => r.eia_plant_code)
+    );
+    console.log(`Loaded ${lendersFoundSet.size} plants with confirmed lenders`);
+
+    // ── 3b. Compute plant distress scores and upsert ──────────────────────────
     const plantDistress = new Map<string, number>();
-    const plantDistressUpdates: { eia_plant_code: string; distress_score: number }[] = [];
+    const plantDistressUpdates: { eia_plant_code: string; distress_score: number; pursuit_status: string | null }[] = [];
 
     for (const p of plantRows) {
-      const curtailment = p.curtailment_score ?? 0;
-      const newsRisk    = ratingByCode.get(p.eia_plant_code) ?? 0;
-      const distress    = parseFloat((curtailment * 0.6 + newsRisk * 0.4).toFixed(2));
+      const curtailment  = p.curtailment_score ?? 0;
+      const newsRisk     = ratingByCode.get(p.eia_plant_code) ?? 0;
+      const lendersFound = lendersFoundSet.has(p.eia_plant_code);
+
+      // Base score: curtailment × 0.6 + news_risk × 0.4
+      // Lender bonus: confirmed lenders add +15 (capped at 100) since it makes the
+      // plant actionable — you can identify who to contact
+      const base    = curtailment * 0.6 + newsRisk * 0.4;
+      const bonus   = lendersFound ? 15 : 0;
+      const distress = parseFloat(Math.min(100, base + bonus).toFixed(2));
+
+      // pursuit_status assignment
+      let pursuitStatus: string | null = null;
+      if (p.is_likely_curtailed && lendersFound) {
+        pursuitStatus = distress >= 70 ? 'active' : distress >= 40 ? 'watch' : 'skip';
+      }
+
       plantDistress.set(p.eia_plant_code, distress);
-      plantDistressUpdates.push({ eia_plant_code: p.eia_plant_code, distress_score: distress });
+      plantDistressUpdates.push({
+        eia_plant_code: p.eia_plant_code,
+        distress_score: distress,
+        pursuit_status: pursuitStatus,
+      });
     }
 
     // Upsert plant distress scores in batches
@@ -133,7 +162,7 @@ Deno.serve(async (req: Request) => {
         .upsert(batch, { onConflict: 'eia_plant_code' });
       if (error) console.error(`plant distress upsert error: ${error.message}`);
     }
-    console.log(`Updated distress_score for ${plantDistressUpdates.length} plants`);
+    console.log(`Updated distress_score for ${plantDistressUpdates.length} plants (${lendersFoundSet.size} with lender bonus)`);
 
     // ── 4. Compute regional benchmark CF (avg by region) ─────────────────────
     const regionCfSum   = new Map<string, number>();

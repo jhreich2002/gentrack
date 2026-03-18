@@ -3,10 +3,64 @@
  *
  * Fetches financing/lender articles from news_articles (pipeline = 'financing')
  * and generates AI financing summaries. Populated by the lender-ingest edge function.
+ *
+ * Also fetches Perplexity-sourced financing data from plant_financing_summary + plant_lenders.
  */
 
 import { supabase } from './supabaseClient';
 import type { FinancingDeal } from '../types';
+
+export interface PlantFinancingSummary {
+  summary:      string;
+  citations:    { url: string; title: string; snippet: string }[];
+  lendersFound: boolean;
+  searchedAt:   string | null;
+}
+
+export interface PlantLenderRow {
+  lenderName:   string;
+  role:         string;
+  facilityType: string;
+  confidence:   string;
+  notes:        string | null;
+}
+
+export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<{
+  financing: PlantFinancingSummary | null;
+  lenders:   PlantLenderRow[];
+}> {
+  const [summaryRes, lendersRes] = await Promise.all([
+    supabase
+      .from('plant_financing_summary')
+      .select('summary, citations, lenders_found, searched_at')
+      .eq('eia_plant_code', eiaPlantCode)
+      .maybeSingle(),
+    supabase
+      .from('plant_lenders')
+      .select('lender_name, role, facility_type, confidence, notes')
+      .eq('eia_plant_code', eiaPlantCode)
+      .in('confidence', ['high', 'medium'])
+      .order('confidence', { ascending: true }),
+  ]);
+
+  const row = summaryRes.data;
+  const financing: PlantFinancingSummary | null = row ? {
+    summary:      row.summary ?? '',
+    citations:    Array.isArray(row.citations) ? row.citations : [],
+    lendersFound: row.lenders_found ?? false,
+    searchedAt:   row.searched_at ?? null,
+  } : null;
+
+  const lenders: PlantLenderRow[] = (lendersRes.data ?? []).map((r: Record<string, string | null>) => ({
+    lenderName:   r.lender_name as string,
+    role:         r.role as string,
+    facilityType: r.facility_type as string,
+    confidence:   r.confidence as string,
+    notes:        r.notes ?? null,
+  }));
+
+  return { financing, lenders };
+}
 
 export async function fetchPlantFinancingArticles(eiaPlantCode: string): Promise<import('../types').NewsArticle[]> {
   const { data, error } = await supabase

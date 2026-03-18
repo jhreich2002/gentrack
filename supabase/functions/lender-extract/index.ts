@@ -25,7 +25,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const DEFAULT_BATCH_SIZE = 30;
 const DELAY_BETWEEN_CALLS_MS = 500;
 
@@ -194,6 +194,7 @@ async function persistExtractions(
       const row = {
         eia_plant_code:     plantCode,
         lender_name:        cp.name,
+        role:               cp.role,
         facility_type:      cp.facility_type,
         loan_amount_usd:    null,  // never store dollar amounts
         interest_rate_text: null,

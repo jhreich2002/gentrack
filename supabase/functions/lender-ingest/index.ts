@@ -31,9 +31,9 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const DEFAULT_PLANT_COUNT = 30;
+const DEFAULT_PLANT_COUNT = 9999;
 const DEFAULT_BATCH_LIMIT = 15;       // plants per edge function call
-const MAX_ARTICLES_PER_SOURCE = 15;
+const MAX_ARTICLES_PER_SOURCE = 30;
 const UPSERT_BATCH_SIZE = 50;
 const DELAY_BETWEEN_PLANTS_MS = 800;
 const DELAY_BETWEEN_QUERIES_MS = 1000;
@@ -213,6 +213,14 @@ function buildNameVariants(name: string): string[] {
     }
   }
 
+  // Strip trailing corporate suffixes for broader matching
+  // e.g. "Waxdale Energy LLC" → "Waxdale Energy"
+  const CORP_SUFFIXES = /\s+(LLC|L\.L\.C\.|Inc\.?|L\.P\.|LP|Ltd\.?|Co\.?)$/i;
+  const corpStripped = variants[0].replace(CORP_SUFFIXES, '').trim();
+  if (corpStripped !== variants[0] && !variants.includes(corpStripped)) {
+    variants.push(corpStripped);
+  }
+
   return variants;
 }
 
@@ -326,28 +334,37 @@ async function fetchGoogleRSS(
   plant: PlantInfo,
   afterDate: string | null,
 ): Promise<RawArticle[]> {
-  const fuel = fuelLabel(plant.fuel_source);
-  const financingTerms = 'financing OR lender OR "tax equity" OR refinancing OR "credit facility"';
   const nameVariants = buildNameVariants(plant.name);
 
-  // Build queries from name variants:
-  //   1. Exact quoted name + fuel + financing terms
-  //   2. Stripped-suffix quoted name + fuel + financing terms (if different)
-  //   3. Unquoted base name + state for broader reach with disambiguation
+  // Single-term queries per name variant — avoids broken OR chains where Google interprets
+  // `"Plant Name" solar financing OR lender OR "tax equity"` as
+  // ("Plant Name" solar financing) OR (lender) OR ("tax equity"), flooding results with
+  // unrelated articles. One focused term per query gives much higher precision.
   const queries: string[] = [];
   const afterClause = afterDate ? ` after:${afterDate}` : '';
 
-  // Query 1: exact quoted name
-  queries.push(`"${nameVariants[0]}" ${fuel} ${financingTerms}${afterClause}`);
+  // Exact quoted name — four focused terms
+  queries.push(`"${nameVariants[0]}" lender${afterClause}`);
+  queries.push(`"${nameVariants[0]}" "tax equity"${afterClause}`);
+  queries.push(`"${nameVariants[0]}" financing${afterClause}`);
+  queries.push(`"${nameVariants[0]}" "financial close"${afterClause}`);
 
-  // Query 2: stripped suffix (if we have one)
-  if (nameVariants.length >= 2) {
-    queries.push(`"${nameVariants[1]}" ${fuel} ${financingTerms}${afterClause}`);
+  // Additional financing terms
+  queries.push(`"${nameVariants[0]}" "construction loan"${afterClause}`);
+  queries.push(`"${nameVariants[0]}" "project finance"${afterClause}`);
+  queries.push(`"${nameVariants[0]}" refinancing${afterClause}`);
+
+  // Stripped-suffix variant (e.g., "Appaloosa Solar" from "Appaloosa Solar I") if different
+  if (nameVariants.length >= 2 && nameVariants[1] !== nameVariants[0]) {
+    queries.push(`"${nameVariants[1]}" lender${afterClause}`);
+    queries.push(`"${nameVariants[1]}" "tax equity"${afterClause}`);
   }
 
-  // Query 3: unquoted base name + state for broadest match
-  const baseName = nameVariants.length >= 2 ? nameVariants[1] : nameVariants[0];
-  queries.push(`${baseName} ${plant.state} ${fuel} financing OR lender OR "tax equity"${afterClause}`);
+  // Press release wire services — Google deeply indexes their archives (historical coverage)
+  // site: queries bypass the Google News RSS recency cap for high-authority sources
+  queries.push(`"${nameVariants[0]}" site:businesswire.com`);
+  queries.push(`"${nameVariants[0]}" site:prnewswire.com`);
+  queries.push(`"${nameVariants[0]}" site:globenewswire.com`);
 
   console.log(`  [google] ${queries.length} queries for ${plant.name}`);
 
@@ -424,63 +441,75 @@ async function fetchGoogleRSSOwnerFallback(
   plant: PlantInfo,
   afterDate: string | null,
 ): Promise<RawArticle[]> {
-  const fuel = fuelLabel(plant.fuel_source);
-  const ownerQuery = afterDate
-    ? `"${plant.owner}" ${fuel} ${plant.state} financing OR lender OR "tax equity" after:${afterDate}`
-    : `"${plant.owner}" ${fuel} ${plant.state} financing OR lender OR "tax equity"`;
+  const afterClause = afterDate ? ` after:${afterDate}` : '';
+
+  // Two focused queries instead of one broken OR chain
+  const queries = [
+    `"${plant.owner}" ${plant.state} lender${afterClause}`,
+    `"${plant.owner}" ${plant.state} "tax equity"${afterClause}`,
+  ];
 
   const allArticles: RawArticle[] = [];
   const seenUrls = new Set<string>();
 
-  const encoded = encodeURIComponent(ownerQuery);
-  const rssUrl = `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`;
+  for (const ownerQuery of queries) {
+    if (allArticles.length >= MAX_ARTICLES_PER_SOURCE) break;
 
-  try {
-    const res = await fetch(rssUrl, { headers: { 'User-Agent': USER_AGENT } });
-    if (!res.ok) return allArticles;
+    const encoded = encodeURIComponent(ownerQuery);
+    const rssUrl = `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`;
 
-    const xml = await res.text();
-    const itemRegex = /<item>([\s\S]*?)<\/item>/g;
-    let match;
-
-    while ((match = itemRegex.exec(xml)) !== null && allArticles.length < MAX_ARTICLES_PER_SOURCE) {
-      const item = match[1];
-      const titleMatch = item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>|<title>(.*?)<\/title>/);
-      const linkMatch = item.match(/<link>(.*?)<\/link>/);
-      const pubDateMatch = item.match(/<pubDate>(.*?)<\/pubDate>/);
-      const sourceMatch = item.match(/<source[^>]*>(.*?)<\/source>/i);
-
-      if (titleMatch && linkMatch) {
-        let rawUrl = linkMatch[1].trim();
-        if (rawUrl.includes('news.google.com')) {
-          rawUrl = await decodeGoogleNewsUrl(rawUrl);
-          await sleep(GOOGLE_DECODE_DELAY_MS);
-        }
-        const url = normalizeUrl(rawUrl);
-
-        if (seenUrls.has(url)) continue;
-        seenUrls.add(url);
-
-        let title = decodeHtmlEntities(titleMatch[1] || titleMatch[2] || '');
-        let source_name = sourceMatch ? decodeHtmlEntities(sourceMatch[1] || '') : '';
-        if (!source_name && title.includes(' - ')) {
-          const parts = title.split(' - ');
-          source_name = parts.pop() || '';
-          title = parts.join(' - ');
-        }
-
-        allArticles.push({
-          title: title.trim(),
-          url,
-          source_name: source_name || 'Google News',
-          published_at: pubDateMatch ? new Date(pubDateMatch[1]).toISOString() : new Date().toISOString(),
-          description: '',
-          fetch_source: 'google_rss',
-        });
+    try {
+      const res = await fetch(rssUrl, { headers: { 'User-Agent': USER_AGENT } });
+      if (!res.ok) {
+        await sleep(DELAY_BETWEEN_QUERIES_MS);
+        continue;
       }
+
+      const xml = await res.text();
+      const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+      let match;
+
+      while ((match = itemRegex.exec(xml)) !== null && allArticles.length < MAX_ARTICLES_PER_SOURCE) {
+        const item = match[1];
+        const titleMatch = item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>|<title>(.*?)<\/title>/);
+        const linkMatch = item.match(/<link>(.*?)<\/link>/);
+        const pubDateMatch = item.match(/<pubDate>(.*?)<\/pubDate>/);
+        const sourceMatch = item.match(/<source[^>]*>(.*?)<\/source>/i);
+
+        if (titleMatch && linkMatch) {
+          let rawUrl = linkMatch[1].trim();
+          if (rawUrl.includes('news.google.com')) {
+            rawUrl = await decodeGoogleNewsUrl(rawUrl);
+            await sleep(GOOGLE_DECODE_DELAY_MS);
+          }
+          const url = normalizeUrl(rawUrl);
+
+          if (seenUrls.has(url)) continue;
+          seenUrls.add(url);
+
+          let title = decodeHtmlEntities(titleMatch[1] || titleMatch[2] || '');
+          let source_name = sourceMatch ? decodeHtmlEntities(sourceMatch[1] || '') : '';
+          if (!source_name && title.includes(' - ')) {
+            const parts = title.split(' - ');
+            source_name = parts.pop() || '';
+            title = parts.join(' - ');
+          }
+
+          allArticles.push({
+            title: title.trim(),
+            url,
+            source_name: source_name || 'Google News',
+            published_at: pubDateMatch ? new Date(pubDateMatch[1]).toISOString() : new Date().toISOString(),
+            description: '',
+            fetch_source: 'google_rss',
+          });
+        }
+      }
+    } catch (e) {
+      console.warn(`[google-owner] Error for: ${plant.owner.slice(0, 40)}`, e);
     }
-  } catch (e) {
-    console.warn(`[google-owner] Error for: ${plant.owner.slice(0, 40)}`, e);
+
+    await sleep(DELAY_BETWEEN_QUERIES_MS);
   }
 
   return allArticles;
@@ -500,19 +529,28 @@ async function fetchBingRSS(
     else freshness = '&freshness=Month';
   }
 
-  const fuel = fuelLabel(plant.fuel_source);
   const nameVariants = buildNameVariants(plant.name);
   const exactName = nameVariants[0];
   const broadName = nameVariants.length >= 2 ? nameVariants[1] : exactName;
 
+  // Single-term queries — same rationale as Google: avoids broken OR chains
   const queries = [
-    `"${exactName}" ${fuel} financing OR lender OR "tax equity"`,
-    `"${exactName}" ${fuel} refinancing OR "credit facility" OR loan`,
-    `"${exactName}" ${fuel} sponsor OR "project finance" OR PPA`,
-    // Broader variants with stripped suffix
+    `"${exactName}" lender`,
+    `"${exactName}" "tax equity"`,
+    `"${exactName}" financing`,
+    `"${exactName}" "financial close"`,
+    `"${exactName}" loan`,
+    `"${exactName}" "construction loan"`,
+    `"${exactName}" "project finance"`,
+    `"${exactName}" refinancing`,
     ...(broadName !== exactName ? [
-      `"${broadName}" ${fuel} financing OR lender OR "tax equity"`,
-      `"${broadName}" ${fuel} refinancing OR "credit facility" OR loan`,
+      `"${broadName}" lender`,
+      `"${broadName}" "tax equity"`,
+    ] : []),
+    // Owner queries — surface portfolio-level financing news
+    ...(plant.owner ? [
+      `"${plant.owner}" ${plant.state} lender`,
+      `"${plant.owner}" ${plant.state} "tax equity"`,
     ] : []),
   ];
 
@@ -751,13 +789,10 @@ Deno.serve(async (req: Request) => {
         fetchBingRSS(plant, lastCheckedAt),
       ]);
 
-      // Owner-name fallback if plant-name query returned sparse results
+      // Owner-name queries — always run for plants ≥20 MW regardless of plant-name result count
       let ownerFallbackArticles: RawArticle[] = [];
-      if (googleArticles.length < MIN_ARTICLES_FOR_OWNER_FALLBACK && plant.nameplate_capacity_mw >= MIN_CAPACITY_FOR_OWNER_FALLBACK) {
-        console.log(`  Plant query sparse (${googleArticles.length}) — trying owner fallback: "${plant.owner}"`);
+      if (plant.owner && plant.nameplate_capacity_mw >= MIN_CAPACITY_FOR_OWNER_FALLBACK) {
         ownerFallbackArticles = await fetchGoogleRSSOwnerFallback(plant, googleAfterDate);
-      } else if (googleArticles.length < MIN_ARTICLES_FOR_OWNER_FALLBACK) {
-        console.log(`  Plant query sparse (${googleArticles.length}) — skipping owner fallback (${plant.nameplate_capacity_mw} MW < ${MIN_CAPACITY_FOR_OWNER_FALLBACK} MW gate)`);
       }
 
       console.log(`  Google: ${googleArticles.length}, Bing: ${bingArticles.length}, Owner fallback: ${ownerFallbackArticles.length}`);

@@ -17,8 +17,9 @@ import LenderDashboard from './components/LenderDashboard';
 import TaxEquityDashboard from './components/TaxEquityDashboard';
 import EntityDetailView from './components/EntityDetailView';
 import OpportunitiesDashboard from './components/OpportunitiesDashboard';
+import PlantPursuitsDashboard from './components/PlantPursuitsDashboard';
 
-type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'prospecting' | 'lenders' | 'taxequity' | 'opportunities' | 'entity';
+type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'prospecting' | 'lenders' | 'taxequity' | 'opportunities' | 'pursuits' | 'entity';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor';
 
@@ -449,6 +450,19 @@ const App: React.FC = () => {
             {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Opportunities</span>}
           </button>
 
+          <button
+            onClick={() => setView('pursuits')}
+            title={sidebarCollapsed ? 'Plant Pursuits' : undefined}
+            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
+              view === 'pursuits'
+                ? 'bg-emerald-700 text-white shadow-lg shadow-emerald-900/20'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+            }`}
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Plant Pursuits</span>}
+          </button>
+
           {!sidebarCollapsed && (
             <div className="pt-6 pb-2 px-4">
               <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">ISO / RTO SECTORS</span>
@@ -778,6 +792,8 @@ const App: React.FC = () => {
             ? <TaxEquityDashboard onInvestorClick={handleTaxEquityClick} />
             : view === 'opportunities'
             ? <OpportunitiesDashboard onCompanyClick={handleCompanyClick} onLenderClick={handleLenderClick} onTaxEquityClick={handleTaxEquityClick} onPlantClick={(id) => handlePlantClick(id)} />
+            : view === 'pursuits'
+            ? <PlantPursuitsDashboard onPlantClick={(id) => handlePlantClick(id)} />
             : view === 'entity' && selectedEntity
             ? <EntityDetailView entityName={selectedEntity.name} entityType={selectedEntity.type} onBack={() => setView(selectedEntity.type === 'lender' ? 'lenders' : 'taxequity')} onPlantClick={handlePlantClickFromCompany} />
             : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />

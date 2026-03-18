@@ -1,4 +1,0 @@
-# news_pipeline dependencies
-httpx>=0.27
-supabase>=2.0
-spacy>=3.7
