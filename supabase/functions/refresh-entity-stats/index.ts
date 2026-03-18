@@ -87,6 +87,7 @@ Deno.serve(async (req: Request) => {
   try {
     // ── 1. Load plants (CF, curtailment, ISO) ─────────────────────────────────
     const plantRows = await fetchAll<{
+      id: string;
       eia_plant_code: string;
       ttm_avg_factor: number | null;
       curtailment_score: number | null;
@@ -94,7 +95,7 @@ Deno.serve(async (req: Request) => {
       nameplate_capacity_mw: number | null;
       region: string | null;
     }>(sb, 'plants',
-      'eia_plant_code, ttm_avg_factor, curtailment_score, is_likely_curtailed, nameplate_capacity_mw, region'
+      'id, eia_plant_code, ttm_avg_factor, curtailment_score, is_likely_curtailed, nameplate_capacity_mw, region'
     );
     console.log(`Loaded ${plantRows.length} plants`);
 
@@ -161,7 +162,7 @@ Deno.serve(async (req: Request) => {
 
     // ── 3c. Compute plant distress scores and upsert ──────────────────────────
     const plantDistress = new Map<string, number>();
-    const plantDistressUpdates: { eia_plant_code: string; distress_score: number; pursuit_status: string | null }[] = [];
+    const plantDistressUpdates: { id: string; distress_score: number; pursuit_status: string | null }[] = [];
 
     for (const p of plantRows) {
       const curtailment  = p.curtailment_score ?? 0;
@@ -188,7 +189,7 @@ Deno.serve(async (req: Request) => {
 
       plantDistress.set(p.eia_plant_code, distress);
       plantDistressUpdates.push({
-        eia_plant_code: p.eia_plant_code,
+        id: p.id,
         distress_score: distress,
         pursuit_status: pursuitStatus,
       });
@@ -199,7 +200,7 @@ Deno.serve(async (req: Request) => {
       const batch = plantDistressUpdates.slice(i, i + UPSERT_BATCH);
       const { error } = await sb
         .from('plants')
-        .upsert(batch, { onConflict: 'eia_plant_code' });
+        .upsert(batch, { onConflict: 'id' });
       if (error) console.error(`plant distress upsert error: ${error.message}`);
     }
     console.log(`Updated distress_score for ${plantDistressUpdates.length} plants (${lendersFoundSet.size} with lender bonus)`);
