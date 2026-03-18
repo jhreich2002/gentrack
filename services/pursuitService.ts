@@ -15,11 +15,108 @@ export interface PursuitPlant {
   fuelSource:      string;
   nameplateMw:     number;
   distressScore:   number | null;
-  curtailmentScore: number | null;
   ttmAvgFactor:    number | null;
   pursuitStatus:   string | null;
   lenders:         { name: string; role: string; facilityType: string }[];
   searchedAt:      string | null;
+}
+
+export interface LenderRanking {
+  name:                string;
+  curtailedPlantCount: number;
+  totalCurtailedMw:    number;
+  avgDistressScore:    number | null;
+  plants: {
+    eiaPlantCode: string;
+    name:         string;
+    state:        string;
+    fuelSource:   string;
+    nameplateMw:  number;
+    distressScore: number | null;
+  }[];
+}
+
+export async function fetchLenderRankings(): Promise<LenderRanking[]> {
+  // 1. Get all curtailed plants with confirmed lenders
+  const { data: summaryData, error: summaryErr } = await supabase
+    .from('plant_financing_summary')
+    .select('eia_plant_code')
+    .eq('lenders_found', true);
+
+  if (summaryErr) {
+    console.error('pursuitService: plant_financing_summary error:', summaryErr.message);
+    return [];
+  }
+
+  const codes = (summaryData ?? []).map((r: { eia_plant_code: string }) => r.eia_plant_code);
+  if (codes.length === 0) return [];
+
+  // 2. Fetch curtailed plant info
+  const { data: plantsData, error: plantsErr } = await supabase
+    .from('plants')
+    .select('eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, distress_score')
+    .in('eia_plant_code', codes)
+    .eq('is_likely_curtailed', true);
+
+  if (plantsErr || !plantsData?.length) return [];
+
+  const plantMap = new Map<string, {
+    eiaPlantCode: string; name: string; state: string; fuelSource: string;
+    nameplateMw: number; distressScore: number | null;
+  }>();
+  for (const p of plantsData) {
+    const r = p as Record<string, unknown>;
+    plantMap.set(r.eia_plant_code as string, {
+      eiaPlantCode:  r.eia_plant_code as string,
+      name:          (r.name as string) ?? r.eia_plant_code,
+      state:         (r.state as string) ?? '',
+      fuelSource:    (r.fuel_source as string) ?? '',
+      nameplateMw:   Number(r.nameplate_capacity_mw) || 0,
+      distressScore: r.distress_score != null ? Number(r.distress_score) : null,
+    });
+  }
+
+  const plantCodes = Array.from(plantMap.keys());
+
+  // 3. Fetch lenders for these plants
+  const { data: lendersData } = await supabase
+    .from('plant_lenders')
+    .select('eia_plant_code, lender_name')
+    .in('eia_plant_code', plantCodes)
+    .in('confidence', ['high', 'medium']);
+
+  // 4. Aggregate by lender
+  const lenderMap = new Map<string, Set<string>>();
+  for (const row of lendersData ?? []) {
+    const r = row as { eia_plant_code: string; lender_name: string };
+    if (!lenderMap.has(r.lender_name)) lenderMap.set(r.lender_name, new Set());
+    lenderMap.get(r.lender_name)!.add(r.eia_plant_code);
+  }
+
+  const rankings: LenderRanking[] = [];
+  for (const [lenderName, plantCodes] of lenderMap.entries()) {
+    const plants = Array.from(plantCodes)
+      .map(code => plantMap.get(code))
+      .filter(Boolean) as LenderRanking['plants'];
+
+    const scores = plants.map(p => p.distressScore).filter((s): s is number => s != null);
+    const avgDistressScore = scores.length > 0
+      ? scores.reduce((a, b) => a + b, 0) / scores.length
+      : null;
+
+    rankings.push({
+      name:                lenderName,
+      curtailedPlantCount: plants.length,
+      totalCurtailedMw:    plants.reduce((sum, p) => sum + p.nameplateMw, 0),
+      avgDistressScore,
+      plants:              plants.sort((a, b) => (b.distressScore ?? 0) - (a.distressScore ?? 0)),
+    });
+  }
+
+  // Sort by curtailed plant count desc, then by total MW as tiebreaker
+  return rankings.sort(
+    (a, b) => b.curtailedPlantCount - a.curtailedPlantCount || b.totalCurtailedMw - a.totalCurtailedMw,
+  );
 }
 
 export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
@@ -44,7 +141,7 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
   // 2. Fetch plant info (curtailed only)
   const { data: plantsData, error: plantsErr } = await supabase
     .from('plants')
-    .select('eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, distress_score, curtailment_score, ttm_avg_factor, pursuit_status')
+    .select('eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, distress_score, ttm_avg_factor, pursuit_status')
     .in('eia_plant_code', codes)
     .eq('is_likely_curtailed', true)
     .order('distress_score', { ascending: false, nullsFirst: false });
@@ -82,7 +179,6 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
     fuelSource:      (p.fuel_source as string) ?? '',
     nameplateMw:     Number(p.nameplate_capacity_mw) || 0,
     distressScore:   p.distress_score != null ? Number(p.distress_score) : null,
-    curtailmentScore: p.curtailment_score != null ? Number(p.curtailment_score) : null,
     ttmAvgFactor:    p.ttm_avg_factor != null ? Number(p.ttm_avg_factor) : null,
     pursuitStatus:   (p.pursuit_status as string | null) ?? null,
     lenders:         lendersByCode.get(p.eia_plant_code as string) ?? [],

@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState, useMemo } from 'react';
-import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
+import { fetchPursuitPlants, PursuitPlant, fetchLenderRankings, LenderRanking } from '../services/pursuitService';
 
 interface Props {
   onPlantClick: (eiaPlantCode: string) => void;
@@ -56,14 +56,17 @@ function fuelChipClass(fuel: string): string {
   return 'bg-slate-800 text-slate-400 border-slate-600';
 }
 
-type SortKey = 'distress' | 'curtailment' | 'mw' | 'lenders';
+type SortKey = 'distress' | 'mw' | 'lenders';
 type FuelFilter = 'all' | string;
+type ViewMode = 'lenders' | 'plants';
 
 const PAGE_SIZE = 50;
 
 const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
-  const [plants, setPlants]   = useState<PursuitPlant[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [plants, setPlants]           = useState<PursuitPlant[]>([]);
+  const [lenderRankings, setLenderRankings] = useState<LenderRanking[]>([]);
+  const [loading, setLoading]         = useState(true);
+  const [viewMode, setViewMode]       = useState<ViewMode>('lenders');
 
   const [search, setSearch]       = useState('');
   const [stateFilter, setStateFilter] = useState('all');
@@ -72,8 +75,9 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
   const [page, setPage]           = useState(1);
 
   useEffect(() => {
-    fetchPursuitPlants().then(rows => {
-      setPlants(rows);
+    Promise.all([fetchPursuitPlants(), fetchLenderRankings()]).then(([plantRows, lenderRows]) => {
+      setPlants(plantRows);
+      setLenderRankings(lenderRows);
       setLoading(false);
     });
   }, []);
@@ -99,9 +103,8 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
     if (fuelFilter !== 'all')  result = result.filter(p => p.fuelSource === fuelFilter);
 
     const sorted = [...result];
-    if (sortKey === 'distress')    sorted.sort((a, b) => (b.distressScore ?? 0) - (a.distressScore ?? 0));
-    if (sortKey === 'curtailment') sorted.sort((a, b) => (b.curtailmentScore ?? 0) - (a.curtailmentScore ?? 0));
-    if (sortKey === 'mw')          sorted.sort((a, b) => b.nameplateMw - a.nameplateMw);
+    if (sortKey === 'distress') sorted.sort((a, b) => (b.distressScore ?? 0) - (a.distressScore ?? 0));
+    if (sortKey === 'mw')       sorted.sort((a, b) => b.nameplateMw - a.nameplateMw);
     if (sortKey === 'lenders')     sorted.sort((a, b) => b.lenders.length - a.lenders.length);
 
     return sorted;
@@ -109,6 +112,13 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // Lender view search filter
+  const filteredLenders = useMemo(() => {
+    if (!search.trim()) return lenderRankings;
+    const q = search.toLowerCase();
+    return lenderRankings.filter(l => l.name.toLowerCase().includes(q));
+  }, [lenderRankings, search]);
 
   // Summary stats
   const highDistress = plants.filter(p => (p.distressScore ?? 0) >= 70).length;
@@ -138,6 +148,21 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
           Curtailed plants with confirmed lenders — ranked by distress for active pursuit.
           {plants.length > 0 && ` ${plants.length.toLocaleString()} plants with identified financing parties.`}
         </p>
+        {/* View toggle */}
+        <div className="flex gap-2 mt-4">
+          <button
+            onClick={() => { setViewMode('lenders'); setPage(1); setSearch(''); }}
+            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'lenders' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'}`}
+          >
+            By Lender
+          </button>
+          <button
+            onClick={() => { setViewMode('plants'); setPage(1); setSearch(''); }}
+            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'plants' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'}`}
+          >
+            By Plant
+          </button>
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -164,188 +189,310 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        <input
-          type="text"
-          placeholder="Search plant name…"
-          value={search}
-          onChange={e => { setSearch(e.target.value); setPage(1); }}
-          className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 w-48"
-        />
+      {viewMode === 'lenders' ? (
+        <>
+          {/* Lender search */}
+          <div className="flex flex-wrap gap-3 mb-6">
+            <input
+              type="text"
+              placeholder="Search lender name…"
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1); }}
+              className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 w-56"
+            />
+            {search && (
+              <span className="self-center text-xs text-slate-500">
+                {filteredLenders.length.toLocaleString()} lenders
+              </span>
+            )}
+          </div>
 
-        <select
-          value={stateFilter}
-          onChange={e => { setStateFilter(e.target.value); setPage(1); }}
-          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
-        >
-          {states.map(s => <option key={s} value={s}>{s === 'all' ? 'All States' : s}</option>)}
-        </select>
+          {/* Lender rankings table */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-800/70 text-slate-400 text-[10px] font-bold uppercase tracking-[0.15em]">
+                    <th className="px-4 py-4 w-10 text-center">#</th>
+                    <th className="px-4 py-4">Lender</th>
+                    <th className="px-4 py-4 text-right">Curtailed Plants</th>
+                    <th className="px-4 py-4 text-right">Total MW at Risk</th>
+                    <th className="px-4 py-4 text-right">Avg Distress</th>
+                    <th className="px-4 py-4">Plant Exposures</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {filteredLenders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((lender, idx) => {
+                    const rank = (page - 1) * PAGE_SIZE + idx + 1;
+                    const avg = lender.avgDistressScore ?? 0;
+                    return (
+                      <tr key={lender.name} className="transition-all hover:bg-slate-800/60 group">
+                        <td className="px-4 py-4 text-center">
+                          <span className="text-xs font-mono text-slate-600">{rank}</span>
+                        </td>
 
-        <select
-          value={fuelFilter}
-          onChange={e => { setFuelFilter(e.target.value); setPage(1); }}
-          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
-        >
-          {fuels.map(f => <option key={f} value={f}>{f === 'all' ? 'All Fuels' : f}</option>)}
-        </select>
-
-        <select
-          value={sortKey}
-          onChange={e => { setSortKey(e.target.value as SortKey); setPage(1); }}
-          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
-        >
-          <option value="distress">Sort: Distress Score</option>
-          <option value="curtailment">Sort: Curtailment Score</option>
-          <option value="mw">Sort: Capacity (MW)</option>
-          <option value="lenders">Sort: # Lenders</option>
-        </select>
-      </div>
-
-      {/* Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-800/70 text-slate-400 text-[10px] font-bold uppercase tracking-[0.15em]">
-                <th className="px-4 py-4 w-10 text-center">#</th>
-                <th className="px-4 py-4">Plant</th>
-                <th className="px-4 py-4 text-right">Distress</th>
-                <th className="px-4 py-4 text-right">Curtailment</th>
-                <th className="px-4 py-4 text-right">TTM CF</th>
-                <th className="px-4 py-4 text-right">MW</th>
-                <th className="px-4 py-4">Financing Parties</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {paginated.map((plant, idx) => {
-                const rank = (page - 1) * PAGE_SIZE + idx + 1;
-                const distress = plant.distressScore ?? 0;
-                return (
-                  <tr
-                    key={plant.eiaPlantCode}
-                    onClick={() => onPlantClick(plant.eiaPlantCode)}
-                    className="cursor-pointer transition-all hover:bg-slate-800/60 group"
-                  >
-                    <td className="px-4 py-4 text-center">
-                      <span className="text-xs font-mono text-slate-600">{rank}</span>
-                    </td>
-
-                    <td className="px-4 py-4">
-                      <div className="flex items-start gap-2">
-                        <div>
-                          <div className="text-sm font-bold text-slate-200 group-hover:text-emerald-400 transition-colors leading-snug">
-                            {plant.name}
+                        <td className="px-4 py-4">
+                          <div className="text-sm font-bold text-slate-200 group-hover:text-emerald-400 transition-colors">
+                            {lender.name}
                           </div>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <span className="text-[10px] text-slate-500 font-mono">{plant.state}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold ${fuelChipClass(plant.fuelSource)}`}>
-                              {plant.fuelSource}
+                        </td>
+
+                        <td className="px-4 py-4 text-right">
+                          <span className="text-lg font-black text-white">{lender.curtailedPlantCount}</span>
+                        </td>
+
+                        <td className="px-4 py-4 text-right font-mono text-xs text-slate-400">
+                          {lender.totalCurtailedMw > 0 ? lender.totalCurtailedMw.toLocaleString() + ' MW' : '—'}
+                        </td>
+
+                        <td className="px-4 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <div className="w-14 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${scoreBarColor(avg)}`}
+                                style={{ width: `${avg}%` }}
+                              />
+                            </div>
+                            <span className={`text-sm font-black w-7 text-right ${scoreColor(avg)}`}>
+                              {Math.round(avg)}
                             </span>
                           </div>
-                        </div>
-                      </div>
-                    </td>
+                        </td>
 
-                    <td className="px-4 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${scoreBarColor(distress)}`}
-                            style={{ width: `${distress}%` }}
-                          />
-                        </div>
-                        <span className={`text-sm font-black w-7 text-right ${scoreColor(distress)}`}>
-                          {Math.round(distress)}
-                        </span>
-                      </div>
-                    </td>
-
-                    <td className="px-4 py-4 text-right">
-                      {plant.curtailmentScore != null
-                        ? <span className={`text-xs font-bold ${scoreColor(plant.curtailmentScore)}`}>
-                            {Math.round(plant.curtailmentScore)}
-                          </span>
-                        : <span className="text-slate-600 text-xs">—</span>
-                      }
-                    </td>
-
-                    <td className="px-4 py-4 text-right font-mono text-xs text-slate-400">
-                      {formatCf(plant.ttmAvgFactor)}
-                    </td>
-
-                    <td className="px-4 py-4 text-right font-mono text-xs text-slate-400">
-                      {plant.nameplateMw > 0 ? `${plant.nameplateMw.toLocaleString()}` : '—'}
-                    </td>
-
-                    <td className="px-4 py-4">
-                      {plant.lenders.length > 0
-                        ? (
+                        <td className="px-4 py-4">
                           <div className="flex flex-wrap gap-1 max-w-sm">
-                            {plant.lenders.slice(0, 4).map((l, i) => (
+                            {lender.plants.slice(0, 4).map(p => (
                               <span
-                                key={i}
-                                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-medium"
-                                title={`${l.role} — ${l.facilityType}`}
+                                key={p.eiaPlantCode}
+                                onClick={(e) => { e.stopPropagation(); onPlantClick(p.eiaPlantCode); }}
+                                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-medium cursor-pointer hover:border-emerald-500/50 hover:text-emerald-400 transition-colors"
+                                title={`${p.fuelSource} · ${p.nameplateMw} MW`}
                               >
-                                <span className="text-emerald-500 font-bold text-[8px]">{facilityTypeShort(l.facilityType)}</span>
-                                {l.name}
+                                <span className={`text-[8px] font-bold ${scoreColor(p.distressScore ?? 0)}`}>
+                                  {Math.round(p.distressScore ?? 0)}
+                                </span>
+                                {p.name}
                               </span>
                             ))}
-                            {plant.lenders.length > 4 && (
+                            {lender.plants.length > 4 && (
                               <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">
-                                +{plant.lenders.length - 4} more
+                                +{lender.plants.length - 4} more
                               </span>
                             )}
                           </div>
-                        )
-                        : <span className="text-slate-600 text-xs">Lender names not parsed</span>
-                      }
-                    </td>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {filteredLenders.length === 0 && (
+              <div className="py-24 text-center text-slate-600">
+                <p className="font-semibold">No lenders found.</p>
+                <p className="text-sm mt-1">
+                  {lenderRankings.length === 0
+                    ? 'Run the lender-search sweep to populate financing data.'
+                    : 'Adjust the search criteria.'}
+                </p>
+              </div>
+            )}
+
+            {filteredLenders.length > PAGE_SIZE && (
+              <div className="flex items-center justify-between px-6 py-4 bg-slate-800/40 border-t border-slate-800">
+                <div className="text-xs text-slate-500">
+                  Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, filteredLenders.length)} of {filteredLenders.length.toLocaleString()} lenders
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+                    className="px-3 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all">
+                    ‹ Prev
+                  </button>
+                  <span className="text-xs text-slate-500 font-mono">{page} / {Math.max(1, Math.ceil(filteredLenders.length / PAGE_SIZE))}</span>
+                  <button onClick={() => setPage(p => Math.min(Math.ceil(filteredLenders.length / PAGE_SIZE), p + 1))} disabled={page === Math.ceil(filteredLenders.length / PAGE_SIZE)}
+                    className="px-3 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all">
+                    Next ›
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Plant filters */}
+          <div className="flex flex-wrap gap-3 mb-6">
+            <input
+              type="text"
+              placeholder="Search plant name…"
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1); }}
+              className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 w-48"
+            />
+
+            <select
+              value={stateFilter}
+              onChange={e => { setStateFilter(e.target.value); setPage(1); }}
+              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
+            >
+              {states.map(s => <option key={s} value={s}>{s === 'all' ? 'All States' : s}</option>)}
+            </select>
+
+            <select
+              value={fuelFilter}
+              onChange={e => { setFuelFilter(e.target.value); setPage(1); }}
+              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
+            >
+              {fuels.map(f => <option key={f} value={f}>{f === 'all' ? 'All Fuels' : f}</option>)}
+            </select>
+
+            <select
+              value={sortKey}
+              onChange={e => { setSortKey(e.target.value as SortKey); setPage(1); }}
+              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
+            >
+              <option value="distress">Sort: Pursuit Score</option>
+              <option value="mw">Sort: Capacity (MW)</option>
+              <option value="lenders">Sort: # Lenders</option>
+            </select>
+          </div>
+
+          {/* Plant table */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-800/70 text-slate-400 text-[10px] font-bold uppercase tracking-[0.15em]">
+                    <th className="px-4 py-4 w-10 text-center">#</th>
+                    <th className="px-4 py-4">Plant</th>
+                    <th className="px-4 py-4 text-right">Pursuit Score</th>
+                    <th className="px-4 py-4 text-right">TTM CF</th>
+                    <th className="px-4 py-4 text-right">MW</th>
+                    <th className="px-4 py-4">Financing Parties</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {paginated.map((plant, idx) => {
+                    const rank = (page - 1) * PAGE_SIZE + idx + 1;
+                    const distress = plant.distressScore ?? 0;
+                    return (
+                      <tr
+                        key={plant.eiaPlantCode}
+                        onClick={() => onPlantClick(plant.eiaPlantCode)}
+                        className="cursor-pointer transition-all hover:bg-slate-800/60 group"
+                      >
+                        <td className="px-4 py-4 text-center">
+                          <span className="text-xs font-mono text-slate-600">{rank}</span>
+                        </td>
 
-        {filtered.length === 0 && (
-          <div className="py-24 text-center text-slate-600">
-            <p className="font-semibold">No plants match your filters.</p>
-            <p className="text-sm mt-1">
-              {plants.length === 0
-                ? 'Run the lender-search sweep to populate confirmed financing data.'
-                : 'Adjust the search or filter criteria.'}
-            </p>
-          </div>
-        )}
+                        <td className="px-4 py-4">
+                          <div className="flex items-start gap-2">
+                            <div>
+                              <div className="text-sm font-bold text-slate-200 group-hover:text-emerald-400 transition-colors leading-snug">
+                                {plant.name}
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-1">
+                                <span className="text-[10px] text-slate-500 font-mono">{plant.state}</span>
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold ${fuelChipClass(plant.fuelSource)}`}>
+                                  {plant.fuelSource}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
 
-        {/* Pagination */}
-        {filtered.length > PAGE_SIZE && (
-          <div className="flex items-center justify-between px-6 py-4 bg-slate-800/40 border-t border-slate-800">
-            <div className="text-xs text-slate-500">
-              Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length.toLocaleString()} plants
+                        <td className="px-4 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${scoreBarColor(distress)}`}
+                                style={{ width: `${distress}%` }}
+                              />
+                            </div>
+                            <span className={`text-sm font-black w-7 text-right ${scoreColor(distress)}`}>
+                              {Math.round(distress)}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-4 text-right font-mono text-xs text-slate-400">
+                          {formatCf(plant.ttmAvgFactor)}
+                        </td>
+
+                        <td className="px-4 py-4 text-right font-mono text-xs text-slate-400">
+                          {plant.nameplateMw > 0 ? `${plant.nameplateMw.toLocaleString()}` : '—'}
+                        </td>
+
+                        <td className="px-4 py-4">
+                          {plant.lenders.length > 0
+                            ? (
+                              <div className="flex flex-wrap gap-1 max-w-sm">
+                                {plant.lenders.slice(0, 4).map((l, i) => (
+                                  <span
+                                    key={i}
+                                    className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-medium"
+                                    title={`${l.role} — ${l.facilityType}`}
+                                  >
+                                    <span className="text-emerald-500 font-bold text-[8px]">{facilityTypeShort(l.facilityType)}</span>
+                                    {l.name}
+                                  </span>
+                                ))}
+                                {plant.lenders.length > 4 && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">
+                                    +{plant.lenders.length - 4} more
+                                  </span>
+                                )}
+                              </div>
+                            )
+                            : <span className="text-slate-600 text-xs">Lender names not parsed</span>
+                          }
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPage(p => Math.max(1, p - 1))}
-                disabled={page === 1}
-                className="px-3 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
-              >
-                ‹ Prev
-              </button>
-              <span className="text-xs text-slate-500 font-mono">{page} / {totalPages}</span>
-              <button
-                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                disabled={page === totalPages}
-                className="px-3 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
-              >
-                Next ›
-              </button>
-            </div>
+
+            {filtered.length === 0 && (
+              <div className="py-24 text-center text-slate-600">
+                <p className="font-semibold">No plants match your filters.</p>
+                <p className="text-sm mt-1">
+                  {plants.length === 0
+                    ? 'Run the lender-search sweep to populate confirmed financing data.'
+                    : 'Adjust the search or filter criteria.'}
+                </p>
+              </div>
+            )}
+
+            {filtered.length > PAGE_SIZE && (
+              <div className="flex items-center justify-between px-6 py-4 bg-slate-800/40 border-t border-slate-800">
+                <div className="text-xs text-slate-500">
+                  Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length.toLocaleString()} plants
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-3 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+                  >
+                    ‹ Prev
+                  </button>
+                  <span className="text-xs text-slate-500 font-mono">{page} / {totalPages}</span>
+                  <button
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="px-3 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+                  >
+                    Next ›
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 };
