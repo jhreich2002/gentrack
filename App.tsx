@@ -78,6 +78,7 @@ const App: React.FC = () => {
   const [selectedUltParent, setSelectedUltParent]   = useState<string | null>(null);
   const [cameFromCompany, setCameFromCompany]       = useState(false);
   const [cameFromPursuits, setCameFromPursuits]     = useState(false);
+  const [cameFromEntity, setCameFromEntity]         = useState(false);
   const [companyActiveTab, setCompanyActiveTab]     = useState<'overview' | 'portfolio'>('overview');
   const [selectedEntity, setSelectedEntity]         = useState<{ name: string; type: 'lender' | 'tax_equity' } | null>(null);
   const [generationLoading, setGenerationLoading] = useState(false);
@@ -115,6 +116,15 @@ const App: React.FC = () => {
     const plant = plants.find(p => p.eiaPlantCode === eiaPlantCode);
     if (plant) {
       handlePlantClick(plant.id, true);
+    }
+  };
+
+  // Navigate to plant detail from lender/tax equity entity detail (by EIA code)
+  const handlePlantClickFromEntity = (eiaPlantCode: string) => {
+    const plant = plants.find(p => p.eiaPlantCode === eiaPlantCode);
+    if (plant) {
+      setCameFromEntity(true);
+      handlePlantClick(plant.id);
     }
   };
 
@@ -784,8 +794,8 @@ const App: React.FC = () => {
             : view === 'pursuits'
             ? <PlantPursuitsDashboard onPlantClick={handlePlantClickFromPursuits} />
             : view === 'entity' && selectedEntity
-            ? <EntityDetailView entityName={selectedEntity.name} entityType={selectedEntity.type} onBack={() => setView(selectedEntity.type === 'lender' ? 'lenders' : 'taxequity')} onPlantClick={handlePlantClickFromCompany} />
-            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
+            ? <EntityDetailView entityName={selectedEntity.name} entityType={selectedEntity.type} onBack={() => setView(selectedEntity.type === 'lender' ? 'lenders' : 'taxequity')} onPlantClick={handlePlantClickFromEntity} />
+            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
         )}
       </main>
 

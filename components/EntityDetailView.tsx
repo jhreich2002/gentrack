@@ -3,21 +3,15 @@
  *
  * Detail view for lender and tax equity investor entities.
  * Parameterized by entityType — reusable for both entity types.
- *
- * Tabs:
- *   Overview  — KPIs, portfolio plants table, FTI signals, Analyze button
- *   News      — entity-level news articles (ILIKE match on entity_company_names)
  */
 
 import React, { useEffect, useState } from 'react';
-import { LenderStats, TaxEquityStats, NewsArticle, EntityAnalysisResponse } from '../types';
+import { LenderStats, TaxEquityStats, EntityAnalysisResponse } from '../types';
 import {
-  fetchLenderStats, fetchLenderPlants, fetchEntityNews, callLenderAnalyze,
+  fetchLenderStats, fetchLenderPlants, callLenderAnalyze,
   LenderPlant,
 } from '../services/lenderStatsService';
 import { fetchTaxEquityStats, fetchTaxEquityPlants, callTaxEquityAnalyze } from '../services/taxEquityService';
-
-type EntityTab = 'overview' | 'news';
 
 interface Props {
   entityName: string;
@@ -26,29 +20,11 @@ interface Props {
   onPlantClick?: (eiaPlantCode: string) => void;
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const SENTIMENT_COLORS: Record<string, string> = {
-  positive: '#22c55e',
-  negative: '#ef4444',
-  neutral:  '#94a3b8',
-};
-const IMPORTANCE_COLORS: Record<string, string> = {
-  high:   '#ef4444',
-  medium: '#f59e0b',
-  low:    '#64748b',
-};
-
 function fmtUsd(v: number | null): string {
   if (v == null) return '—';
   if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
   if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
   return `$${v.toLocaleString()}`;
-}
-
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function distressColor(score: number | null): string {
@@ -61,8 +37,6 @@ function distressColor(score: number | null): string {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const EntityDetailView: React.FC<Props> = ({ entityName, entityType, onBack, onPlantClick }) => {
-  const [activeTab, setActiveTab] = useState<EntityTab>('overview');
-
   // Stats state (union of LenderStats | TaxEquityStats)
   const [stats, setStats]   = useState<LenderStats | TaxEquityStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -71,11 +45,6 @@ const EntityDetailView: React.FC<Props> = ({ entityName, entityType, onBack, onP
   const [plants, setPlants]               = useState<LenderPlant[]>([]);
   const [loadingPlants, setLoadingPlants] = useState(false);
   const [plantsFetched, setPlantsFetched] = useState(false);
-
-  // News
-  const [articles, setArticles]           = useState<NewsArticle[]>([]);
-  const [loadingNews, setLoadingNews]     = useState(false);
-  const [newsFetched, setNewsFetched]     = useState(false);
 
   // Analysis
   const [analysis, setAnalysis]                   = useState<EntityAnalysisResponse | null>(null);
@@ -90,9 +59,6 @@ const EntityDetailView: React.FC<Props> = ({ entityName, entityType, onBack, onP
     setPortfolioSynopsis(null);
     setPlants([]);
     setPlantsFetched(false);
-    setArticles([]);
-    setNewsFetched(false);
-    setActiveTab('overview');
 
     const loadStats = entityType === 'lender'
       ? fetchLenderStats(entityName)
@@ -145,15 +111,6 @@ const EntityDetailView: React.FC<Props> = ({ entityName, entityType, onBack, onP
     setPlants(data);
     setLoadingPlants(false);
     setPlantsFetched(true);
-  };
-
-  const handleLoadNews = async () => {
-    if (loadingNews || newsFetched) return;
-    setLoadingNews(true);
-    const data = await fetchEntityNews(entityName, 90, 50);
-    setArticles(data);
-    setLoadingNews(false);
-    setNewsFetched(true);
   };
 
   const handleAnalyze = async () => {
@@ -212,30 +169,6 @@ const EntityDetailView: React.FC<Props> = ({ entityName, entityType, onBack, onP
         </div>
       </div>
 
-      {/* ── Tabs ────────────────────────────────────────────────────────────── */}
-      <div className="flex gap-2 mb-6 bg-slate-900/50 p-1.5 rounded-xl border border-slate-800 w-fit">
-        {([
-          { key: 'overview', label: 'OVERVIEW', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
-          { key: 'news',     label: 'NEWS',     icon: 'M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z' },
-        ] as const).map(({ key, label, icon }) => (
-          <button
-            key={key}
-            onClick={() => {
-              setActiveTab(key);
-              if (key === 'news') handleLoadNews();
-            }}
-            className={`px-6 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
-              activeTab === key ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={icon} />
-            </svg>
-            {label}
-          </button>
-        ))}
-      </div>
-
       {/* ── Loading ─────────────────────────────────────────────────────────── */}
       {loading && (
         <div className="py-24 flex flex-col items-center justify-center space-y-4">
@@ -252,10 +185,7 @@ const EntityDetailView: React.FC<Props> = ({ entityName, entityType, onBack, onP
       )}
 
       {!loading && stats && (
-        <>
-          {/* ── OVERVIEW TAB ──────────────────────────────────────────────────── */}
-          {activeTab === 'overview' && (
-            <div className="space-y-8 animate-in fade-in duration-500">
+        <div className="space-y-8 animate-in fade-in duration-500">
 
               {/* Portfolio Plants */}
               <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
@@ -411,118 +341,10 @@ const EntityDetailView: React.FC<Props> = ({ entityName, entityType, onBack, onP
                 )}
               </section>
 
-              <div className="text-center text-[9px] text-slate-700 pb-4">
-                Stats last computed: {stats.computedAt ? new Date(stats.computedAt).toLocaleString() : 'N/A'}
-              </div>
-            </div>
-          )}
-
-          {/* ── NEWS TAB ─────────────────────────────────────────────────────── */}
-          {activeTab === 'news' && (
-            <div className="animate-in fade-in duration-500 space-y-4">
-              {loadingNews && (
-                <div className="py-24 flex flex-col items-center justify-center space-y-4">
-                  <div className="w-12 h-12 rounded-full border-2 border-blue-500/20 border-t-blue-500 animate-spin" />
-                  <p className="text-slate-400 text-sm font-bold">Loading entity news...</p>
-                </div>
-              )}
-
-              {newsFetched && articles.length === 0 && (
-                <div className="py-20 text-center bg-slate-900 rounded-2xl border border-slate-800">
-                  <p className="text-sm font-bold text-slate-400">No news articles found for this entity in the last 90 days.</p>
-                  <p className="text-xs text-slate-600 mt-1">News matching uses entity_company_names from classified articles.</p>
-                </div>
-              )}
-
-              {newsFetched && articles.length > 0 && (
-                <>
-                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                    {articles.length} article{articles.length !== 1 ? 's' : ''} • Last 90 days
-                  </div>
-
-                  {articles.map(article => (
-                    <div key={article.id} className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg hover:border-slate-700 transition-all">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          {/* Title */}
-                          <a
-                            href={article.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm font-bold text-slate-200 hover:text-white hover:underline line-clamp-2 leading-tight"
-                          >
-                            {article.title}
-                          </a>
-
-                          {/* Meta row */}
-                          <div className="flex items-center gap-2 mt-2 flex-wrap">
-                            {article.sourceName && (
-                              <span className="text-[9px] text-slate-500 font-medium">{article.sourceName}</span>
-                            )}
-                            <span className="text-[9px] text-slate-600">
-                              {article.publishedAt ? new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }) : ''}
-                            </span>
-
-                            {/* Sentiment */}
-                            {article.sentimentLabel && (
-                              <span
-                                className="text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wider border"
-                                style={{
-                                  color:            SENTIMENT_COLORS[article.sentimentLabel] ?? '#94a3b8',
-                                  borderColor:      `${SENTIMENT_COLORS[article.sentimentLabel] ?? '#94a3b8'}40`,
-                                  backgroundColor:  `${SENTIMENT_COLORS[article.sentimentLabel] ?? '#94a3b8'}10`,
-                                }}
-                              >
-                                {article.sentimentLabel}
-                              </span>
-                            )}
-
-                            {/* Event type */}
-                            {article.eventType && article.eventType !== 'none' && (
-                              <span className="text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wider bg-slate-800 border border-slate-700/50 text-slate-400">
-                                {article.eventType.replace('_', ' ')}
-                              </span>
-                            )}
-
-                            {/* Importance */}
-                            {article.importance && article.importance !== 'low' && (
-                              <span
-                                className="text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wider border"
-                                style={{
-                                  color:           IMPORTANCE_COLORS[article.importance] ?? '#64748b',
-                                  borderColor:     `${IMPORTANCE_COLORS[article.importance] ?? '#64748b'}40`,
-                                  backgroundColor: `${IMPORTANCE_COLORS[article.importance] ?? '#64748b'}10`,
-                                }}
-                              >
-                                {article.importance}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Summary */}
-                          {article.articleSummary && (
-                            <p className="text-xs text-slate-400 mt-2 leading-relaxed line-clamp-2">{article.articleSummary}</p>
-                          )}
-
-                          {/* Impact tags */}
-                          {article.ftiRelevanceTags.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {article.ftiRelevanceTags.map(tag => (
-                                <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-indigo-900/20 border border-indigo-500/20 text-indigo-400 font-medium">
-                                  {tag.replace('_', ' ')}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-          )}
-        </>
+          <div className="text-center text-[9px] text-slate-700 pb-4">
+            Stats last computed: {stats.computedAt ? new Date(stats.computedAt).toLocaleString() : 'N/A'}
+          </div>
+        </div>
       )}
     </div>
   );
