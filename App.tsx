@@ -12,14 +12,10 @@ import CompanyDetailView from './components/CompanyDetailView';
 import FilterControls from './components/FilterControls';
 import CoverPage from './components/CoverPage';
 import AdminPage from './components/AdminPage';
-import ProspectingDashboard from './components/ProspectingDashboard';
-import LenderDashboard from './components/LenderDashboard';
-import TaxEquityDashboard from './components/TaxEquityDashboard';
 import EntityDetailView from './components/EntityDetailView';
-import OpportunitiesDashboard from './components/OpportunitiesDashboard';
 import PlantPursuitsDashboard from './components/PlantPursuitsDashboard';
 
-type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'prospecting' | 'lenders' | 'taxequity' | 'opportunities' | 'pursuits' | 'entity';
+type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor';
 
@@ -399,21 +395,8 @@ const App: React.FC = () => {
           </button>
           
           <button
-            onClick={() => setView('prospecting')}
-            title={sidebarCollapsed ? 'Prospecting' : undefined}
-            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
-              view === 'prospecting'
-                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/20'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-            }`}
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Prospecting</span>}
-          </button>
-
-          <button
             onClick={() => setView('lenders')}
-            title={sidebarCollapsed ? 'Lenders' : undefined}
+            title={sidebarCollapsed ? 'Lender Pursuits' : undefined}
             className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
               view === 'lenders' || (view === 'entity' && selectedEntity?.type === 'lender')
                 ? 'bg-cyan-700 text-white shadow-lg shadow-cyan-900/20'
@@ -421,12 +404,12 @@ const App: React.FC = () => {
             }`}
           >
             <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" /></svg>
-            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Lenders</span>}
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Lender Pursuits</span>}
           </button>
 
           <button
             onClick={() => setView('taxequity')}
-            title={sidebarCollapsed ? 'Tax Equity' : undefined}
+            title={sidebarCollapsed ? 'Tax Equity Pursuits' : undefined}
             className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
               view === 'taxequity' || (view === 'entity' && selectedEntity?.type === 'tax_equity')
                 ? 'bg-violet-700 text-white shadow-lg shadow-violet-900/20'
@@ -434,20 +417,7 @@ const App: React.FC = () => {
             }`}
           >
             <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Tax Equity</span>}
-          </button>
-
-          <button
-            onClick={() => setView('opportunities')}
-            title={sidebarCollapsed ? 'Opportunities' : undefined}
-            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
-              view === 'opportunities'
-                ? 'bg-amber-600 text-white shadow-lg shadow-amber-900/20'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-            }`}
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Opportunities</span>}
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Tax Equity Pursuits</span>}
           </button>
 
           <button
@@ -784,14 +754,10 @@ const App: React.FC = () => {
         ) : (
           view === 'company' && selectedUltParent
             ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} onPlantClick={handlePlantClickFromCompany} initialTab={companyActiveTab} onTabChange={setCompanyActiveTab} />
-            : view === 'prospecting'
-            ? <ProspectingDashboard onCompanyClick={handleCompanyClick} />
             : view === 'lenders'
-            ? <LenderDashboard onLenderClick={handleLenderClick} />
+            ? <div className="flex items-center justify-center h-full text-slate-500">Lender Pursuits — coming soon</div>
             : view === 'taxequity'
-            ? <TaxEquityDashboard onInvestorClick={handleTaxEquityClick} />
-            : view === 'opportunities'
-            ? <OpportunitiesDashboard onCompanyClick={handleCompanyClick} onLenderClick={handleLenderClick} onTaxEquityClick={handleTaxEquityClick} onPlantClick={(id) => handlePlantClick(id)} />
+            ? <div className="flex items-center justify-center h-full text-slate-500">Tax Equity Pursuits — coming soon</div>
             : view === 'pursuits'
             ? <PlantPursuitsDashboard onPlantClick={(id) => handlePlantClick(id)} />
             : view === 'entity' && selectedEntity
