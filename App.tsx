@@ -14,6 +14,8 @@ import CoverPage from './components/CoverPage';
 import AdminPage from './components/AdminPage';
 import EntityDetailView from './components/EntityDetailView';
 import PlantPursuitsDashboard from './components/PlantPursuitsDashboard';
+import LenderPursuitsDashboard from './components/LenderPursuitsDashboard';
+import TaxEquityPursuitsDashboard from './components/TaxEquityPursuitsDashboard';
 
 type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity';
 type Tab = 'Overview' | 'Watchlist' | Region;
@@ -766,9 +768,9 @@ const App: React.FC = () => {
           view === 'company' && selectedUltParent
             ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} onPlantClick={handlePlantClickFromCompany} initialTab={companyActiveTab} onTabChange={setCompanyActiveTab} />
             : view === 'lenders'
-            ? <div className="flex items-center justify-center h-full text-slate-500">Lender Pursuits — coming soon</div>
+            ? <LenderPursuitsDashboard onLenderClick={handleLenderClick} />
             : view === 'taxequity'
-            ? <div className="flex items-center justify-center h-full text-slate-500">Tax Equity Pursuits — coming soon</div>
+            ? <TaxEquityPursuitsDashboard onInvestorClick={handleTaxEquityClick} />
             : view === 'pursuits'
             ? <PlantPursuitsDashboard onPlantClick={handlePlantClickFromPursuits} />
             : view === 'entity' && selectedEntity
