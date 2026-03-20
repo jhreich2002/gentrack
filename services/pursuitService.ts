@@ -15,6 +15,8 @@ export interface PursuitPlant {
   fuelSource:      string;
   nameplateMw:     number;
   distressScore:   number | null;
+  newsScore:       number | null;
+  blendedScore:    number | null;
   ttmAvgFactor:    number | null;
   pursuitStatus:   string | null;
   lenders:         { name: string; role: string; facilityType: string }[];
@@ -172,16 +174,51 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
     });
   }
 
-  return (plantsData ?? []).map((p: Record<string, unknown>) => ({
-    eiaPlantCode:    p.eia_plant_code as string,
-    name:            (p.name as string) ?? p.eia_plant_code,
-    state:           (p.state as string) ?? '',
-    fuelSource:      (p.fuel_source as string) ?? '',
-    nameplateMw:     Number(p.nameplate_capacity_mw) || 0,
-    distressScore:   p.distress_score != null ? Number(p.distress_score) : null,
-    ttmAvgFactor:    p.ttm_avg_factor != null ? Number(p.ttm_avg_factor) : null,
-    pursuitStatus:   (p.pursuit_status as string | null) ?? null,
-    lenders:         lendersByCode.get(p.eia_plant_code as string) ?? [],
-    searchedAt:      searchedAtMap.get(p.eia_plant_code as string) ?? null,
-  }));
+  // 4. Fetch recent news activity (past 90 days) for these plants
+  const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const { data: newsData } = await supabase
+    .from('news_articles')
+    .select('plant_codes, importance')
+    .overlaps('plant_codes', plantCodes)
+    .gte('published_at', cutoff);
+
+  // Aggregate news counts per plant
+  const newsCountsByCode = new Map<string, { high: number; medium: number; low: number }>();
+  for (const row of newsData ?? []) {
+    const r = row as { plant_codes: string[]; importance: string | null };
+    for (const code of r.plant_codes ?? []) {
+      if (!plantCodes.includes(code)) continue;
+      if (!newsCountsByCode.has(code)) newsCountsByCode.set(code, { high: 0, medium: 0, low: 0 });
+      const counts = newsCountsByCode.get(code)!;
+      if (r.importance === 'high')   counts.high++;
+      else if (r.importance === 'medium') counts.medium++;
+      else counts.low++;
+    }
+  }
+
+  return (plantsData ?? []).map((p: Record<string, unknown>) => {
+    const code = p.eia_plant_code as string;
+    const distressScore = p.distress_score != null ? Number(p.distress_score) : null;
+    const counts = newsCountsByCode.get(code) ?? { high: 0, medium: 0, low: 0 };
+    const rawNews = counts.high * 30 + counts.medium * 10 + counts.low * 3;
+    const newsScore = Math.min(100, rawNews);
+    const blendedScore = distressScore != null
+      ? Math.min(100, 0.7 * distressScore + 0.3 * newsScore)
+      : newsScore > 0 ? newsScore : null;
+
+    return {
+      eiaPlantCode:    code,
+      name:            (p.name as string) ?? code,
+      state:           (p.state as string) ?? '',
+      fuelSource:      (p.fuel_source as string) ?? '',
+      nameplateMw:     Number(p.nameplate_capacity_mw) || 0,
+      distressScore,
+      newsScore,
+      blendedScore,
+      ttmAvgFactor:    p.ttm_avg_factor != null ? Number(p.ttm_avg_factor) : null,
+      pursuitStatus:   (p.pursuit_status as string | null) ?? null,
+      lenders:         lendersByCode.get(code) ?? [],
+      searchedAt:      searchedAtMap.get(code) ?? null,
+    };
+  });
 }

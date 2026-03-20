@@ -38,6 +38,14 @@ interface PlantRow {
   last_updated: string;
 }
 
+// NERC sub-region names that may be incorrectly stored in the state column
+const NERC_SUBREGION_NAMES = new Set([
+  'Colorado', 'Arizona/Nevada', 'New Mexico',
+  'NP-15', 'SP-15', 'ZP-26',
+  'Northwest', 'Southwest', 'CAISO',
+  'ERCOT', 'MISO', 'PJM', 'WECC',
+]);
+
 function rowToPlant(row: PlantRow): PowerPlant {
   return {
     id: row.id,
@@ -53,7 +61,8 @@ function rowToPlant(row: PlantRow): PowerPlant {
     county: row.county ?? undefined,
     generationHistory: [],
     location: {
-      state: row.state,
+      // Guard against NERC sub-region names being stored in the state column
+      state: NERC_SUBREGION_NAMES.has(row.state) ? '' : row.state,
       lat: row.lat,
       lng: row.lng,
       county: row.county ?? undefined,

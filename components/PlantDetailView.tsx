@@ -211,13 +211,14 @@ const PlantDetailView: React.FC<Props> = ({
             ) : (
               <>Owned by <span className="text-blue-400 font-bold">{plant.owner}</span></>
             )}
-            {' '}• {plant.region} / <span className="text-blue-300 font-semibold">{plant.subRegion}</span>
+            {' '}• <span className="text-slate-500 text-xs font-normal">NERC:</span> {plant.region} / <span className="text-blue-300 font-semibold">{plant.subRegion}</span>
           </p>
           <p className="text-slate-500 text-xs mt-1 font-mono">
             EIA Plant Code: <span className="text-slate-300 font-bold">{plant.eiaPlantCode}</span>
             {plant.operatorId && <> • Operator ID: <span className="text-slate-300 font-bold">{plant.operatorId}</span></>}
             {' • '}
-            {plant.county ? `${plant.county}, ` : ''}{plant.location.state}
+            <span className="text-slate-600">Location:</span>{' '}
+            {plant.county ? `${plant.county}, ` : ''}{plant.location.state || '—'}
             {plant.cod && (
               <> • Online: <span className="text-slate-300 font-bold">
                 {new Date(plant.cod + '-02').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
@@ -1178,6 +1179,9 @@ const PlantDetailView: React.FC<Props> = ({
                   <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
                     <div className="px-5 py-3 border-b border-slate-800">
                       <h4 className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Financing Parties</h4>
+                      {financing.citations.length > 0 && (
+                        <p className="text-[10px] text-slate-600 mt-0.5">Click a party name to view the supporting source</p>
+                      )}
                     </div>
                     <table className="w-full text-sm">
                       <thead>
@@ -1189,56 +1193,93 @@ const PlantDetailView: React.FC<Props> = ({
                         </tr>
                       </thead>
                       <tbody>
-                        {financingLenders.map((l, i) => (
-                          <tr key={i} className="border-b border-slate-800/30 last:border-b-0 hover:bg-slate-800/30 transition-colors">
-                            <td className="px-5 py-3">
-                              <div className="text-slate-200 font-semibold">{l.lenderName}</div>
-                              {l.notes && <div className="text-[10px] text-slate-500 mt-0.5 leading-snug max-w-xs">{l.notes}</div>}
-                            </td>
-                            <td className="px-5 py-3">
-                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-widest ${
-                                l.role === 'tax_equity'   ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
-                                l.role === 'lender'       ? 'text-sky-400 bg-sky-900/20 border-sky-700/30' :
-                                l.role === 'sponsor'      ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
-                                l.role === 'co-investor'  ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
-                                'text-slate-400 bg-slate-800/40 border-slate-700/30'
-                              }`}>
-                                {l.role.replace(/_/g, ' ')}
-                              </span>
-                            </td>
-                            <td className="px-5 py-3 text-slate-400 text-xs">{l.facilityType.replace(/_/g, ' ')}</td>
-                            <td className="px-5 py-3">
-                              <span className={`text-[9px] font-bold uppercase ${
-                                l.confidence === 'high'   ? 'text-green-400' :
-                                l.confidence === 'medium' ? 'text-amber-400' :
-                                'text-slate-500'
-                              }`}>{l.confidence}</span>
-                            </td>
-                          </tr>
-                        ))}
+                        {financingLenders.map((l, i) => {
+                          const citations = financing.citations;
+                          // Find the citation best matching this lender's name
+                          const lowerName = l.lenderName.toLowerCase();
+                          const matched = citations.find((c: { url: string; title: string; snippet: string }) =>
+                            c.title?.toLowerCase().includes(lowerName) ||
+                            c.snippet?.toLowerCase().includes(lowerName)
+                          ) ?? citations[0];
+                          const citationUrl = matched?.url ?? null;
+
+                          return (
+                            <tr key={i} className="border-b border-slate-800/30 last:border-b-0 hover:bg-slate-800/30 transition-colors">
+                              <td className="px-5 py-3">
+                                {citationUrl ? (
+                                  <a
+                                    href={citationUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                                    className="text-slate-200 font-semibold hover:text-blue-400 underline underline-offset-2 decoration-slate-600 hover:decoration-blue-400 transition-colors cursor-pointer"
+                                  >
+                                    {l.lenderName}
+                                  </a>
+                                ) : (
+                                  <div className="text-slate-200 font-semibold">{l.lenderName}</div>
+                                )}
+                                {l.notes && <div className="text-[10px] text-slate-500 mt-0.5 leading-snug max-w-xs">{l.notes}</div>}
+                              </td>
+                              <td className="px-5 py-3">
+                                <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-widest ${
+                                  l.role === 'tax_equity'   ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
+                                  l.role === 'lender'       ? 'text-sky-400 bg-sky-900/20 border-sky-700/30' :
+                                  l.role === 'sponsor'      ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
+                                  l.role === 'co-investor'  ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
+                                  'text-slate-400 bg-slate-800/40 border-slate-700/30'
+                                }`}>
+                                  {l.role.replace(/_/g, ' ')}
+                                </span>
+                              </td>
+                              <td className="px-5 py-3 text-slate-400 text-xs">{l.facilityType.replace(/_/g, ' ')}</td>
+                              <td className="px-5 py-3">
+                                <span className={`text-[9px] font-bold uppercase ${
+                                  l.confidence === 'high'   ? 'text-green-400' :
+                                  l.confidence === 'medium' ? 'text-amber-400' :
+                                  'text-slate-500'
+                                }`}>{l.confidence}</span>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
                 )}
 
-                {/* Citations */}
+                {/* Citations — card style */}
                 {financing.citations.length > 0 && (
                   <div>
-                    <div className="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-2">Sources</div>
-                    <div className="space-y-1.5">
+                    <div className="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-3">Sources</div>
+                    <div className="space-y-2">
                       {financing.citations.map((c, i) => {
-                        let display = c.title;
-                        if (!display || display === c.url) {
-                          try { display = new URL(c.url).hostname; } catch { display = c.url; }
-                        }
+                        let hostname = '';
+                        try { hostname = new URL(c.url).hostname.replace(/^www\./, ''); } catch { hostname = c.url; }
+                        const title = (c.title && c.title !== c.url) ? c.title : hostname;
                         return (
-                          <a key={i} href={c.url} target="_blank" rel="noopener noreferrer"
-                             className="flex items-center gap-2 text-xs text-blue-400 hover:text-blue-300 transition-colors group">
-                            <span className="text-slate-600 shrink-0">{i + 1}.</span>
-                            <span className="underline underline-offset-2 line-clamp-1">{display}</span>
-                            <svg className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                            </svg>
+                          <a
+                            key={i}
+                            href={c.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex gap-3 bg-slate-900 border border-slate-800 hover:border-slate-600 rounded-xl p-4 transition-colors group cursor-pointer"
+                          >
+                            <span className="text-[10px] font-mono text-slate-600 shrink-0 mt-0.5">{i + 1}</span>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-semibold text-blue-400 group-hover:text-blue-300 transition-colors line-clamp-2 leading-snug mb-1">
+                                {title}
+                              </div>
+                              {c.snippet && (
+                                <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">{c.snippet}</p>
+                              )}
+                              <div className="flex items-center gap-1.5 mt-2">
+                                <span className="text-[10px] text-slate-600 font-medium">{hostname}</span>
+                                <svg className="w-3 h-3 text-slate-700 group-hover:text-slate-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                </svg>
+                              </div>
+                            </div>
                           </a>
                         );
                       })}

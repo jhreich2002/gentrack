@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useTransition, useDeferredValue } from 'react';
+import React, { useState, useEffect, useMemo, useTransition } from 'react';
 import { PowerPlant, Region, FuelSource, CapacityFactorStats, AnalysisResult } from './types';
 import { REGIONS, FUEL_SOURCES, COLORS, SUBREGIONS } from './constants';
 import { fetchPowerPlants, fetchGenerationHistory, fetchRegionalTrend, fetchSubRegionalTrend, calculateCapacityFactorStats, getDataTimestamp } from './services/dataService';
@@ -50,14 +50,6 @@ const App: React.FC = () => {
   const [minCurtailmentLag, setMinCurtailmentLag] = useState<number>(0);
   const [maxCFThreshold, setMaxCFThreshold] = useState<number | null>(null);
 
-  // Deferred filter values — React can interrupt re-renders for these
-  const deferredNoGenMonths = useDeferredValue(noGenMonths);
-  const deferredMinCurtailmentLag = useDeferredValue(minCurtailmentLag);
-  const deferredMaxCFThreshold = useDeferredValue(maxCFThreshold);
-  const deferredSearch = useDeferredValue(search);
-  const deferredSelectedFuels = useDeferredValue(selectedFuels);
-  const deferredSelectedSubRegions = useDeferredValue(selectedSubRegions);
-  const isFilterStale = deferredNoGenMonths !== noGenMonths || deferredMinCurtailmentLag !== minCurtailmentLag || deferredMaxCFThreshold !== maxCFThreshold || deferredSearch !== search || deferredSelectedFuels !== selectedFuels || deferredSelectedSubRegions !== selectedSubRegions;
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -224,26 +216,26 @@ const App: React.FC = () => {
                          p.region === activeTab;
       
       // Sub-Region Match (only if in a specific region tab)
-      const subRegionMatch = (activeTab !== 'Overview' && activeTab !== 'Watchlist' && deferredSelectedSubRegions.length > 0)
-        ? deferredSelectedSubRegions.includes(p.subRegion)
+      const subRegionMatch = (activeTab !== 'Overview' && activeTab !== 'Watchlist' && selectedSubRegions.length > 0)
+        ? selectedSubRegions.includes(p.subRegion)
         : true;
 
-      const fuelMatch = deferredSelectedFuels.includes(p.fuelSource);
-      const searchMatch = 
-        p.name.toLowerCase().includes(deferredSearch.toLowerCase()) || 
-        p.id.toLowerCase().includes(deferredSearch.toLowerCase()) ||
-        p.eiaPlantCode.toLowerCase().includes(deferredSearch.toLowerCase()) ||
-        p.owner.toLowerCase().includes(deferredSearch.toLowerCase()) ||
-        p.location?.state?.toLowerCase().includes(deferredSearch.toLowerCase()) ||
-        p.county?.toLowerCase().includes(deferredSearch.toLowerCase());
+      const fuelMatch = selectedFuels.includes(p.fuelSource);
+      const searchMatch =
+        p.name.toLowerCase().includes(search.toLowerCase()) ||
+        p.id.toLowerCase().includes(search.toLowerCase()) ||
+        p.eiaPlantCode.toLowerCase().includes(search.toLowerCase()) ||
+        p.owner.toLowerCase().includes(search.toLowerCase()) ||
+        p.location?.state?.toLowerCase().includes(search.toLowerCase()) ||
+        p.county?.toLowerCase().includes(search.toLowerCase());
       const stats = statsMap[p.id];
-      const gapMatch = deferredNoGenMonths === 0 || (stats?.trailingZeroMonths ?? 0) < deferredNoGenMonths;
-      const lagMatch = deferredMinCurtailmentLag === 0
+      const gapMatch = noGenMonths === 0 || (stats?.trailingZeroMonths ?? 0) < noGenMonths;
+      const lagMatch = minCurtailmentLag === 0
         ? true
-        : (stats?.isLikelyCurtailed && (stats?.curtailmentScore ?? 0) >= deferredMinCurtailmentLag);
-      const cfMatch = deferredMaxCFThreshold === null
+        : (stats?.isLikelyCurtailed && (stats?.curtailmentScore ?? 0) >= minCurtailmentLag);
+      const cfMatch = maxCFThreshold === null
         ? true
-        : (stats?.ttmAverage ?? 0) * 100 <= deferredMaxCFThreshold;
+        : (stats?.ttmAverage ?? 0) * 100 <= maxCFThreshold;
       
       return regionMatch && subRegionMatch && fuelMatch && searchMatch && gapMatch && lagMatch && cfMatch;
     });
@@ -262,7 +254,7 @@ const App: React.FC = () => {
     });
 
     return result;
-  }, [plants, activeTab, deferredSelectedSubRegions, deferredSelectedFuels, deferredSearch, deferredNoGenMonths, deferredMinCurtailmentLag, deferredMaxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
+  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, noGenMonths, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -662,14 +654,6 @@ const App: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {isFilterStale && (
-                      <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-[1px] z-10 flex items-start justify-center pt-20 rounded-2xl">
-                        <div className="flex items-center gap-2 bg-slate-800 border border-slate-700 px-4 py-2 rounded-xl shadow-xl">
-                          <svg className="w-4 h-4 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                          <span className="text-xs font-bold text-slate-300">Filtering...</span>
-                        </div>
-                      </div>
-                    )}
                     {paginatedPlants.map(plant => {
                       const stats = statsMap[plant.id];
                       const isWatched = watchlist.includes(plant.id);
