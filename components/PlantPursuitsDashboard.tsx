@@ -110,14 +110,6 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  // Summary stats
-  const highDistress  = plants.filter(p => (p.blendedScore ?? 0) >= 70).length;
-  const midDistress   = plants.filter(p => (p.blendedScore ?? 0) >= 40 && (p.blendedScore ?? 0) < 70).length;
-  const avgNews       = plants.length > 0
-    ? Math.round(plants.reduce((sum, p) => sum + (p.newsScore ?? 0), 0) / plants.length)
-    : 0;
-  const totalLenders  = plants.reduce((sum, p) => sum + p.lenders.length, 0);
-
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -141,30 +133,6 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
           Curtailed plants with confirmed lenders — ranked by pursuit score (curtailment distress + recent news activity).
           {plants.length > 0 && ` ${plants.length.toLocaleString()} plants with identified financing parties.`}
         </p>
-      </div>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
-          <div className="text-[10px] font-black uppercase tracking-widest mb-1 text-emerald-400">Confirmed Lenders</div>
-          <div className="text-2xl font-black text-white">{plants.length.toLocaleString()}</div>
-          <div className="text-xs text-slate-500 mt-0.5">plants</div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
-          <div className="text-[10px] font-black uppercase tracking-widest mb-1 text-red-400">High Priority ≥70</div>
-          <div className="text-2xl font-black text-red-400">{highDistress.toLocaleString()}</div>
-          <div className="text-xs text-slate-500 mt-0.5">actively pursue</div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
-          <div className="text-[10px] font-black uppercase tracking-widest mb-1 text-amber-400">Watch 40–69</div>
-          <div className="text-2xl font-black text-amber-400">{midDistress.toLocaleString()}</div>
-          <div className="text-xs text-slate-500 mt-0.5">monitor closely</div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
-          <div className="text-[10px] font-black uppercase tracking-widest mb-1 text-cyan-400">Avg News Activity</div>
-          <div className="text-2xl font-black text-white">{avgNews}</div>
-          <div className="text-xs text-slate-500 mt-0.5">{totalLenders} financing parties</div>
-        </div>
       </div>
 
       {/* Filters */}
