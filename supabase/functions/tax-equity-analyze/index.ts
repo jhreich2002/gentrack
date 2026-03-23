@@ -15,7 +15,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
-const GEMINI_BASE  = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent';
+const GEMINI_BASE  = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const CACHE_HOURS  = 12;
 const MAX_ARTICLES = 10;
 const MAX_PLANTS   = 20;
@@ -180,7 +180,7 @@ Respond ONLY with valid JSON — no markdown fences, no extra keys:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
+          generationConfig: { temperature: 0.4, maxOutputTokens: 4096 },
         }),
       });
       if (geminiResp.ok) {
