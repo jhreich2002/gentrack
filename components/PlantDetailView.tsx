@@ -933,42 +933,10 @@ const PlantDetailView: React.FC<Props> = ({
                 )}
               </div>
 
-              {/* Window counts strip */}
-              {newsRating && (
-                <div className="grid grid-cols-3 gap-3 mb-6">
-                  {[['30d', newsRating.articles30d, newsRating.negative30d, newsRating.outage30d],
-                    ['90d', newsRating.articles90d, newsRating.negative90d, newsRating.outage90d],
-                    ['1yr', newsRating.articles365d, newsRating.negative365d, newsRating.outage365d]
-                  ].map(([label, total, neg, outage]) => (
-                    <div key={String(label)} className="bg-slate-800/40 rounded-xl p-4 border border-slate-700/50">
-                      <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">{label}</div>
-                      <div className="text-lg font-black text-white">{String(total)} <span className="text-xs font-normal text-slate-400">articles</span></div>
-                      <div className="flex gap-3 mt-1">
-                        <span className="text-[10px] font-bold text-red-400">{String(neg)} neg</span>
-                        <span className="text-[10px] font-bold text-amber-400">{String(outage)} outage</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Topic filter pills + time window selector */}
+              {/* Time window selector */}
               {intelFetched && newsArticles.length > 0 && (
                 <div className="flex items-center gap-2 mb-5 flex-wrap">
-                  {['all','outage','regulatory','financial','weather','construction'].map(t => (
-                    <button
-                      key={t}
-                      onClick={() => setIntelTopicFilter(t)}
-                      className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
-                        intelTopicFilter === t
-                          ? 'bg-emerald-600 border-emerald-500 text-white'
-                          : 'bg-slate-800/40 border-slate-700/50 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                  <div className="ml-auto flex gap-1">
+                  <div className="flex gap-1">
                     {[30, 90, 365, 9999].map(d => (
                       <button
                         key={d}
