@@ -126,7 +126,6 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Investor</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-28">Plants</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-36">Distress</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-28">Committed</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -204,12 +203,6 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
                       </div>
                     </td>
 
-                    {/* Committed */}
-                    <td className="px-4 py-4 text-right align-top text-sm text-slate-400">
-                      {inv.totalCommittedUsd != null
-                        ? `$${(inv.totalCommittedUsd / 1_000_000).toFixed(0)}M`
-                        : '—'}
-                    </td>
                   </tr>
                 );
               })}

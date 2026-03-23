@@ -138,7 +138,6 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-28">Plants</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-36">Distress</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-32">Facility Types</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-28">Exposure</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -230,12 +229,6 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                       </div>
                     </td>
 
-                    {/* Exposure */}
-                    <td className="px-4 py-4 text-right align-top text-sm text-slate-400">
-                      {lender.totalExposureUsd != null
-                        ? `$${(lender.totalExposureUsd / 1_000_000).toFixed(0)}M`
-                        : '—'}
-                    </td>
                   </tr>
                 );
               })}
