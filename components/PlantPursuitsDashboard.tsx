@@ -2,26 +2,15 @@
  * GenTrack — PlantPursuitsDashboard
  *
  * Ranked list of curtailed plants with confirmed lenders.
- * Sorted by blended pursuit score (70% curtailment distress + 30% news activity).
+ * Sorted by pursuit score.
  */
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
+import { COLORS } from '../constants';
 
 interface Props {
   onPlantClick: (eiaPlantCode: string) => void;
-}
-
-function scoreColor(score: number): string {
-  if (score >= 70) return 'text-red-400';
-  if (score >= 40) return 'text-amber-400';
-  return 'text-green-400';
-}
-
-function scoreBarColor(score: number): string {
-  if (score >= 70) return 'bg-red-500';
-  if (score >= 40) return 'bg-amber-500';
-  return 'bg-green-500';
 }
 
 function formatCf(f: number | null): string {
@@ -40,23 +29,29 @@ function facilityTypeShort(ft: string): string {
   return MAP[ft?.toLowerCase().replace(/ /g, '_')] ?? ft?.slice(0, 2).toUpperCase() ?? '?';
 }
 
-const FUEL_COLORS: Record<string, string> = {
-  Solar:   'bg-yellow-900/30 text-yellow-400 border-yellow-500/30',
-  Wind:    'bg-sky-900/30 text-sky-400 border-sky-500/30',
-  Nuclear: 'bg-violet-900/30 text-violet-400 border-violet-500/30',
-  Gas:     'bg-orange-900/30 text-orange-400 border-orange-500/30',
-  Coal:    'bg-stone-900/30 text-stone-400 border-stone-500/30',
-  Hydro:   'bg-blue-900/30 text-blue-400 border-blue-500/30',
-};
-
-function fuelChipClass(fuel: string): string {
-  for (const [key, cls] of Object.entries(FUEL_COLORS)) {
-    if (fuel.toLowerCase().includes(key.toLowerCase())) return cls;
-  }
-  return 'bg-slate-800 text-slate-400 border-slate-600';
+function fuelColor(fuel: string): string {
+  const lower = fuel.toLowerCase();
+  if (lower.includes('wind'))    return COLORS['Wind']    ?? '#38bdf8';
+  if (lower.includes('solar'))   return COLORS['Solar']   ?? '#facc15';
+  if (lower.includes('nuclear')) return COLORS['Nuclear'] ?? '#4ade80';
+  return '#94a3b8';
 }
 
-type SortKey = 'blended' | 'mw' | 'lenders' | 'news';
+function scoreLabel(val: number | null): { text: string; color: string; bg: string } {
+  if (val == null) return { text: '—', color: 'text-slate-600', bg: '' };
+  if (val >= 60) return { text: 'HIGH', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/30' };
+  if (val >= 30) return { text: 'MED', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/30' };
+  return { text: 'LOW', color: 'text-slate-400', bg: 'bg-slate-500/10 border-slate-500/30' };
+}
+
+function trendIndicator(cfTrend: number | null): React.ReactNode {
+  if (cfTrend == null) return null;
+  if (cfTrend > 0.05) return <span className="text-red-400 text-[10px] font-bold ml-1" title={`Degrading ${(cfTrend * 100).toFixed(0)}%`}>▼</span>;
+  if (cfTrend < -0.05) return <span className="text-emerald-400 text-[10px] font-bold ml-1" title={`Improving ${(Math.abs(cfTrend) * 100).toFixed(0)}%`}>▲</span>;
+  return null;
+}
+
+type SortKey = 'pursuit' | 'distress' | 'opportunity' | 'mw' | 'lenders' | 'factor';
 type FuelFilter = 'all' | string;
 
 const PAGE_SIZE = 50;
@@ -68,7 +63,8 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
   const [search, setSearch]           = useState('');
   const [stateFilter, setStateFilter] = useState('all');
   const [fuelFilter, setFuelFilter]   = useState<FuelFilter>('all');
-  const [sortKey, setSortKey]         = useState<SortKey>('blended');
+  const [sortKey, setSortKey]         = useState<SortKey>('pursuit');
+  const [sortDesc, setSortDesc]       = useState(true);
   const [page, setPage]               = useState(1);
 
   useEffect(() => {
@@ -88,6 +84,16 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
     return ['all', ...Array.from(s).sort()];
   }, [plants]);
 
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDesc(d => !d);
+    } else {
+      setSortKey(key);
+      setSortDesc(true);
+    }
+    setPage(1);
+  };
+
   const filtered = useMemo(() => {
     let result = plants;
 
@@ -99,13 +105,16 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
     if (fuelFilter !== 'all')  result = result.filter(p => p.fuelSource === fuelFilter);
 
     const sorted = [...result];
-    if (sortKey === 'blended') sorted.sort((a, b) => (b.blendedScore ?? 0) - (a.blendedScore ?? 0));
-    if (sortKey === 'news')    sorted.sort((a, b) => (b.newsScore ?? 0) - (a.newsScore ?? 0));
-    if (sortKey === 'mw')      sorted.sort((a, b) => b.nameplateMw - a.nameplateMw);
-    if (sortKey === 'lenders') sorted.sort((a, b) => b.lenders.length - a.lenders.length);
+    const dir = sortDesc ? -1 : 1;
+    if (sortKey === 'pursuit')     sorted.sort((a, b) => dir * ((a.pursuitScore ?? 0) - (b.pursuitScore ?? 0)));
+    if (sortKey === 'distress')    sorted.sort((a, b) => dir * ((a.distressScore ?? 0) - (b.distressScore ?? 0)));
+    if (sortKey === 'opportunity') sorted.sort((a, b) => dir * ((a.opportunityScore ?? 0) - (b.opportunityScore ?? 0)));
+    if (sortKey === 'mw')          sorted.sort((a, b) => dir * (a.nameplateMw - b.nameplateMw));
+    if (sortKey === 'lenders')     sorted.sort((a, b) => dir * (a.lenders.length - b.lenders.length));
+    if (sortKey === 'factor')      sorted.sort((a, b) => dir * ((a.ttmAvgFactor ?? 0) - (b.ttmAvgFactor ?? 0)));
 
     return sorted;
-  }, [plants, search, stateFilter, fuelFilter, sortKey]);
+  }, [plants, search, stateFilter, fuelFilter, sortKey, sortDesc]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -130,7 +139,7 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
           <h1 className="text-4xl font-black text-white tracking-tight">Plant Pursuits</h1>
         </div>
         <p className="text-slate-400 font-medium max-w-2xl leading-relaxed">
-          Curtailed plants with confirmed lenders — ranked by pursuit score (curtailment distress + recent news activity).
+          Curtailed plants with confirmed lenders — ranked by pursuit score.
           {plants.length > 0 && ` ${plants.length.toLocaleString()} plants with identified financing parties.`}
         </p>
       </div>
@@ -160,22 +169,6 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
         >
           {fuels.map(f => <option key={f} value={f}>{f === 'all' ? 'All Fuels' : f}</option>)}
         </select>
-
-        <select
-          value={sortKey}
-          onChange={e => { setSortKey(e.target.value as SortKey); setPage(1); }}
-          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
-        >
-          <option value="blended">Sort: Pursuit Score</option>
-          <option value="news">Sort: News Activity</option>
-          <option value="mw">Sort: Capacity (MW)</option>
-          <option value="lenders">Sort: # Lenders</option>
-        </select>
-      </div>
-
-      {/* Score legend */}
-      <div className="flex items-center gap-4 mb-4 text-[10px] text-slate-600 font-medium">
-        <span>Pursuit Score = 70% curtailment distress + 30% news activity (90-day window)</span>
       </div>
 
       {/* Plant table */}
@@ -184,75 +177,120 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-800/70 text-slate-400 text-[10px] font-bold uppercase tracking-[0.15em]">
-                <th className="px-4 py-4 w-10 text-center">#</th>
-                <th className="px-4 py-4">Plant</th>
-                <th className="px-4 py-4 text-right">Pursuit Score</th>
-                <th className="px-4 py-4 text-right">News</th>
-                <th className="px-4 py-4 text-right">TTM CF</th>
-                <th className="px-4 py-4 text-right">MW</th>
-                <th className="px-4 py-4">Financing Parties</th>
+                <th className="px-6 py-5">Plant Name</th>
+                <th className="px-6 py-5">Fuel</th>
+                <th className="px-6 py-5 text-right cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('mw')}>
+                  Capacity (MW) {sortKey === 'mw' && (sortDesc ? '↓' : '↑')}
+                </th>
+                <th className="px-6 py-5 text-right cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('factor')}>
+                  TTM Factor {sortKey === 'factor' && (sortDesc ? '↓' : '↑')}
+                </th>
+                <th className="px-6 py-5 text-center cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('distress')}>
+                  Distress {sortKey === 'distress' && (sortDesc ? '↓' : '↑')}
+                </th>
+                <th className="px-6 py-5 text-center cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('opportunity')}>
+                  Opportunity {sortKey === 'opportunity' && (sortDesc ? '↓' : '↑')}
+                </th>
+                <th className="px-6 py-5 text-center cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('pursuit')}>
+                  Pursuit Score {sortKey === 'pursuit' && (sortDesc ? '↓' : '↑')}
+                </th>
+                <th className="px-6 py-5 cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('lenders')}>
+                  Financing Parties {sortKey === 'lenders' && (sortDesc ? '↓' : '↑')}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {paginated.map((plant, idx) => {
-                const rank     = (page - 1) * PAGE_SIZE + idx + 1;
-                const score    = plant.blendedScore ?? plant.distressScore ?? 0;
-                const newsScore = plant.newsScore ?? 0;
+              {paginated.map((plant) => {
+                const color = fuelColor(plant.fuelSource);
                 return (
                   <tr
                     key={plant.eiaPlantCode}
                     onClick={() => onPlantClick(plant.eiaPlantCode)}
                     className="cursor-pointer transition-all hover:bg-slate-800/60 group"
                   >
-                    <td className="px-4 py-4 text-center">
-                      <span className="text-xs font-mono text-slate-600">{rank}</span>
-                    </td>
-
-                    <td className="px-4 py-4">
-                      <div className="flex items-start gap-2">
-                        <div>
-                          <div className="text-sm font-bold text-slate-200 group-hover:text-emerald-400 transition-colors leading-snug">
-                            {plant.name}
-                          </div>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <span className="text-[10px] text-slate-500 font-mono">{plant.state}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold ${fuelChipClass(plant.fuelSource)}`}>
-                              {plant.fuelSource}
-                            </span>
-                          </div>
+                    {/* Plant Name */}
+                    <td className="px-6 py-5">
+                      <div>
+                        <div className="font-bold text-slate-200 group-hover:text-blue-400 transition-colors text-sm">
+                          {plant.name}
+                        </div>
+                        <div className="text-[10px] text-slate-600 font-mono tracking-tighter">
+                          EIA ID: {plant.eiaPlantCode} | {plant.state}
                         </div>
                       </div>
                     </td>
 
-                    <td className="px-4 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${scoreBarColor(score)}`}
-                            style={{ width: `${score}%` }}
-                          />
-                        </div>
-                        <span className={`text-sm font-black w-7 text-right ${scoreColor(score)}`}>
-                          {Math.round(score)}
-                        </span>
-                      </div>
-                    </td>
-
-                    <td className="px-4 py-4 text-right">
-                      <span className={`text-xs font-bold ${newsScore > 0 ? 'text-cyan-400' : 'text-slate-600'}`}>
-                        {Math.round(newsScore)}
+                    {/* Fuel */}
+                    <td className="px-6 py-5">
+                      <span
+                        style={{ color, backgroundColor: `${color}10` }}
+                        className="text-[10px] px-2 py-0.5 rounded font-bold border border-current"
+                      >
+                        {plant.fuelSource.toUpperCase()}
                       </span>
                     </td>
 
-                    <td className="px-4 py-4 text-right font-mono text-xs text-slate-400">
-                      {formatCf(plant.ttmAvgFactor)}
+                    {/* Capacity (MW) */}
+                    <td className="px-6 py-5 text-right font-mono text-sm text-slate-300">
+                      {plant.nameplateMw > 0 ? plant.nameplateMw.toLocaleString() : '—'}
                     </td>
 
-                    <td className="px-4 py-4 text-right font-mono text-xs text-slate-400">
-                      {plant.nameplateMw > 0 ? `${plant.nameplateMw.toLocaleString()}` : '—'}
+                    {/* TTM Factor */}
+                    <td className="px-6 py-5 text-right">
+                      <div className="font-mono text-sm font-bold text-slate-200">
+                        {formatCf(plant.ttmAvgFactor)}{trendIndicator(plant.cfTrend)}
+                      </div>
+                      {plant.ttmAvgFactor != null && (
+                        <div className="w-full h-1 bg-slate-800 rounded-full mt-2 overflow-hidden max-w-[80px] ml-auto">
+                          <div
+                            className="h-full rounded-full transition-all duration-500"
+                            style={{
+                              width: `${Math.min(100, plant.ttmAvgFactor * 100)}%`,
+                              backgroundColor: color,
+                            }}
+                          />
+                        </div>
+                      )}
                     </td>
 
-                    <td className="px-4 py-4">
+                    {/* Distress */}
+                    <td className="px-6 py-5 text-center">
+                      {(() => {
+                        const s = scoreLabel(plant.distressScore);
+                        return plant.distressScore != null ? (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${s.bg} ${s.color}`}>
+                            {plant.distressScore.toFixed(0)} {s.text}
+                          </span>
+                        ) : <span className="text-slate-600">—</span>;
+                      })()}
+                    </td>
+
+                    {/* Opportunity */}
+                    <td className="px-6 py-5 text-center">
+                      {(() => {
+                        const s = scoreLabel(plant.opportunityScore);
+                        return plant.opportunityScore != null ? (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${s.bg} ${s.color}`}>
+                            {plant.opportunityScore.toFixed(0)} {s.text}
+                          </span>
+                        ) : <span className="text-slate-600">—</span>;
+                      })()}
+                    </td>
+
+                    {/* Pursuit Score */}
+                    <td className="px-6 py-5 text-center">
+                      {(() => {
+                        const s = scoreLabel(plant.pursuitScore);
+                        return plant.pursuitScore != null ? (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${s.bg} ${s.color}`}>
+                            {plant.pursuitScore.toFixed(0)} {s.text}
+                          </span>
+                        ) : <span className="text-slate-600">—</span>;
+                      })()}
+                    </td>
+
+                    {/* Financing Parties */}
+                    <td className="px-6 py-5">
                       {plant.lenders.length > 0
                         ? (
                           <div className="flex flex-wrap gap-1 max-w-sm">
@@ -284,8 +322,12 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
         </div>
 
         {filtered.length === 0 && (
-          <div className="py-24 text-center text-slate-600">
-            <p className="font-semibold">No plants match your filters.</p>
+          <div className="py-32 text-center text-slate-700 bg-slate-900/20">
+            <p className="font-semibold text-lg">
+              {plants.length === 0
+                ? 'No pursuit data available.'
+                : 'No plants match your filters.'}
+            </p>
             <p className="text-sm mt-1">
               {plants.length === 0
                 ? 'Run the lender-search sweep to populate confirmed financing data.'
@@ -301,19 +343,55 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
             </div>
             <div className="flex items-center gap-2">
               <button
+                onClick={() => setPage(1)}
+                disabled={page === 1}
+                className="px-2 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+              >
+                ««
+              </button>
+              <button
                 onClick={() => setPage(p => Math.max(1, p - 1))}
                 disabled={page === 1}
-                className="px-3 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+                className="px-2 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
               >
                 ‹ Prev
               </button>
-              <span className="text-xs text-slate-500 font-mono">{page} / {totalPages}</span>
+              <div className="flex items-center gap-1">
+                {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                  let pageNum: number;
+                  if (totalPages <= 7) {
+                    pageNum = i + 1;
+                  } else if (page <= 4) {
+                    pageNum = i + 1;
+                  } else if (page >= totalPages - 3) {
+                    pageNum = totalPages - 6 + i;
+                  } else {
+                    pageNum = page - 3 + i;
+                  }
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setPage(pageNum)}
+                      className={`w-8 h-8 rounded text-xs font-bold transition-all ${page === pageNum ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+              </div>
               <button
                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 disabled={page === totalPages}
-                className="px-3 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+                className="px-2 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
               >
                 Next ›
+              </button>
+              <button
+                onClick={() => setPage(totalPages)}
+                disabled={page === totalPages}
+                className="px-2 py-1 rounded text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-default transition-all"
+              >
+                »»
               </button>
             </div>
           </div>

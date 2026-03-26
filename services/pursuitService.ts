@@ -14,9 +14,13 @@ export interface PursuitPlant {
   state:           string;
   fuelSource:      string;
   nameplateMw:     number;
+  curtailmentScore: number | null;
+  newsRiskScore:   number | null;
   distressScore:   number | null;
-  newsScore:       number | null;
-  blendedScore:    number | null;
+  cfTrend:         number | null;
+  recentCf:        number | null;
+  opportunityScore: number | null;
+  pursuitScore:    number | null;
   ttmAvgFactor:    number | null;
   pursuitStatus:   string | null;
   lenders:         { name: string; role: string; facilityType: string }[];
@@ -140,13 +144,13 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
     (summaryData ?? []).map((r: { eia_plant_code: string; searched_at: string | null }) => [r.eia_plant_code, r.searched_at]),
   );
 
-  // 2. Fetch plant info (curtailed only)
+  // 2. Fetch plant info (curtailed only) — use curtailment_score directly
   const { data: plantsData, error: plantsErr } = await supabase
     .from('plants')
-    .select('eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, distress_score, ttm_avg_factor, pursuit_status')
+    .select('eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, curtailment_score, ttm_avg_factor, pursuit_status')
     .in('eia_plant_code', codes)
     .eq('is_likely_curtailed', true)
-    .order('distress_score', { ascending: false, nullsFirst: false });
+    .order('curtailment_score', { ascending: false, nullsFirst: false });
 
   if (plantsErr) {
     console.error('pursuitService: plants error:', plantsErr.message);
@@ -174,48 +178,92 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
     });
   }
 
-  // 4. Fetch recent news activity (past 90 days) for these plants
-  const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-  const { data: newsData } = await supabase
-    .from('news_articles')
-    .select('plant_codes, importance')
-    .overlaps('plant_codes', plantCodes)
-    .gte('published_at', cutoff);
+  // 4. Fetch precomputed news_risk_score (used once, no double-counting)
+  const { data: ratingsData } = await supabase
+    .from('plant_news_ratings')
+    .select('eia_plant_code, news_risk_score')
+    .in('eia_plant_code', plantCodes);
 
-  // Aggregate news counts per plant
-  const newsCountsByCode = new Map<string, { high: number; medium: number; low: number }>();
-  for (const row of newsData ?? []) {
-    const r = row as { plant_codes: string[]; importance: string | null };
-    for (const code of r.plant_codes ?? []) {
-      if (!plantCodes.includes(code)) continue;
-      if (!newsCountsByCode.has(code)) newsCountsByCode.set(code, { high: 0, medium: 0, low: 0 });
-      const counts = newsCountsByCode.get(code)!;
-      if (r.importance === 'high')   counts.high++;
-      else if (r.importance === 'medium') counts.medium++;
-      else counts.low++;
-    }
+  const newsRiskMap = new Map<string, number>();
+  for (const row of ratingsData ?? []) {
+    const r = row as { eia_plant_code: string; news_risk_score: number | null };
+    if (r.news_risk_score != null) newsRiskMap.set(r.eia_plant_code, Number(r.news_risk_score));
   }
+
+  // 5. Fetch recent 3-month generation to compute CF trend
+  const threeMonthsAgo = new Date();
+  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+  const cutoffMonth = threeMonthsAgo.toISOString().slice(0, 7);
+
+  const { data: genData } = await supabase
+    .from('monthly_generation')
+    .select('plant_id, month, mwh')
+    .in('plant_id', plantCodes)
+    .gte('month', cutoffMonth);
+
+  const genByPlant = new Map<string, { totalMwh: number; months: number }>();
+  for (const row of genData ?? []) {
+    const r = row as { plant_id: string; month: string; mwh: number };
+    const entry = genByPlant.get(r.plant_id) ?? { totalMwh: 0, months: 0 };
+    entry.totalMwh += Number(r.mwh) || 0;
+    entry.months += 1;
+    genByPlant.set(r.plant_id, entry);
+  }
+
+  // 6. Compute capacity normalization signal
+  const maxMw = Math.max(...(plantsData ?? []).map((p: Record<string, unknown>) => Number(p.nameplate_capacity_mw) || 0), 1);
 
   return (plantsData ?? []).map((p: Record<string, unknown>) => {
     const code = p.eia_plant_code as string;
-    const distressScore = p.distress_score != null ? Number(p.distress_score) : null;
-    const counts = newsCountsByCode.get(code) ?? { high: 0, medium: 0, low: 0 };
-    const rawNews = counts.high * 30 + counts.medium * 10 + counts.low * 3;
-    const newsScore = Math.min(100, rawNews);
-    const blendedScore = distressScore != null
-      ? Math.min(100, 0.7 * distressScore + 0.3 * newsScore)
-      : newsScore > 0 ? newsScore : null;
+    const curtailmentScore = p.curtailment_score != null ? Number(p.curtailment_score) : null;
+    const newsRiskScore = newsRiskMap.get(code) ?? null;
+    const ttmAvgFactor = p.ttm_avg_factor != null ? Number(p.ttm_avg_factor) : null;
+    const nameplateMw = Number(p.nameplate_capacity_mw) || 0;
+
+    // CF trend: (TTM - recent3mo) / TTM; positive = degrading
+    let recentCf: number | null = null;
+    let cfTrend: number | null = null;
+    const gen = genByPlant.get(code);
+    if (gen && gen.months > 0 && nameplateMw > 0) {
+      const avgMonthlyMwh = gen.totalMwh / gen.months;
+      recentCf = avgMonthlyMwh / (nameplateMw * 730);
+      if (ttmAvgFactor != null && ttmAvgFactor > 0) {
+        cfTrend = (ttmAvgFactor - recentCf) / ttmAvgFactor;
+      }
+    }
+
+    // Distress: curtailment 60% + news risk 40% — no lender bonus
+    const cVal = curtailmentScore ?? 0;
+    const nVal = newsRiskScore ?? 0;
+    const distressScore = (curtailmentScore != null || newsRiskScore != null)
+      ? Math.min(100, cVal * 0.6 + nVal * 0.4)
+      : null;
+
+    // Opportunity: lender signal (40) + capacity signal (35) + trend bonus (25)
+    const lenderSignal = (lendersByCode.get(code)?.length ?? 0) > 0 ? 1 : 0;
+    const capacitySignal = nameplateMw / maxMw;
+    const trendBonus = (cfTrend != null && cfTrend > 0) ? Math.min(1, cfTrend / 0.5) : 0;
+    const opportunityScore = lenderSignal * 40 + capacitySignal * 35 + trendBonus * 25;
+
+    // Pursuit score: geometric mean of distress × opportunity
+    const pursuitScore = (distressScore != null && distressScore > 0 && opportunityScore > 0)
+      ? Math.sqrt(distressScore * opportunityScore)
+      : null;
 
     return {
       eiaPlantCode:    code,
       name:            (p.name as string) ?? code,
       state:           (p.state as string) ?? '',
       fuelSource:      (p.fuel_source as string) ?? '',
-      nameplateMw:     Number(p.nameplate_capacity_mw) || 0,
+      nameplateMw,
+      curtailmentScore,
+      newsRiskScore,
       distressScore,
-      newsScore,
-      blendedScore,
-      ttmAvgFactor:    p.ttm_avg_factor != null ? Number(p.ttm_avg_factor) : null,
+      cfTrend,
+      recentCf,
+      opportunityScore,
+      pursuitScore,
+      ttmAvgFactor,
       pursuitStatus:   (p.pursuit_status as string | null) ?? null,
       lenders:         lendersByCode.get(code) ?? [],
       searchedAt:      searchedAtMap.get(code) ?? null,

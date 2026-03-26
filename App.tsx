@@ -98,8 +98,7 @@ const App: React.FC = () => {
   const handlePlantClickFromPursuits = (eiaPlantCode: string) => {
     const plant = plants.find(p => p.eiaPlantCode === eiaPlantCode);
     if (plant) {
-      setCameFromPursuits(true);
-      handlePlantClick(plant.id);
+      handlePlantClick(plant.id, 'pursuits');
     }
   };
 
@@ -107,7 +106,7 @@ const App: React.FC = () => {
   const handlePlantClickFromCompany = (eiaPlantCode: string) => {
     const plant = plants.find(p => p.eiaPlantCode === eiaPlantCode);
     if (plant) {
-      handlePlantClick(plant.id, true);
+      handlePlantClick(plant.id, 'company');
     }
   };
 
@@ -115,17 +114,17 @@ const App: React.FC = () => {
   const handlePlantClickFromEntity = (eiaPlantCode: string) => {
     const plant = plants.find(p => p.eiaPlantCode === eiaPlantCode);
     if (plant) {
-      setCameFromEntity(true);
-      handlePlantClick(plant.id);
+      handlePlantClick(plant.id, 'entity');
     }
   };
 
   // Handle row click to view plant details
-  const handlePlantClick = async (id: string, fromCompany = false) => {
+  const handlePlantClick = async (id: string, origin: 'dashboard' | 'company' | 'pursuits' | 'entity' = 'dashboard') => {
     setSelectedPlantId(id);
     setView('detail');
-    setCameFromCompany(fromCompany);
-    if (!fromCompany) setCameFromPursuits(false);
+    setCameFromCompany(origin === 'company');
+    setCameFromPursuits(origin === 'pursuits');
+    setCameFromEntity(origin === 'entity');
     setGenerationLoading(true);
     setRegionalTrend([]);
     setSubRegionalTrend([]);
