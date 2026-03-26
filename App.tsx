@@ -18,6 +18,7 @@ import LenderPursuitsDashboard from './components/LenderPursuitsDashboard';
 import TaxEquityPursuitsDashboard from './components/TaxEquityPursuitsDashboard';
 import PipelineTourModal from './components/PipelineTourModal';
 import WelcomeModal from './components/WelcomeModal';
+import WatchlistDashboard from './components/WatchlistDashboard';
 
 type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity';
 type Tab = 'Overview' | 'Watchlist' | Region;
@@ -47,7 +48,6 @@ const App: React.FC = () => {
   const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
   const [selectedSubRegions, setSelectedSubRegions] = useState<string[]>([]);
   const [search, setSearch] = useState('');
-  const [noGenMonths, setNoGenMonths] = useState<number>(0);
   const [minCurtailmentLag, setMinCurtailmentLag] = useState<number>(0);
   const [maxCFThreshold, setMaxCFThreshold] = useState<number | null>(null);
 
@@ -233,15 +233,14 @@ const App: React.FC = () => {
         p.location?.state?.toLowerCase().includes(search.toLowerCase()) ||
         p.county?.toLowerCase().includes(search.toLowerCase());
       const stats = statsMap[p.id];
-      const gapMatch = noGenMonths === 0 || (stats?.trailingZeroMonths ?? 0) < noGenMonths;
       const lagMatch = minCurtailmentLag === 0
         ? true
         : (stats?.isLikelyCurtailed && (stats?.curtailmentScore ?? 0) >= minCurtailmentLag);
       const cfMatch = maxCFThreshold === null
         ? true
         : (stats?.ttmAverage ?? 0) * 100 <= maxCFThreshold;
-      
-      return regionMatch && subRegionMatch && fuelMatch && searchMatch && gapMatch && lagMatch && cfMatch;
+
+      return regionMatch && subRegionMatch && fuelMatch && searchMatch && lagMatch && cfMatch;
     });
 
     result.sort((a, b) => {
@@ -253,17 +252,18 @@ const App: React.FC = () => {
         case 'factor': comparison = (statsA?.ttmAverage || 0) - (statsB?.ttmAverage || 0); break;
         case 'capacity': comparison = a.nameplateCapacityMW - b.nameplateCapacityMW; break;
         case 'name': comparison = a.name.localeCompare(b.name); break;
+        case 'data': comparison = (statsA?.dataMonthsCount || 0) - (statsB?.dataMonthsCount || 0); break;
       }
       return sortDesc ? -comparison : comparison;
     });
 
     return result;
-  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, noGenMonths, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
+  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, selectedFuels, selectedSubRegions, search, noGenMonths, minCurtailmentLag, maxCFThreshold, sortKey, sortDesc]);
+  }, [activeTab, selectedFuels, selectedSubRegions, search, minCurtailmentLag, maxCFThreshold, sortKey, sortDesc]);
 
   // Paginated slice
   const totalPages = Math.max(1, Math.ceil(filteredPlants.length / PAGE_SIZE));
@@ -575,7 +575,8 @@ const App: React.FC = () => {
               </div>
             </header>
 
-            <FilterControls 
+            {activeTab !== 'Watchlist' && (
+            <FilterControls
               activeRegion={activeTab}
               selectedFuels={selectedFuels}
               setSelectedFuels={setSelectedFuels}
@@ -583,44 +584,29 @@ const App: React.FC = () => {
               setSelectedSubRegions={setSelectedSubRegions}
               search={search}
               setSearch={setSearch}
-              noGenMonths={noGenMonths}
-              setNoGenMonths={setNoGenMonths}
               minCurtailmentLag={minCurtailmentLag}
               setMinCurtailmentLag={setMinCurtailmentLag}
               maxCFThreshold={maxCFThreshold}
               setMaxCFThreshold={setMaxCFThreshold}
             />
+            )}
 
             {/* Overview Summary */}
             {activeTab === 'Overview' && (
               <RegionalComparison plants={plants} statsMap={statsMap} selectedFuels={selectedFuels} />
             )}
 
-            {/* Watchlist Summary Bar (Mirroring Overview table layout) */}
-            {activeTab === 'Watchlist' && watchlistStats && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8 animate-in fade-in slide-in-from-top-4 duration-500">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg">
-                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Portfolio Size</div>
-                  <div className="text-2xl font-black text-white">{watchlistStats.count} <span className="text-xs text-slate-600">Assets</span></div>
-                </div>
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg">
-                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Total Monitored Capacity</div>
-                  <div className="text-2xl font-black text-blue-400">{Math.round(watchlistStats.totalCapacity).toLocaleString()} <span className="text-xs text-slate-600">MW</span></div>
-                </div>
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg">
-                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Portfolio Avg TTM</div>
-                  <div className="text-2xl font-black text-indigo-400">{(watchlistStats.avgFactor * 100).toFixed(1)}%</div>
-                </div>
-                <div className={`bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg ${watchlistStats.curtailedCount > 0 ? 'border-red-500/30' : ''}`}>
-                  <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Risk Alerts</div>
-                  <div className={`text-2xl font-black ${watchlistStats.curtailedCount > 0 ? 'text-red-500' : 'text-green-500'}`}>
-                    {watchlistStats.curtailedCount} <span className="text-xs opacity-50">CURTAILED</span>
-                  </div>
-                </div>
-              </div>
+            {activeTab === 'Watchlist' && (
+              <WatchlistDashboard
+                plants={plants}
+                statsMap={statsMap}
+                watchlist={watchlist}
+                onPlantClick={handlePlantClickFromPursuits}
+                onToggleWatch={toggleWatch}
+              />
             )}
 
-            {insights && (
+            {activeTab !== 'Watchlist' && insights && (
               <section className="mb-8 bg-indigo-950/20 border border-indigo-500/30 rounded-2xl p-6 backdrop-blur-md">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="bg-indigo-600 p-2 rounded-lg shadow-lg">
@@ -642,7 +628,7 @@ const App: React.FC = () => {
               </section>
             )}
 
-            {/* Asset Table - Consistently rendered for all tabs */}
+            {activeTab !== 'Watchlist' && (
             <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl relative z-0">
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
@@ -771,6 +757,7 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
+            )}
           </>
         ) : (
           view === 'company' && selectedUltParent
