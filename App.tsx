@@ -21,7 +21,7 @@ import WelcomeModal from './components/WelcomeModal';
 
 type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity';
 type Tab = 'Overview' | 'Watchlist' | Region;
-type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor';
+type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor' | 'data';
 
 const App: React.FC = () => {
   const [plants, setPlants] = useState<PowerPlant[]>([]);
@@ -57,7 +57,7 @@ const App: React.FC = () => {
   const PAGE_SIZE = 50;
   
   // Sorting State
-  const [sortKey, setSortKey] = useState<SortKey>('curtailment');
+  const [sortKey, setSortKey] = useState<SortKey>('data');
   const [sortDesc, setSortDesc] = useState(true);
   
   // Sidebar
@@ -180,11 +180,7 @@ const App: React.FC = () => {
         setUserRole(profile?.role ?? 'user');
         try { const wl = await fetchWatchlist(sess.user.id); setWatchlist(wl); }
         catch { setWatchlist([]); }
-        const seenKey = `gentrack_welcomed_${sess.user.id}`;
-        if (!localStorage.getItem(seenKey)) {
-          setShowWelcome(true);
-          localStorage.setItem(seenKey, '1');
-        }
+        setShowWelcome(true);
       } else {
         setUserRole(null);
         setWatchlist([]);
