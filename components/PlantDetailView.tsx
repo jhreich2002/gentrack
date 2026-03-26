@@ -2,7 +2,6 @@
 import React, { useEffect, useState } from 'react';
 import { PowerPlant, CapacityFactorStats, FuelSource, PlantOwnership, NewsArticle, PlantNewsRating } from '../types';
 import { COLORS, TYPICAL_CAPACITY_FACTORS, EIA_START_MONTH, formatMonthYear } from '../constants';
-import CapacityChart from './CapacityChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area } from 'recharts';
 import { fetchPlantOwnership } from '../services/ownershipService';
 import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse, semanticSearchPlantNews, SemanticSearchResult } from '../services/newsIntelService';
@@ -23,7 +22,7 @@ interface Props {
   onCompanyClick?: (ultParentName: string) => void;
 }
 
-type DetailTab = 'overview' | 'monthly' | 'generation' | 'ownership' | 'news' | 'lenders';
+type DetailTab = 'overview' | 'generation' | 'ownership' | 'news' | 'lenders';
 
 const PlantDetailView: React.FC<Props> = ({ 
   plant, 
@@ -248,27 +247,6 @@ const PlantDetailView: React.FC<Props> = ({
           <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
           OVERVIEW
         </button>
-        <button 
-          onClick={() => setActiveTab('monthly')}
-          className={`px-4 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'monthly' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
-        >
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" /></svg>
-          MONTHLY TREND
-        </button>
-        <button 
-          onClick={() => setActiveTab('generation')}
-          className={`px-4 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'generation' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
-        >
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9" rx="1" strokeWidth="2"/><rect x="10" y="7" width="4" height="14" rx="1" strokeWidth="2"/><rect x="17" y="3" width="4" height="18" rx="1" strokeWidth="2"/></svg>
-          GENERATION
-        </button>
-        <button
-          onClick={() => { setActiveTab('ownership'); handleLoadOwnership(); }}
-          className={`px-4 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'ownership' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
-        >
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
-          OWNERSHIP & PPA
-        </button>
         <button
           onClick={() => { setActiveTab('news'); handleLoadNewsIntel(); }}
           className={`px-4 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'news' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
@@ -282,6 +260,20 @@ const PlantDetailView: React.FC<Props> = ({
         >
           <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M3 14h18M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z" /></svg>
           FINANCING
+        </button>
+        <button
+          onClick={() => { setActiveTab('ownership'); handleLoadOwnership(); }}
+          className={`px-4 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'ownership' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
+        >
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+          OWNERSHIP & PPA
+        </button>
+        <button
+          onClick={() => setActiveTab('generation')}
+          className={`px-4 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'generation' ? 'bg-slate-800 text-white shadow-lg shadow-black/20' : 'text-slate-500 hover:text-slate-300'}`}
+        >
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9" rx="1" strokeWidth="2"/><rect x="10" y="7" width="4" height="14" rx="1" strokeWidth="2"/><rect x="17" y="3" width="4" height="18" rx="1" strokeWidth="2"/></svg>
+          GENERATION
         </button>
       </div>
 
@@ -399,7 +391,7 @@ const PlantDetailView: React.FC<Props> = ({
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-8">Grid Hierarchy & Metrics</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-8">
                 <div className="space-y-1 group">
                   <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest transition-colors group-hover:text-blue-400">Sub-Zone Average</div>
                   <div className="text-2xl font-black text-slate-200">{(subRegionalAvg * 100).toFixed(1)}%</div>
@@ -414,16 +406,6 @@ const PlantDetailView: React.FC<Props> = ({
                   <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Nameplate Capacity</div>
                   <div className="text-2xl font-black text-slate-200">{plant.nameplateCapacityMW.toLocaleString()} <span className="text-xs text-slate-600">MW</span></div>
                   <div className="text-[10px] text-slate-600 font-medium">Design Specification</div>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Curtailment Risk</div>
-                  {stats.isMaintenanceOffline
-                    ? <div className="text-2xl font-black text-amber-500">N/A<span className="text-xs opacity-40 ml-1">maintenance</span></div>
-                    : stats.hasNoRecentData
-                      ? <div className="text-2xl font-black text-slate-600">N/A<span className="text-xs opacity-40 ml-1">no data</span></div>
-                      : <div className={`text-2xl font-black ${stats.curtailmentScore > 50 ? 'text-red-500' : 'text-slate-200'}`}>{stats.curtailmentScore}<span className="text-xs opacity-40">/100</span></div>
-                  }
-                  <div className="text-[10px] text-slate-600 font-medium">Internal Algorithm</div>
                 </div>
               </div>
 
@@ -461,50 +443,6 @@ const PlantDetailView: React.FC<Props> = ({
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'monthly' && (
-          <div className="animate-in slide-in-from-bottom-4 fade-in duration-500">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
-              <div className="flex items-center justify-between mb-8">
-                <div>
-                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Historical Performance Analysis</h3>
-                  <p className="text-xs text-slate-600 font-medium">Comparing month-to-month capacity factor against regional peers</p>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-0.5" style={{ backgroundColor: COLORS[plant.fuelSource] }}></div>
-                    <span className="text-[10px] font-bold text-slate-500">{plant.name}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-0.5 bg-slate-600 border-dashed"></div>
-                    <span className="text-[10px] font-bold text-slate-500">Regional Avg</span>
-                  </div>
-                </div>
-              </div>
-              <div className="h-96">
-                <CapacityChart plant={plant} stats={stats} regionalTrend={regionalTrend} />
-              </div>
-              <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
-                  <div className="text-[9px] font-bold text-slate-500 uppercase mb-2">Max Historical Factor</div>
-                  <div className="text-xl font-black text-white">
-                    {(() => { const vals = stats.monthlyFactors.filter(f => f.factor !== null).map(f => f.factor as number); return vals.length > 0 ? `${Math.round(Math.max(...vals) * 100)}%` : 'N/A'; })()}
-                  </div>
-                </div>
-                <div className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
-                  <div className="text-[9px] font-bold text-slate-500 uppercase mb-2">Min Historical Factor</div>
-                  <div className="text-xl font-black text-white">
-                    {(() => { const vals = stats.monthlyFactors.filter(f => f.factor !== null).map(f => f.factor as number); return vals.length > 0 ? `${Math.round(Math.min(...vals) * 100)}%` : 'N/A'; })()}
-                  </div>
-                </div>
-                <div className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/50">
-                  <div className="text-[9px] font-bold text-slate-500 uppercase mb-2">Historical Volatility</div>
-                  <div className="text-xl font-black text-white">LOW</div>
-                </div>
-              </div>
             </div>
           </div>
         )}
