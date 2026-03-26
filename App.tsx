@@ -17,6 +17,7 @@ import PlantPursuitsDashboard from './components/PlantPursuitsDashboard';
 import LenderPursuitsDashboard from './components/LenderPursuitsDashboard';
 import TaxEquityPursuitsDashboard from './components/TaxEquityPursuitsDashboard';
 import PipelineTourModal from './components/PipelineTourModal';
+import WelcomeModal from './components/WelcomeModal';
 
 type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity';
 type Tab = 'Overview' | 'Watchlist' | Region;
@@ -64,6 +65,9 @@ const App: React.FC = () => {
 
   // Pipeline tour
   const [showPipelineTour, setShowPipelineTour] = useState(false);
+
+  // Welcome modal — shown once per user on first login
+  const [showWelcome, setShowWelcome] = useState(false);
 
   // Selection
   const [selectedPlantId, setSelectedPlantId]       = useState<string | null>(null);
@@ -176,6 +180,11 @@ const App: React.FC = () => {
         setUserRole(profile?.role ?? 'user');
         try { const wl = await fetchWatchlist(sess.user.id); setWatchlist(wl); }
         catch { setWatchlist([]); }
+        const seenKey = `gentrack_welcomed_${sess.user.id}`;
+        if (!localStorage.getItem(seenKey)) {
+          setShowWelcome(true);
+          localStorage.setItem(seenKey, '1');
+        }
       } else {
         setUserRole(null);
         setWatchlist([]);
@@ -786,6 +795,10 @@ const App: React.FC = () => {
 
       {showPipelineTour && (
         <PipelineTourModal onClose={() => setShowPipelineTour(false)} />
+      )}
+
+      {showWelcome && (
+        <WelcomeModal onSelect={(dest) => { setView(dest); setShowWelcome(false); }} />
       )}
     </div>
   );
