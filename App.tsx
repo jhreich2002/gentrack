@@ -594,22 +594,6 @@ const App: React.FC = () => {
               </div>
             </header>
 
-            {activeTab !== 'Watchlist' && (
-            <FilterControls
-              activeRegion={activeTab}
-              selectedFuels={selectedFuels}
-              setSelectedFuels={setSelectedFuels}
-              selectedSubRegions={selectedSubRegions}
-              setSelectedSubRegions={setSelectedSubRegions}
-              search={search}
-              setSearch={setSearch}
-              minCurtailmentLag={minCurtailmentLag}
-              setMinCurtailmentLag={setMinCurtailmentLag}
-              maxCFThreshold={maxCFThreshold}
-              setMaxCFThreshold={setMaxCFThreshold}
-            />
-            )}
-
             {/* Overview Summary */}
             {activeTab === 'Overview' && (
               <RegionalComparison plants={plants} statsMap={statsMap} selectedFuels={selectedFuels} />
