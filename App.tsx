@@ -59,6 +59,9 @@ const App: React.FC = () => {
   // Sorting State
   const [sortKey, setSortKey] = useState<SortKey>('data');
   const [sortDesc, setSortDesc] = useState(true);
+
+  // Plants with confirmed financing parties (lenders_found=true)
+  const [confirmedFinancingCodes, setConfirmedFinancingCodes] = useState<Set<string>>(new Set());
   
   // Sidebar
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -203,6 +206,16 @@ const App: React.FC = () => {
     init();
   }, []);
 
+  useEffect(() => {
+    supabase
+      .from('plant_financing_summary')
+      .select('eia_plant_code')
+      .eq('lenders_found', true)
+      .then(({ data }) => {
+        if (data) setConfirmedFinancingCodes(new Set((data as { eia_plant_code: string }[]).map(r => r.eia_plant_code)));
+      });
+  }, []);
+
   // When changing tabs, handle sub-region filters carefully
   useEffect(() => {
     if (activeTab === 'Overview' || activeTab === 'Watchlist') {
@@ -244,6 +257,12 @@ const App: React.FC = () => {
     });
 
     result.sort((a, b) => {
+      // Primary: plants with confirmed financing always float to top
+      const aHasFinancing = confirmedFinancingCodes.has(a.eiaPlantCode);
+      const bHasFinancing = confirmedFinancingCodes.has(b.eiaPlantCode);
+      if (aHasFinancing !== bHasFinancing) return aHasFinancing ? -1 : 1;
+
+      // Secondary: user-selected sort
       let comparison = 0;
       const statsA = statsMap[a.id];
       const statsB = statsMap[b.id];
@@ -258,7 +277,7 @@ const App: React.FC = () => {
     });
 
     return result;
-  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist]);
+  }, [plants, activeTab, selectedSubRegions, selectedFuels, search, minCurtailmentLag, maxCFThreshold, statsMap, sortKey, sortDesc, watchlist, confirmedFinancingCodes]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
