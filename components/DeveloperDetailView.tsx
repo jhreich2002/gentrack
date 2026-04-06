@@ -10,6 +10,7 @@ interface Props {
   onBack: () => void;
   onAssetClick: (assetId: string) => void;
   onPlantClick?: (plantId: string) => void;
+  initialTab?: Tab;
 }
 
 type Tab = 'overview' | 'portfolio' | 'provenance';
@@ -31,8 +32,8 @@ function matchBadge(confidence: string | null) {
   return styles[confidence || 'none'] || styles.none;
 }
 
-export default function DeveloperDetailView({ developer, onBack, onAssetClick, onPlantClick }: Props) {
-  const [tab, setTab] = useState<Tab>('overview');
+export default function DeveloperDetailView({ developer, onBack, onAssetClick, onPlantClick, initialTab = 'overview' }: Props) {
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [assets, setAssets] = useState<AssetRegistryRow[]>([]);
   const [crawlLogs, setCrawlLogs] = useState<CrawlLogRow[]>([]);
   const [changelog, setChangelog] = useState<ChangelogRow[]>([]);

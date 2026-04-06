@@ -81,6 +81,7 @@ const App: React.FC = () => {
   const [cameFromEntity, setCameFromEntity]         = useState(false);
   const [cameFromDeveloper, setCameFromDeveloper]   = useState(false);
   const [companyActiveTab, setCompanyActiveTab]     = useState<'overview' | 'portfolio'>('overview');
+  const [developerActiveTab, setDeveloperActiveTab] = useState<'overview' | 'portfolio' | 'provenance'>('overview');
   const [selectedEntity, setSelectedEntity]         = useState<{ name: string; type: 'lender' | 'tax_equity' } | null>(null);
   const [selectedDeveloper, setSelectedDeveloper]   = useState<DeveloperRow | null>(null);
   const [selectedAssetId, setSelectedAssetId]       = useState<string | null>(null);
@@ -822,10 +823,10 @@ const App: React.FC = () => {
             : view === 'developers'
             ? <DeveloperListView onDeveloperClick={handleDeveloperClick} />
             : view === 'developer-detail' && selectedDeveloper
-            ? <DeveloperDetailView developer={selectedDeveloper} onBack={() => setView('developers')} onAssetClick={handleAssetRegistryClick} onPlantClick={handlePlantClickFromDeveloper} />
+            ? <DeveloperDetailView developer={selectedDeveloper} onBack={() => { setView('developers'); setDeveloperActiveTab('overview'); }} onAssetClick={handleAssetRegistryClick} onPlantClick={handlePlantClickFromDeveloper} initialTab={developerActiveTab} />
             : view === 'asset-detail' && selectedAssetId
             ? <AssetRegistryDetailView assetId={selectedAssetId} onBack={() => selectedDeveloper ? setView('developer-detail') : setView('developers')} onPlantClick={handlePlantClickFromDeveloper} />
-            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromDeveloper && selectedDeveloper) { setView('developer-detail'); setCameFromDeveloper(false); } else if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
+            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromDeveloper && selectedDeveloper) { setView('developer-detail'); setCameFromDeveloper(false); setDeveloperActiveTab('portfolio'); } else if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
         )}
       </main>
 
