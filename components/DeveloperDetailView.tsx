@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import {
   fetchDeveloperAssets, fetchChangelog,
+  fetchDeveloperOpportunityScore,
   approveStagedAssets,
-  DeveloperRow, AssetRegistryRow, ChangelogRow,
+  DeveloperRow, AssetRegistryRow, ChangelogRow, DeveloperOpportunityScoreRow,
 } from '../services/developerService';
 import { PowerPlant, CapacityFactorStats } from '../types';
 import type { DeveloperAssetMapPoint, DeveloperMapViewport } from './DeveloperAssetMap';
@@ -20,7 +21,7 @@ interface Props {
   initialTab?: Tab;
 }
 
-type Tab = 'overview' | 'portfolio' | 'map';
+type Tab = 'overview' | 'portfolio' | 'map' | 'lead';
 type MapPerformanceFilter = 'all' | 'strong' | 'watch' | 'risk' | 'offline' | 'unknown';
 
 const DeveloperAssetMap = lazy(() => import('./DeveloperAssetMap'));
@@ -43,6 +44,19 @@ function confidenceColor(score: number | null) {
   return 'text-red-400';
 }
 
+function scoreTone(score: number | null) {
+  if (score == null) return 'text-slate-600';
+  if (score >= 70) return 'text-red-400';
+  if (score >= 50) return 'text-amber-400';
+  return 'text-emerald-400';
+}
+
+function scoreBarColor(score: number) {
+  if (score >= 70) return 'bg-red-500';
+  if (score >= 50) return 'bg-amber-500';
+  return 'bg-emerald-500';
+}
+
 function matchBadge(confidence: string | null) {
   const styles: Record<string, string> = {
     high: 'bg-emerald-900/30 text-emerald-400 border-emerald-500/30',
@@ -57,6 +71,7 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
   const [tab, setTab] = useState<Tab>(initialTab);
   const [assets, setAssets] = useState<AssetRegistryRow[]>([]);
   const [changelog, setChangelog] = useState<ChangelogRow[]>([]);
+  const [opportunity, setOpportunity] = useState<DeveloperOpportunityScoreRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [selectedStaged, setSelectedStaged] = useState<Set<string>>(new Set());
@@ -71,9 +86,11 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
     Promise.all([
       fetchDeveloperAssets(developer.id),
       fetchChangelog(developer.id),
-    ]).then(([a, ch]) => {
+      fetchDeveloperOpportunityScore(developer.id),
+    ]).then(([a, ch, opp]) => {
       setAssets(a);
       setChangelog(ch);
+      setOpportunity(opp);
       setLoading(false);
     });
   }, [developer.id]);
@@ -229,7 +246,7 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 bg-slate-900 rounded-xl p-1 w-fit border border-slate-800">
-        {(['overview', 'portfolio', 'map'] as Tab[]).map(t => (
+        {(['overview', 'portfolio', 'map', 'lead'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => handleTabChange(t)}
@@ -237,7 +254,7 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
               tab === t ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-300'
             }`}
           >
-            {t === 'overview' ? 'Overview' : t === 'portfolio' ? 'Portfolio' : 'Asset Map'}
+            {t === 'overview' ? 'Overview' : t === 'portfolio' ? 'Portfolio' : t === 'map' ? 'Asset Map' : 'Lead Drilldown'}
           </button>
         ))}
       </div>
@@ -550,6 +567,76 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
               />
             </Suspense>
           )}
+        </div>
+      )}
+
+      {/* ── Lead Drilldown Tab ── */}
+      {tab === 'lead' && (
+        <div className="space-y-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div>
+                <h3 className="text-lg font-black text-white">FTI Lead Drilldown</h3>
+                <p className="text-xs text-slate-500 mt-1">Opportunity components for outreach prioritization.</p>
+              </div>
+              <div className={`text-3xl font-black font-mono ${scoreTone(opportunity?.opportunity_score ?? null)}`}>
+                {(opportunity?.opportunity_score ?? 0).toFixed(1)}
+              </div>
+            </div>
+
+            {opportunity ? (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                  {[
+                    ['Distress', opportunity.distress_score],
+                    ['Complexity', opportunity.complexity_score],
+                    ['Trigger Immediacy', opportunity.trigger_immediacy_score],
+                    ['Engagement Potential', opportunity.engagement_potential_score],
+                  ].map(([label, value]) => (
+                    <div key={label} className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">{label}</div>
+                      <div className="h-2 bg-slate-800 rounded-full overflow-hidden mb-2">
+                        <div className={scoreBarColor(Number(value))} style={{ width: `${Math.min(100, Math.max(0, Number(value)))}%`, height: '100%' }} />
+                      </div>
+                      <div className="text-sm font-mono text-slate-300">{Number(value).toFixed(1)}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Top Signals</div>
+                    <div className="space-y-2 text-sm text-slate-300">
+                      {(opportunity.top_signals || []).map((signal) => (
+                        <div key={signal} className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">{signal}</div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Recommended Service Lines</div>
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {(opportunity.recommended_service_lines || []).map((line) => (
+                        <span key={line} className="px-2 py-1 rounded-full text-[10px] font-bold bg-blue-900/30 border border-blue-500/30 text-blue-300 uppercase tracking-wide">
+                          {line.replace(/_/g, ' ')}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="text-xs text-slate-500 space-y-1">
+                      <div>Total MW at risk: <span className="text-slate-300 font-mono">{opportunity.total_mw_at_risk.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></div>
+                      <div>High-risk assets: <span className="text-slate-300 font-mono">{opportunity.high_risk_asset_count}</span></div>
+                      <div>Likely curtailed: <span className="text-slate-300 font-mono">{opportunity.likely_curtailed_count}</span></div>
+                      <div>Weekly delta: <span className={opportunity.weekly_delta_score != null && opportunity.weekly_delta_score > 0 ? 'text-red-400 font-mono' : opportunity.weekly_delta_score != null && opportunity.weekly_delta_score < 0 ? 'text-emerald-400 font-mono' : 'text-slate-400 font-mono'}>{opportunity.weekly_delta_score == null ? '—' : `${opportunity.weekly_delta_score > 0 ? '+' : ''}${opportunity.weekly_delta_score.toFixed(1)}`}</span></div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-slate-500">
+                No lead score snapshot found yet. Run score:developers to populate this tab.
+              </div>
+            )}
+          </div>
         </div>
       )}
 

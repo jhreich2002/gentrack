@@ -167,6 +167,32 @@ export async function fetchDeveloperOpportunityScores(): Promise<Record<string, 
   return map;
 }
 
+export async function fetchDeveloperOpportunityScore(developerId: string): Promise<DeveloperOpportunityScoreRow | null> {
+  const { data, error } = await supabase
+    .from('developer_opportunity_scores')
+    .select(`
+      developer_id, developer_name, model_version,
+      opportunity_score, distress_score, complexity_score,
+      trigger_immediacy_score, engagement_potential_score,
+      total_mw_at_risk, asset_count, mapped_asset_count,
+      high_risk_asset_count, likely_curtailed_count,
+      maintenance_offline_count, upcoming_cod_count,
+      coverage_rate, verification_pct,
+      top_signals, recommended_service_lines,
+      previous_opportunity_score, weekly_delta_score,
+      computed_at
+    `)
+    .eq('developer_id', developerId)
+    .maybeSingle();
+
+  if (error || !data) {
+    if (error) console.error('fetchDeveloperOpportunityScore error:', error.message);
+    return null;
+  }
+
+  return data as DeveloperOpportunityScoreRow;
+}
+
 export async function fetchDeveloperAssets(developerId: string): Promise<AssetRegistryRow[]> {
   // Get asset IDs linked to this developer
   const { data: links, error: linkErr } = await supabase
