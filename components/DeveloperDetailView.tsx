@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  fetchDeveloperAssets, fetchCrawlLogs, fetchChangelog,
+  fetchDeveloperAssets, fetchChangelog,
   approveStagedAssets,
-  DeveloperRow, AssetRegistryRow, CrawlLogRow, ChangelogRow,
+  DeveloperRow, AssetRegistryRow, ChangelogRow,
 } from '../services/developerService';
 
 interface Props {
@@ -13,7 +13,7 @@ interface Props {
   initialTab?: Tab;
 }
 
-type Tab = 'overview' | 'portfolio' | 'provenance';
+type Tab = 'overview' | 'portfolio';
 
 function confidenceColor(score: number | null) {
   if (!score) return 'text-slate-500';
@@ -35,7 +35,6 @@ function matchBadge(confidence: string | null) {
 export default function DeveloperDetailView({ developer, onBack, onAssetClick, onPlantClick, initialTab = 'overview' }: Props) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [assets, setAssets] = useState<AssetRegistryRow[]>([]);
-  const [crawlLogs, setCrawlLogs] = useState<CrawlLogRow[]>([]);
   const [changelog, setChangelog] = useState<ChangelogRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
@@ -46,11 +45,9 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
     setLoading(true);
     Promise.all([
       fetchDeveloperAssets(developer.id),
-      fetchCrawlLogs(developer.id),
       fetchChangelog(developer.id),
-    ]).then(([a, cl, ch]) => {
+    ]).then(([a, ch]) => {
       setAssets(a);
-      setCrawlLogs(cl);
       setChangelog(ch);
       setLoading(false);
     });
@@ -137,7 +134,7 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 bg-slate-900 rounded-xl p-1 w-fit border border-slate-800">
-        {(['overview', 'portfolio', 'provenance'] as Tab[]).map(t => (
+        {(['overview', 'portfolio'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -145,7 +142,7 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
               tab === t ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-300'
             }`}
           >
-            {t === 'overview' ? 'Overview' : t === 'portfolio' ? 'Portfolio' : 'Data Provenance'}
+            {t === 'overview' ? 'Overview' : 'Portfolio'}
           </button>
         ))}
       </div>
@@ -384,89 +381,6 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
         </div>
       )}
 
-      {/* ── Data Provenance Tab ── */}
-      {tab === 'provenance' && (
-        <div className="space-y-6">
-          {/* Crawl Logs */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-            <h3 className="text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-4">Crawl Run History</h3>
-            {crawlLogs.length === 0 ? (
-              <p className="text-sm text-slate-600">No crawl runs recorded.</p>
-            ) : (
-              <div className="space-y-3">
-                {crawlLogs.map(log => (
-                  <div key={log.id} className="flex items-center gap-4 p-3 rounded-lg bg-slate-800/50 border border-slate-800">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
-                      log.status === 'completed' ? 'bg-emerald-900/30 text-emerald-400 border-emerald-500/30'
-                        : log.status === 'failed' ? 'bg-red-900/30 text-red-400 border-red-500/30'
-                        : 'bg-blue-900/30 text-blue-400 border-blue-500/30'
-                    }`}>
-                      {log.status}
-                    </span>
-                    <span className="text-[10px] font-bold uppercase text-slate-500 w-20">{log.run_type}</span>
-                    <span className="text-sm text-slate-400 flex-1">
-                      {log.assets_discovered > 0 && `${log.assets_discovered} discovered`}
-                      {log.assets_graduated > 0 && ` • ${log.assets_graduated} graduated`}
-                      {log.assets_staged > 0 && ` • ${log.assets_staged} staged`}
-                    </span>
-                    <span className="text-sm font-mono text-amber-400">${log.total_cost_usd.toFixed(4)}</span>
-                    <span className="text-[10px] text-slate-600 font-mono w-16 text-right">
-                      R{log.rounds}
-                    </span>
-                    <span className="text-[10px] text-slate-600 w-24 text-right">
-                      {new Date(log.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Cost Breakdown */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-            <h3 className="text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-4">Cumulative Cost Breakdown</h3>
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <div className="text-[10px] text-slate-600 mb-1">Total API Spend</div>
-                <div className="text-xl font-black text-amber-400">${(developer.total_spend_usd || 0).toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-[10px] text-slate-600 mb-1">Crawl Runs</div>
-                <div className="text-xl font-black text-white">{crawlLogs.length}</div>
-              </div>
-              <div>
-                <div className="text-[10px] text-slate-600 mb-1">Cost per Asset</div>
-                <div className="text-xl font-black text-white">
-                  ${assets.length > 0 ? ((developer.total_spend_usd || 0) / assets.length).toFixed(4) : '0.00'}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Full Changelog */}
-          {changelog.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-              <h3 className="text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-4">Change Log</h3>
-              <div className="space-y-2 max-h-96 overflow-y-auto custom-scrollbar">
-                {changelog.map(ch => (
-                  <div key={ch.id} className="flex items-start gap-3 text-sm py-2 border-b border-slate-800/50 last:border-0">
-                    <span className="text-[10px] text-slate-600 font-mono w-24 flex-shrink-0 pt-0.5">
-                      {new Date(ch.detected_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                    <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-slate-800 text-slate-500 border border-slate-700 flex-shrink-0">
-                      {ch.change_type.replace(/_/g, ' ')}
-                    </span>
-                    <span className="text-slate-400 flex-1 min-w-0">
-                      {ch.new_value?.details || (ch.old_value ? `${JSON.stringify(ch.old_value)} → ${JSON.stringify(ch.new_value)}` : JSON.stringify(ch.new_value))}
-                    </span>
-                    <span className="text-[9px] text-slate-700 flex-shrink-0">{ch.detected_by}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

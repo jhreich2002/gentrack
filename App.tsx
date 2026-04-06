@@ -81,7 +81,7 @@ const App: React.FC = () => {
   const [cameFromEntity, setCameFromEntity]         = useState(false);
   const [cameFromDeveloper, setCameFromDeveloper]   = useState(false);
   const [companyActiveTab, setCompanyActiveTab]     = useState<'overview' | 'portfolio'>('overview');
-  const [developerActiveTab, setDeveloperActiveTab] = useState<'overview' | 'portfolio' | 'provenance'>('overview');
+  const [developerActiveTab, setDeveloperActiveTab] = useState<'overview' | 'portfolio'>('overview');
   const [selectedEntity, setSelectedEntity]         = useState<{ name: string; type: 'lender' | 'tax_equity' } | null>(null);
   const [selectedDeveloper, setSelectedDeveloper]   = useState<DeveloperRow | null>(null);
   const [selectedAssetId, setSelectedAssetId]       = useState<string | null>(null);
