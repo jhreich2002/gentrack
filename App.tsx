@@ -21,6 +21,7 @@ import WatchlistDashboard from './components/WatchlistDashboard';
 import DeveloperListView from './components/DeveloperListView';
 import DeveloperDetailView from './components/DeveloperDetailView';
 import AssetRegistryDetailView from './components/AssetRegistryDetailView';
+import type { DeveloperMapViewport } from './components/DeveloperAssetMap';
 import { fetchDevelopers, DeveloperRow } from './services/developerService';
 
 type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail';
@@ -82,6 +83,7 @@ const App: React.FC = () => {
   const [cameFromDeveloper, setCameFromDeveloper]   = useState(false);
   const [companyActiveTab, setCompanyActiveTab]     = useState<'overview' | 'portfolio'>('overview');
   const [developerActiveTab, setDeveloperActiveTab] = useState<'overview' | 'portfolio' | 'map'>('overview');
+  const [developerMapViewport, setDeveloperMapViewport] = useState<DeveloperMapViewport | null>(null);
   const [selectedEntity, setSelectedEntity]         = useState<{ name: string; type: 'lender' | 'tax_equity' } | null>(null);
   const [selectedDeveloper, setSelectedDeveloper]   = useState<DeveloperRow | null>(null);
   const [selectedAssetId, setSelectedAssetId]       = useState<string | null>(null);
@@ -97,10 +99,17 @@ const App: React.FC = () => {
       fetchDevelopers().then(devs => {
         setDevelopersList(devs);
         const found = devs.find(d => d.id === developerId);
-        if (found) { setSelectedDeveloper(found); setView('developer-detail'); }
+        if (found) {
+          setSelectedDeveloper(found);
+          setDeveloperActiveTab('overview');
+          setDeveloperMapViewport(null);
+          setView('developer-detail');
+        }
       });
     } else {
       setSelectedDeveloper(dev);
+      setDeveloperActiveTab('overview');
+      setDeveloperMapViewport(null);
       setView('developer-detail');
     }
   };
@@ -836,7 +845,7 @@ const App: React.FC = () => {
             : view === 'developers'
             ? <DeveloperListView onDeveloperClick={handleDeveloperClick} />
             : view === 'developer-detail' && selectedDeveloper
-            ? <DeveloperDetailView developer={selectedDeveloper} onBack={() => { setView('developers'); setDeveloperActiveTab('overview'); }} onAssetClick={handleAssetRegistryClick} onPlantClick={handlePlantClickFromDeveloper} plants={plants} statsMap={statsMap} initialTab={developerActiveTab} />
+            ? <DeveloperDetailView developer={selectedDeveloper} onBack={() => { setView('developers'); setDeveloperActiveTab('overview'); setDeveloperMapViewport(null); }} onAssetClick={handleAssetRegistryClick} onPlantClick={handlePlantClickFromDeveloper} onTabChange={setDeveloperActiveTab} mapViewport={developerMapViewport} onMapViewportChange={setDeveloperMapViewport} plants={plants} statsMap={statsMap} initialTab={developerActiveTab} />
             : view === 'asset-detail' && selectedAssetId
             ? <AssetRegistryDetailView assetId={selectedAssetId} onBack={() => selectedDeveloper ? setView('developer-detail') : setView('developers')} onPlantClick={handlePlantClickFromDeveloper} />
             : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromDeveloper && selectedDeveloper) { setView('developer-detail'); setCameFromDeveloper(false); } else if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />

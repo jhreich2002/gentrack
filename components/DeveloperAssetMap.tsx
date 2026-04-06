@@ -1,6 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L, { LatLngBounds } from 'leaflet';
 import { CircleMarker, MapContainer, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+
+export interface DeveloperMapViewport {
+  center: [number, number];
+  zoom: number;
+}
 
 export interface DeveloperAssetMapPoint {
   id: string;
@@ -37,8 +42,9 @@ interface DisplayMarker {
 interface Props {
   points: DeveloperAssetMapPoint[];
   unmappedCount: number;
-  onAssetClick: (assetId: string) => void;
   onPlantClick?: (eiaPlantCode: string) => void;
+  initialViewport?: DeveloperMapViewport | null;
+  onViewportChange?: (viewport: DeveloperMapViewport) => void;
 }
 
 function getPerformanceBand(point: DeveloperAssetMapPoint): 'strong' | 'watch' | 'risk' | 'offline' | 'unknown' {
@@ -75,35 +81,59 @@ function scaleRadius(capacityMw: number): number {
   return Math.max(min, Math.min(max, min + normalized * (max - min)));
 }
 
-function FitToAssetBounds({ points }: { points: DeveloperAssetMapPoint[] }) {
+function MapStateController({
+  points,
+  initialViewport,
+  onViewportChange,
+  onBoundsChange,
+  onZoomChange,
+}: {
+  points: DeveloperAssetMapPoint[];
+  initialViewport?: DeveloperMapViewport | null;
+  onViewportChange?: (viewport: DeveloperMapViewport) => void;
+  onBoundsChange: (bounds: LatLngBounds) => void;
+  onZoomChange: (zoom: number) => void;
+}) {
   const map = useMap();
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    if (points.length === 0) {
-      map.setView([39.8, -98.6], 4);
-      return;
+    if (initializedRef.current) return;
+
+    if (initialViewport) {
+      map.setView(initialViewport.center, initialViewport.zoom, { animate: false });
+    } else if (points.length > 0) {
+      const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng] as [number, number]));
+      map.fitBounds(bounds.pad(0.18), { maxZoom: 7, animate: false });
+    } else {
+      map.setView([39.8, -98.6], 4, { animate: false });
     }
 
-    const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng] as [number, number]));
-    map.fitBounds(bounds.pad(0.18), { maxZoom: 7 });
-  }, [map, points]);
+    initializedRef.current = true;
+    onZoomChange(map.getZoom());
+    onBoundsChange(map.getBounds());
+    const center = map.getCenter();
+    onViewportChange?.({ center: [center.lat, center.lng], zoom: map.getZoom() });
+  }, [map, points, initialViewport, onBoundsChange, onViewportChange, onZoomChange]);
 
-  return null;
-}
-
-function ViewportTracker({
-  onChange,
-}: {
-  onChange: (zoom: number, bounds: LatLngBounds) => void;
-}) {
-  const map = useMapEvents({
-    zoomend: () => onChange(map.getZoom(), map.getBounds()),
-    moveend: () => onChange(map.getZoom(), map.getBounds()),
+  useMapEvents({
+    zoomend: () => {
+      const nextZoom = map.getZoom();
+      const nextBounds = map.getBounds();
+      const center = map.getCenter();
+      onZoomChange(nextZoom);
+      onBoundsChange(nextBounds);
+      onViewportChange?.({ center: [center.lat, center.lng], zoom: nextZoom });
+    },
+    moveend: () => {
+      const nextZoom = map.getZoom();
+      const nextBounds = map.getBounds();
+      const center = map.getCenter();
+      onZoomChange(nextZoom);
+      onBoundsChange(nextBounds);
+      onViewportChange?.({ center: [center.lat, center.lng], zoom: nextZoom });
+    },
   });
-
-  useEffect(() => {
-    onChange(map.getZoom(), map.getBounds());
-  }, [map, onChange]);
 
   return null;
 }
@@ -191,7 +221,7 @@ function buildMarkers(points: DeveloperAssetMapPoint[], zoom: number): DisplayMa
   });
 }
 
-export default function DeveloperAssetMap({ points, unmappedCount, onAssetClick, onPlantClick }: Props) {
+export default function DeveloperAssetMap({ points, unmappedCount, onPlantClick, initialViewport, onViewportChange }: Props) {
   const [zoom, setZoom] = useState(4);
   const [bounds, setBounds] = useState<LatLngBounds | null>(null);
 
@@ -246,8 +276,13 @@ export default function DeveloperAssetMap({ points, unmappedCount, onAssetClick,
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
 
-          <FitToAssetBounds points={points} />
-          <ViewportTracker onChange={(nextZoom, nextBounds) => { setZoom(nextZoom); setBounds(nextBounds); }} />
+          <MapStateController
+            points={points}
+            initialViewport={initialViewport}
+            onViewportChange={onViewportChange}
+            onZoomChange={setZoom}
+            onBoundsChange={setBounds}
+          />
 
           {markers.map((marker) => (
             <CircleMarker
@@ -285,7 +320,7 @@ export default function DeveloperAssetMap({ points, unmappedCount, onAssetClick,
                     <div className="text-xs text-slate-700">{marker.points[0].state || 'Unknown state'}{marker.points[0].county ? `, ${marker.points[0].county} County` : ''}</div>
                     <div className="text-xs text-slate-700">{markerTitle(marker.points[0])}</div>
                     <div className="flex gap-2 pt-1">
-                      {marker.points[0].eiaPlantCode && onPlantClick && (
+                      {marker.points[0].eiaPlantCode && onPlantClick ? (
                         <button
                           type="button"
                           className="px-2 py-1 text-xs font-semibold rounded bg-cyan-600 text-white hover:bg-cyan-500"
@@ -293,14 +328,9 @@ export default function DeveloperAssetMap({ points, unmappedCount, onAssetClick,
                         >
                           Open Plant
                         </button>
+                      ) : (
+                        <span className="text-xs text-slate-500">No linked EIA plant</span>
                       )}
-                      <button
-                        type="button"
-                        className="px-2 py-1 text-xs font-semibold rounded bg-slate-700 text-white hover:bg-slate-600"
-                        onClick={() => onAssetClick(marker.points[0].assetId)}
-                      >
-                        Open Asset
-                      </button>
                     </div>
                   </div>
                 )}

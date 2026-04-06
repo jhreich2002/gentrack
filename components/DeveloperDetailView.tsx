@@ -5,13 +5,16 @@ import {
   DeveloperRow, AssetRegistryRow, ChangelogRow,
 } from '../services/developerService';
 import { PowerPlant, CapacityFactorStats } from '../types';
-import type { DeveloperAssetMapPoint } from './DeveloperAssetMap';
+import type { DeveloperAssetMapPoint, DeveloperMapViewport } from './DeveloperAssetMap';
 
 interface Props {
   developer: DeveloperRow;
   onBack: () => void;
   onAssetClick: (assetId: string) => void;
   onPlantClick?: (plantId: string) => void;
+  onTabChange?: (tab: Tab) => void;
+  mapViewport?: DeveloperMapViewport | null;
+  onMapViewportChange?: (viewport: DeveloperMapViewport) => void;
   plants: PowerPlant[];
   statsMap: Record<string, CapacityFactorStats>;
   initialTab?: Tab;
@@ -50,7 +53,7 @@ function matchBadge(confidence: string | null) {
   return styles[confidence || 'none'] || styles.none;
 }
 
-export default function DeveloperDetailView({ developer, onBack, onAssetClick, onPlantClick, plants, statsMap, initialTab = 'overview' }: Props) {
+export default function DeveloperDetailView({ developer, onBack, onAssetClick, onPlantClick, onTabChange, mapViewport, onMapViewportChange, plants, statsMap, initialTab = 'overview' }: Props) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [assets, setAssets] = useState<AssetRegistryRow[]>([]);
   const [changelog, setChangelog] = useState<ChangelogRow[]>([]);
@@ -189,6 +192,11 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
     });
   };
 
+  const handleTabChange = (nextTab: Tab) => {
+    setTab(nextTab);
+    onTabChange?.(nextTab);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-slate-500">
@@ -224,7 +232,7 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
         {(['overview', 'portfolio', 'map'] as Tab[]).map(t => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => handleTabChange(t)}
             className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
               tab === t ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-300'
             }`}
@@ -536,8 +544,9 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
               <DeveloperAssetMap
                 points={filteredMapPoints}
                 unmappedCount={unmappedCount}
-                onAssetClick={onAssetClick}
                 onPlantClick={onPlantClick}
+                initialViewport={mapViewport}
+                onViewportChange={onMapViewportChange}
               />
             </Suspense>
           )}
