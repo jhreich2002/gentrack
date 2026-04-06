@@ -48,13 +48,20 @@ async function fetchAll<T = Record<string, unknown>>(
 }
 
 // ── Bidirectional substring match (case-insensitive) ─────────────────────────
-// Returns true if entityName appears in any of the article's company names,
-// or if any company name is a substring of entityName.
-function entityMatchesNames(entityName: string, companyNames: string[]): boolean {
-  const eName = entityName.toLowerCase();
-  for (const n of companyNames) {
-    const cn = n.toLowerCase();
-    if (cn.includes(eName) || eName.includes(cn)) return true;
+// Returns true if entityName (or any of its known aliases) appears in any of
+// the article's company names, or vice versa.
+function entityMatchesNames(
+  entityName: string,
+  companyNames: string[],
+  aliasVariants?: string[],
+): boolean {
+  const namesToCheck = [entityName, ...(aliasVariants ?? [])];
+  for (const name of namesToCheck) {
+    const eName = name.toLowerCase();
+    for (const n of companyNames) {
+      const cn = n.toLowerCase();
+      if (cn.includes(eName) || eName.includes(cn)) return true;
+    }
   }
   return false;
 }
@@ -219,6 +226,39 @@ Deno.serve(async (req: Request) => {
       regionAvgCf.set(rto, sum / (regionCfCount.get(rto) ?? 1));
     }
 
+    // ── 4b. Load entity normalization tables ─────────────────────────────────
+    const aliasRows = await fetchAll<{
+      alias_name: string;
+      canonical_name: string;
+      entity_type: string;
+    }>(sb, 'entity_aliases', 'alias_name, canonical_name, entity_type');
+
+    // Build alias lookup: lowercase alias → canonical name (keyed per entity type)
+    const aliasMap = new Map<string, string>();           // "lowercase alias" → canonical
+    const canonicalToAliases = new Map<string, string[]>(); // canonical → all alias variants
+    for (const a of aliasRows) {
+      aliasMap.set(a.alias_name.toLowerCase(), a.canonical_name);
+      // Also track reverse mapping for news matching
+      const key = a.canonical_name.toLowerCase();
+      if (!canonicalToAliases.has(key)) canonicalToAliases.set(key, []);
+      canonicalToAliases.get(key)!.push(a.alias_name);
+    }
+
+    const blocklistRows = await fetchAll<{
+      name: string;
+      entity_type: string;
+    }>(sb, 'entity_blocklist', 'name, entity_type');
+
+    const blocklistSet = new Set<string>(blocklistRows.map(b => b.name.toLowerCase()));
+    console.log(`Loaded ${aliasRows.length} entity aliases, ${blocklistRows.length} blocklist entries`);
+
+    // Helper: resolve a raw entity name through alias map, return null if blocklisted
+    function resolveEntityName(rawName: string): string | null {
+      const lower = rawName.toLowerCase().trim();
+      if (blocklistSet.has(lower)) return null;  // blocklisted
+      return aliasMap.get(lower) ?? rawName;      // canonical or original
+    }
+
     // ── 5. Load plant_lenders (high/medium confidence) ────────────────────────
     const lenderRows = await fetchAll<{
       eia_plant_code: string;
@@ -253,13 +293,22 @@ Deno.serve(async (req: Request) => {
       curtailedCount: 0, distressSum: 0, distressCount: 0, isoSet: new Set(),
     });
 
+    let blockedCount = 0;
+    let aliasedCount = 0;
+
     for (const row of lenderRows) {
       if (!row.lender_name) continue;
+
+      // Apply entity normalization: resolve aliases and filter blocklisted names
+      const resolved = resolveEntityName(row.lender_name);
+      if (resolved === null) { blockedCount++; continue; }  // blocklisted
+      if (resolved !== row.lender_name) aliasedCount++;
+
       const isTaxEquity = row.facility_type === 'tax_equity';
       const map = isTaxEquity ? taxEquityMap : lenderMap;
 
-      if (!map.has(row.lender_name)) map.set(row.lender_name, initAgg());
-      const agg = map.get(row.lender_name)!;
+      if (!map.has(resolved)) map.set(resolved, initAgg());
+      const agg = map.get(resolved)!;
 
       agg.plantCodes.add(row.eia_plant_code);
       agg.facilityTypes.add(row.facility_type);
@@ -290,6 +339,7 @@ Deno.serve(async (req: Request) => {
       (q: any) => q.gte('published_at', cutoff).not('entity_company_names', 'eq', '{}')
     );
     console.log(`Loaded ${articleRows.length} articles for entity news matching`);
+    console.log(`Entity normalization: ${aliasedCount} rows aliased, ${blockedCount} rows blocklisted`);
 
     // ── 8. Match news to each entity ──────────────────────────────────────────
     interface EntityNews {
@@ -305,9 +355,10 @@ Deno.serve(async (req: Request) => {
         posCount: 0, negCount: 0, totalCount: 0,
         relevanceScores: {}, lastNewsDate: null,
       };
+      const aliasVariants = canonicalToAliases.get(entityName.toLowerCase()) ?? [];
       for (const art of articleRows) {
         const companies: string[] = art.entity_company_names ?? [];
-        if (!entityMatchesNames(entityName, companies)) continue;
+        if (!entityMatchesNames(entityName, companies, aliasVariants)) continue;
 
         result.totalCount++;
         if (art.sentiment_label === 'positive') result.posCount++;
@@ -367,6 +418,18 @@ Deno.serve(async (req: Request) => {
     await upsertBatch(sb, 'lender_stats', lenderUpserts, 'lender_name');
     console.log(`Upserted ${lenderUpserts.length} lender_stats rows`);
 
+    // Clean up stale lender_stats rows that were merged into a canonical name
+    const activeLenderNames = new Set(lenderUpserts.map(r => r.lender_name as string));
+    const { data: existingLenders } = await sb.from('lender_stats').select('lender_name');
+    const staleLenders = (existingLenders ?? []).filter(
+      (r: { lender_name: string }) => !activeLenderNames.has(r.lender_name)
+    );
+    if (staleLenders.length > 0) {
+      const staleNames = staleLenders.map((r: { lender_name: string }) => r.lender_name);
+      await sb.from('lender_stats').delete().in('lender_name', staleNames);
+      console.log(`Cleaned up ${staleNames.length} stale lender_stats rows (merged/blocklisted)`);
+    }
+
     // ── 10. Build and upsert tax_equity_stats ─────────────────────────────────
     const taxEquityUpserts: Record<string, unknown>[] = [];
 
@@ -424,6 +487,18 @@ Deno.serve(async (req: Request) => {
 
     await upsertBatch(sb, 'tax_equity_stats', taxEquityUpserts, 'investor_name');
     console.log(`Upserted ${taxEquityUpserts.length} tax_equity_stats rows`);
+
+    // Clean up stale tax_equity_stats rows that were merged into a canonical name
+    const activeInvestorNames = new Set(taxEquityUpserts.map(r => r.investor_name as string));
+    const { data: existingInvestors } = await sb.from('tax_equity_stats').select('investor_name');
+    const staleInvestors = (existingInvestors ?? []).filter(
+      (r: { investor_name: string }) => !activeInvestorNames.has(r.investor_name)
+    );
+    if (staleInvestors.length > 0) {
+      const staleNames = staleInvestors.map((r: { investor_name: string }) => r.investor_name);
+      await sb.from('tax_equity_stats').delete().in('investor_name', staleNames);
+      console.log(`Cleaned up ${staleNames.length} stale tax_equity_stats rows (merged/blocklisted)`);
+    }
 
     // ── 11. Update company_stats distress_score ───────────────────────────────
     // Load ownership to map company → plant codes

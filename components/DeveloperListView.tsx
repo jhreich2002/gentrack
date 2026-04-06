@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { fetchDevelopers, fetchDeveloperAssets, DeveloperRow, AssetRegistryRow } from '../services/developerService';
 
 const TYPICAL_CF: Record<string, number> = {
@@ -11,16 +11,22 @@ const TYPICAL_CF: Record<string, number> = {
 function computePortfolioStats(assets: AssetRegistryRow[]) {
   let totalMw = 0;
   let weightedCfSum = 0;
+  const techSet = new Set<string>();
+  const stateSet = new Set<string>();
   for (const a of assets) {
     const mw = a.capacity_mw || 0;
     totalMw += mw;
     const tech = (a.technology || '').toLowerCase();
     const cf = Object.entries(TYPICAL_CF).find(([k]) => tech.includes(k))?.[1] ?? 0.22;
     weightedCfSum += mw * cf;
+    if (a.technology) techSet.add(a.technology);
+    if (a.state) stateSet.add(a.state);
   }
   return {
     totalGw: totalMw / 1000,
     avgCf: totalMw > 0 ? weightedCfSum / totalMw : 0,
+    techs: Array.from(techSet),
+    states: Array.from(stateSet),
   };
 }
 
@@ -31,31 +37,64 @@ interface Props {
 interface DevStats {
   totalGw: number;
   avgCf: number;
+  techs: string[];
+  states: string[];
 }
 
 export default function DeveloperListView({ onDeveloperClick }: Props) {
   const [developers, setDevelopers] = useState<DeveloperRow[]>([]);
   const [stats, setStats] = useState<Record<string, DevStats>>({});
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [stateFilter, setStateFilter] = useState('all');
+  const [fuelFilter, setFuelFilter] = useState('all');
 
   useEffect(() => {
     fetchDevelopers().then(async devs => {
-      // Only show Cypress Creek Renewables
-      const filtered = devs.filter(d => d.name.toLowerCase().includes('cypress creek'));
-      setDevelopers(filtered);
-
-      // Compute portfolio stats for each developer
+      // Compute portfolio stats and only keep developers with actual asset data
       const statsMap: Record<string, DevStats> = {};
+      const withData: DeveloperRow[] = [];
       await Promise.all(
-        filtered.map(async dev => {
+        devs.map(async dev => {
           const assets = await fetchDeveloperAssets(dev.id);
-          statsMap[dev.id] = computePortfolioStats(assets);
+          if (assets.length > 0) {
+            statsMap[dev.id] = computePortfolioStats(assets);
+            withData.push(dev);
+          }
         })
       );
+      setDevelopers(withData);
       setStats(statsMap);
       setLoading(false);
     });
   }, []);
+
+  const allStates = useMemo(() => {
+    const s = new Set<string>();
+    Object.values(stats).forEach((st: DevStats) => st.states.forEach(v => s.add(v)));
+    return ['all', ...Array.from(s).sort()];
+  }, [stats]);
+
+  const allFuels = useMemo(() => {
+    const s = new Set<string>();
+    Object.values(stats).forEach((st: DevStats) => st.techs.forEach(v => s.add(v)));
+    return ['all', ...Array.from(s).sort()];
+  }, [stats]);
+
+  const filtered = useMemo(() => {
+    let rows = developers;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      rows = rows.filter(d => d.name.toLowerCase().includes(q));
+    }
+    if (stateFilter !== 'all') {
+      rows = rows.filter(d => stats[d.id]?.states.includes(stateFilter));
+    }
+    if (fuelFilter !== 'all') {
+      rows = rows.filter(d => stats[d.id]?.techs.includes(fuelFilter));
+    }
+    return rows;
+  }, [developers, search, stateFilter, fuelFilter, stats]);
 
   if (loading) {
     return (
@@ -67,14 +106,41 @@ export default function DeveloperListView({ onDeveloperClick }: Props) {
 
   return (
     <div>
-      <header className="flex justify-between items-start mb-8">
-        <div>
-          <h1 className="text-4xl font-black text-white mb-2 tracking-tight">Developer Registry</h1>
-          <p className="text-slate-400 font-medium max-w-xl leading-relaxed">
-            AI-crawled developer portfolios with EIA-validated asset coverage.
-          </p>
+      <header className="mb-8">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-2 h-8 rounded-full bg-blue-500" />
+          <h1 className="text-4xl font-black text-white tracking-tight">Developer Registry</h1>
         </div>
+        <p className="text-slate-400 font-medium max-w-2xl leading-relaxed">
+          AI-crawled developer portfolios with EIA-validated asset coverage.
+          {developers.length > 0 && ` ${developers.length} developers tracked.`}
+        </p>
       </header>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 mb-6">
+        <input
+          type="text"
+          placeholder="Search developer name…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500 w-48"
+        />
+        <select
+          value={stateFilter}
+          onChange={e => setStateFilter(e.target.value)}
+          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+        >
+          {allStates.map(s => <option key={s} value={s}>{s === 'all' ? 'All States' : s}</option>)}
+        </select>
+        <select
+          value={fuelFilter}
+          onChange={e => setFuelFilter(e.target.value)}
+          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+        >
+          {allFuels.map(f => <option key={f} value={f}>{f === 'all' ? 'All Fuels' : f}</option>)}
+        </select>
+      </div>
 
       {/* Table */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
@@ -89,7 +155,7 @@ export default function DeveloperListView({ onDeveloperClick }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {developers.map(dev => {
+              {filtered.map(dev => {
                 const s = stats[dev.id];
                 return (
                   <tr

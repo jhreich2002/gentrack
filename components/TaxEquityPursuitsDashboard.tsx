@@ -23,6 +23,8 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
   const [pursuitPlants, setPursuitPlants] = useState<PursuitPlant[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [stateFilter, setStateFilter] = useState('all');
+  const [fuelFilter, setFuelFilter] = useState('all');
   const [sort, setSort] = useState<'distress' | 'plants' | 'name'>('plants');
 
   useEffect(() => {
@@ -33,16 +35,38 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
     });
   }, []);
 
+  const plantDataMap = useMemo(
+    () => Object.fromEntries(pursuitPlants.map(p => [p.eiaPlantCode, { name: p.name, state: p.state, fuel: p.fuelSource }])),
+    [pursuitPlants],
+  );
   const plantNameMap = useMemo(
     () => Object.fromEntries(pursuitPlants.map(p => [p.eiaPlantCode, p.name])),
     [pursuitPlants],
   );
+
+  const states = useMemo(() => {
+    const s = new Set<string>();
+    stats.forEach(inv => inv.plantCodes.forEach(c => { if (plantDataMap[c]?.state) s.add(plantDataMap[c].state); }));
+    return ['all', ...Array.from(s).sort()];
+  }, [stats, plantDataMap]);
+
+  const fuels = useMemo(() => {
+    const s = new Set<string>();
+    stats.forEach(inv => inv.plantCodes.forEach(c => { if (plantDataMap[c]?.fuel) s.add(plantDataMap[c].fuel); }));
+    return ['all', ...Array.from(s).sort()];
+  }, [stats, plantDataMap]);
 
   const filtered = useMemo(() => {
     let rows = stats;
     if (search.trim()) {
       const q = search.toLowerCase();
       rows = rows.filter(inv => inv.investorName.toLowerCase().includes(q));
+    }
+    if (stateFilter !== 'all') {
+      rows = rows.filter(inv => inv.plantCodes.some(c => plantDataMap[c]?.state === stateFilter));
+    }
+    if (fuelFilter !== 'all') {
+      rows = rows.filter(inv => inv.plantCodes.some(c => plantDataMap[c]?.fuel === fuelFilter));
     }
     return [...rows].sort((a, b) => {
       if (sort === 'distress') return (b.distressScore ?? 0) - (a.distressScore ?? 0);
@@ -53,15 +77,7 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
       }
       return a.investorName.localeCompare(b.investorName);
     });
-  }, [stats, search, sort]);
-
-  const multiPlantCount = stats.filter(inv => {
-    const curtailed = inv.plantCodes.filter(c => plantNameMap[c]);
-    return curtailed.length >= 2;
-  }).length;
-  const totalCurtailedExposures = stats.reduce(
-    (sum, inv) => sum + inv.plantCodes.filter(c => plantNameMap[c]).length, 0,
-  );
+  }, [stats, search, stateFilter, fuelFilter, sort, plantDataMap, plantNameMap]);
 
   if (loading) {
     return (
@@ -75,33 +91,37 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
     <div className="flex flex-col h-full overflow-hidden bg-slate-900">
       {/* Header */}
       <div className="px-6 pt-6 pb-4 border-b border-slate-800 flex-shrink-0">
-        <h1 className="text-xl font-bold text-slate-100">Tax Equity Pursuits</h1>
-        <p className="text-sm text-slate-500 mt-0.5">
-          Tax equity investors with exposure to curtailed plants — ranked by plant count
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-2 h-8 rounded-full bg-violet-500" />
+          <h1 className="text-4xl font-black text-white tracking-tight">Tax Equity Pursuits</h1>
+        </div>
+        <p className="text-slate-400 font-medium max-w-2xl leading-relaxed">
+          Tax equity investors with exposure to curtailed plants — ranked by plant count.
+          {stats.length > 0 && ` ${stats.length} investors identified.`}
         </p>
 
-        {/* Summary cards */}
-        <div className="grid grid-cols-3 gap-3 mt-4">
-          {[
-            { label: 'Investors Identified', value: stats.length, color: 'text-violet-400' },
-            { label: 'Multi-Plant Exposure', value: multiPlantCount, color: 'text-amber-400' },
-            { label: 'Curtailed Plant Touches', value: totalCurtailedExposures, color: 'text-red-400' },
-          ].map(c => (
-            <div key={c.label} className="bg-slate-800/60 rounded-xl px-4 py-3">
-              <div className={`text-2xl font-black ${c.color}`}>{c.value}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">{c.label}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Controls */}
-        <div className="flex items-center gap-3 mt-4">
+        {/* Filters */}
+        <div className="flex flex-wrap gap-3 mt-4">
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search investors…"
-            className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-violet-600"
+            className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-violet-500 w-48"
           />
+          <select
+            value={stateFilter}
+            onChange={e => setStateFilter(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-violet-500"
+          >
+            {states.map(s => <option key={s} value={s}>{s === 'all' ? 'All States' : s}</option>)}
+          </select>
+          <select
+            value={fuelFilter}
+            onChange={e => setFuelFilter(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-violet-500"
+          >
+            {fuels.map(f => <option key={f} value={f}>{f === 'all' ? 'All Fuels' : f}</option>)}
+          </select>
           <div className="flex rounded-lg overflow-hidden border border-slate-700 text-xs font-semibold">
             {(['distress', 'plants', 'name'] as const).map(s => (
               <button
