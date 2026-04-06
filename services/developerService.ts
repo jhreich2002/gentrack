@@ -92,6 +92,31 @@ export interface DeveloperAssetLink {
   role: string | null;
 }
 
+export interface DeveloperOpportunityScoreRow {
+  developer_id: string;
+  developer_name: string;
+  model_version: string;
+  opportunity_score: number;
+  distress_score: number;
+  complexity_score: number;
+  trigger_immediacy_score: number;
+  engagement_potential_score: number;
+  total_mw_at_risk: number;
+  asset_count: number;
+  mapped_asset_count: number;
+  high_risk_asset_count: number;
+  likely_curtailed_count: number;
+  maintenance_offline_count: number;
+  upcoming_cod_count: number;
+  coverage_rate: number | null;
+  verification_pct: number | null;
+  top_signals: string[];
+  recommended_service_lines: string[];
+  previous_opportunity_score: number | null;
+  weekly_delta_score: number | null;
+  computed_at: string;
+}
+
 // ── Fetch Functions ──────────────────────────────────────────────────────────
 
 export async function fetchDevelopers(): Promise<DeveloperRow[]> {
@@ -112,6 +137,34 @@ export async function fetchDevelopers(): Promise<DeveloperRow[]> {
     return [];
   }
   return data as DeveloperRow[];
+}
+
+export async function fetchDeveloperOpportunityScores(): Promise<Record<string, DeveloperOpportunityScoreRow>> {
+  const { data, error } = await supabase
+    .from('developer_opportunity_scores')
+    .select(`
+      developer_id, developer_name, model_version,
+      opportunity_score, distress_score, complexity_score,
+      trigger_immediacy_score, engagement_potential_score,
+      total_mw_at_risk, asset_count, mapped_asset_count,
+      high_risk_asset_count, likely_curtailed_count,
+      maintenance_offline_count, upcoming_cod_count,
+      coverage_rate, verification_pct,
+      top_signals, recommended_service_lines,
+      previous_opportunity_score, weekly_delta_score,
+      computed_at
+    `);
+
+  if (error || !data) {
+    if (error) console.error('fetchDeveloperOpportunityScores error:', error.message);
+    return {};
+  }
+
+  const map: Record<string, DeveloperOpportunityScoreRow> = {};
+  for (const row of data as DeveloperOpportunityScoreRow[]) {
+    map[row.developer_id] = row;
+  }
+  return map;
 }
 
 export async function fetchDeveloperAssets(developerId: string): Promise<AssetRegistryRow[]> {

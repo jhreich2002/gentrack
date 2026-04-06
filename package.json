@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "fetch-data": "npx tsx scripts/fetch-eia-data.ts",
+    "score:developers": "npx tsx scripts/compute-developer-opportunities.ts",
     "seed-articles": "npx tsx scripts/bulk-seed-articles.ts",
     "docker:build": "docker build --build-arg VITE_EIA_API_KEY=%VITE_EIA_API_KEY% --build-arg GEMINI_API_KEY=%GEMINI_API_KEY% -t gentrack .",
     "docker:run": "docker run -d -p 3000:80 --name gentrack gentrack"
