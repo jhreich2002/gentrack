@@ -90,7 +90,9 @@ function buildExtractionPrompt(articles: ArticleRow[]): string {
 For each article, identify ALL named financing counterparties — lenders, tax equity investors, sponsors, co-investors, or other financing parties.
 
 RULES:
-- Only extract NAMED entities (real institution or company names). Do not extract generic terms like "a major bank", "an unnamed investor", "the lender", etc.
+- Only extract NAMED entities (real institution or company names). Do not extract generic terms like "a major bank", "an unnamed investor", "the lender", "consortium of banks", "a group of lenders", "undisclosed investor", "various banks", or "multiple lenders".
+- If the specific institution cannot be identified by name, omit the entry entirely.
+- Use the full, commonly recognized institutional name (e.g. "JPMorgan Chase" not "JPMC" or "JP Morgan Chase & Co."). Do not include legal suffixes like "N.A.", "LLC", "Inc." unless they disambiguate different entities.
 - For each named counterparty, identify their role and facility type as best you can from context.
 - amount_usd: extract only if a specific dollar amount is stated for THIS counterparty's facility. Use null otherwise.
 - confidence: "high" = article explicitly names them as a financing party for this plant; "medium" = likely but indirect; "low" = mentioned in context but role unclear.

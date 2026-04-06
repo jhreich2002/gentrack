@@ -104,6 +104,7 @@ export async function fetchDevelopers(): Promise<DeveloperRow[]> {
       verification_pct, change_velocity, total_spend_usd,
       last_pulse_at, last_full_crawl_at, created_at
     `)
+    .gt('asset_count_discovered', 0)
     .order('created_at', { ascending: false });
 
   if (error) {

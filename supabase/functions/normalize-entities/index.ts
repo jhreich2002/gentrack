@@ -326,6 +326,23 @@ Deno.serve(async (req: Request) => {
       dev_aliases_updated: devAliasGroups.length,
     };
     console.log('normalize-entities complete:', result);
+
+    // ── Chain to refresh-entity-stats ──────────────────────────────────────
+    try {
+      const fnUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/refresh-entity-stats`;
+      fetch(fnUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+        },
+        body: '{}',
+      });
+      console.log('Chained refresh-entity-stats');
+    } catch (chainErr) {
+      console.warn('Chain to refresh-entity-stats failed (non-fatal):', chainErr);
+    }
+
     return new Response(JSON.stringify(result), {
       headers: { 'Content-Type': 'application/json' },
     });

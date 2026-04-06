@@ -790,7 +790,7 @@ function mergeAssets(state: CrawlState, newAssets: DiscoveredAsset[]): number {
 async function ensureDeveloper(name: string): Promise<string> {
   const supabase = getDb();
 
-  // Check if developer already exists
+  // Check if developer already exists by exact name
   const { data: existing } = await supabase
     .from('developers')
     .select('id')
@@ -800,6 +800,39 @@ async function ensureDeveloper(name: string): Promise<string> {
   if (existing) {
     log('DB', `Developer "${name}" exists: ${existing.id}`);
     return existing.id;
+  }
+
+  // Check if this name matches a known alias
+  const { data: aliasMatch } = await supabase
+    .from('developers')
+    .select('id, name')
+    .contains('aliases', [name])
+    .maybeSingle();
+
+  if (aliasMatch) {
+    log('DB', `Developer "${name}" matched alias of "${aliasMatch.name}": ${aliasMatch.id}`);
+    return aliasMatch.id;
+  }
+
+  // Also check entity_aliases table for a canonical mapping
+  const { data: entityAlias } = await supabase
+    .from('entity_aliases')
+    .select('canonical_name')
+    .eq('alias_name', name)
+    .eq('entity_type', 'developer')
+    .maybeSingle();
+
+  if (entityAlias) {
+    const { data: canonical } = await supabase
+      .from('developers')
+      .select('id')
+      .eq('name', entityAlias.canonical_name)
+      .maybeSingle();
+
+    if (canonical) {
+      log('DB', `Developer "${name}" resolved via entity_aliases to "${entityAlias.canonical_name}": ${canonical.id}`);
+      return canonical.id;
+    }
   }
 
   const { data, error } = await supabase
