@@ -79,6 +79,7 @@ const App: React.FC = () => {
   const [cameFromCompany, setCameFromCompany]       = useState(false);
   const [cameFromPursuits, setCameFromPursuits]     = useState(false);
   const [cameFromEntity, setCameFromEntity]         = useState(false);
+  const [cameFromDeveloper, setCameFromDeveloper]   = useState(false);
   const [companyActiveTab, setCompanyActiveTab]     = useState<'overview' | 'portfolio'>('overview');
   const [selectedEntity, setSelectedEntity]         = useState<{ name: string; type: 'lender' | 'tax_equity' } | null>(null);
   const [selectedDeveloper, setSelectedDeveloper]   = useState<DeveloperRow | null>(null);
@@ -133,6 +134,14 @@ const App: React.FC = () => {
     }
   };
 
+  // Navigate to plant detail from developer registry (by EIA code)
+  const handlePlantClickFromDeveloper = (eiaPlantCode: string) => {
+    const plant = plants.find(p => p.eiaPlantCode === eiaPlantCode);
+    if (plant) {
+      handlePlantClick(plant.id, 'developer');
+    }
+  };
+
   // Navigate to plant detail from company portfolio (by EIA code)
   const handlePlantClickFromCompany = (eiaPlantCode: string) => {
     const plant = plants.find(p => p.eiaPlantCode === eiaPlantCode);
@@ -150,12 +159,13 @@ const App: React.FC = () => {
   };
 
   // Handle row click to view plant details
-  const handlePlantClick = async (id: string, origin: 'dashboard' | 'company' | 'pursuits' | 'entity' = 'dashboard') => {
+  const handlePlantClick = async (id: string, origin: 'dashboard' | 'company' | 'pursuits' | 'entity' | 'developer' = 'dashboard') => {
     setSelectedPlantId(id);
     setView('detail');
     setCameFromCompany(origin === 'company');
     setCameFromPursuits(origin === 'pursuits');
     setCameFromEntity(origin === 'entity');
+    setCameFromDeveloper(origin === 'developer');
     setGenerationLoading(true);
     setRegionalTrend([]);
     setSubRegionalTrend([]);
@@ -812,10 +822,10 @@ const App: React.FC = () => {
             : view === 'developers'
             ? <DeveloperListView onDeveloperClick={handleDeveloperClick} />
             : view === 'developer-detail' && selectedDeveloper
-            ? <DeveloperDetailView developer={selectedDeveloper} onBack={() => setView('developers')} onAssetClick={handleAssetRegistryClick} onPlantClick={handlePlantClickFromPursuits} />
+            ? <DeveloperDetailView developer={selectedDeveloper} onBack={() => setView('developers')} onAssetClick={handleAssetRegistryClick} onPlantClick={handlePlantClickFromDeveloper} />
             : view === 'asset-detail' && selectedAssetId
-            ? <AssetRegistryDetailView assetId={selectedAssetId} onBack={() => selectedDeveloper ? setView('developer-detail') : setView('developers')} onPlantClick={handlePlantClickFromPursuits} />
-            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
+            ? <AssetRegistryDetailView assetId={selectedAssetId} onBack={() => selectedDeveloper ? setView('developer-detail') : setView('developers')} onPlantClick={handlePlantClickFromDeveloper} />
+            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromDeveloper && selectedDeveloper) { setView('developer-detail'); setCameFromDeveloper(false); } else if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
         )}
       </main>
 
