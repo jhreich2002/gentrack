@@ -159,10 +159,10 @@ Deno.serve(async (_req) => {
     const result = { ok: true, plantsRated: upserted, errors };
     console.log('compute-ratings complete:', result);
 
-    // ── Chain to refresh-entity-stats ─────────────────────────────────────────
+    // ── Chain to normalize-entities → refresh-entity-stats ──────────────────
     if (upserted > 0) {
       try {
-        const fnUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/refresh-entity-stats`;
+        const fnUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/normalize-entities`;
         fetch(fnUrl, {
           method: 'POST',
           headers: {
@@ -171,9 +171,9 @@ Deno.serve(async (_req) => {
           },
           body: '{}',
         });
-        console.log('Chained refresh-entity-stats');
+        console.log('Chained normalize-entities (will chain to refresh-entity-stats)');
       } catch (chainErr) {
-        console.warn('Chain to refresh-entity-stats failed (non-fatal):', chainErr);
+        console.warn('Chain to normalize-entities failed (non-fatal):', chainErr);
       }
     }
 
