@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx supabase@latest projects list)",
+      "Read(//c/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/$APPDATA/supabase/**)",
+      "Read(//c/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/$HOME/.supabase/**)",
+      "Bash(npx supabase@latest link --project-ref ohmmtplnaddrfuoowpuq)",
+      "Bash(npx supabase@latest secrets set TAVILY_API_KEY=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)",
+      "Bash(npx supabase@latest functions deploy news-ingest)",
+      "Bash(npx supabase@latest functions invoke news-ingest --data '{\"\"tier\"\":1}')",
+      "Bash(curl -s -X POST \"https://ohmmtplnaddrfuoowpuq.supabase.co/functions/v1/news-ingest?tier=1\" -H \"Content-Type: application/json\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9obW10cGxuYWRkcmZ1b293cHVxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTkwMDU4NywiZXhwIjoyMDg3NDc2NTg3fQ.zlFMdTMcmVb0W9k8DC-IM6cieil5Wjc9NiGJ0VT2MEs\" -d '{}')",
+      "Read(//c/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/$APPDATA/**)",
+      "Read(//c/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/$USERPROFILE/**)",
+      "Read(//c/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/$USERPROFILE/.supabase/**)",
+      "Bash(npx supabase@latest db execute --help)",
+      "Read(//c/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/**)",
+      "Read(//c/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/$USERPROFILE/.config/**)",
+      "Bash(cmd /c \"echo %APPDATA%\")",
+      "Read(//c/Users/jhrei/AppData/Roaming/**)",
+      "Bash(npx supabase@latest db push --linked)",
+      "Bash(mv 20260309_fix_embeddings_dims.sql 20260310_fix_embeddings_dims.sql)",
+      "Bash(mv 20260309_news_embeddings.sql 20260311_news_embeddings.sql)",
+      "Bash(ls 202603*.sql)",
+      "Read(//c/Users/jhrei/.claude/projects/c--Users-jhrei-Downloads-us-power-generation-capacity-factor-tracker/memory/**)",
+      "Bash(test -d \"c:/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/lender_pipeline\")",
+      "Bash(ls -d \"c:/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/supabase/functions\"/*/)",
+      "Bash(grep -l \"CREATE TABLE.*plants\\\\|plants\" \"c:/Users/jhrei/Downloads/us-power-generation-capacity-factor-tracker/scripts/\"*)",
+      "Bash(.venv/Scripts/pip install beautifulsoup4 rapidfuzz -q)",
+      "Bash(python -m pip install beautifulsoup4 rapidfuzz -q)",
+      "Read(//c/Users/jhrei/AppData/Local/Programs/**)",
+      "Bash(ls /c/Python*/python.exe)",
+      "Bash(py --version)",
+      "Bash(.venv/Scripts/python.exe -m pip install beautifulsoup4 rapidfuzz -q)",
+      "Bash(uv pip install beautifulsoup4 rapidfuzz)",
+      "Bash(curl -s -H \"User-Agent: GenTrack research@gentrack.io\" \"https://efts.sec.gov/LATEST/search-index?q=%22Portland+General+Electric%22&forms=10-K&dateRange=custom&startdt=2023-01-01&enddt=2026-12-31\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); hits=d.get\\(''hits'',{}\\).get\\(''hits'',[]\\); print\\(json.dumps\\(hits[0] if hits else {}, indent=2\\)\\)\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\jhrei\\.claude\\projects\\c--Users-jhrei-Downloads-us-power-generation-capacity-factor-tracker\\memory"
+    ]
+  }
+}

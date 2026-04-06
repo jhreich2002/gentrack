@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pipeline Tour Demo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #020617; }
+    .fade-in { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+    .pulse { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-6">
+
+  <div class="fixed inset-0 bg-black/70 backdrop-blur-sm"></div>
+
+  <div class="relative z-10 w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl shadow-black/70 overflow-hidden fade-in my-auto">
+
+    <!-- Header -->
+    <div class="relative px-8 pt-8 pb-6 border-b border-slate-800 overflow-hidden">
+      <div class="absolute -top-10 -right-10 w-48 h-48 bg-blue-600/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="absolute -top-10 left-20 w-32 h-32 bg-emerald-600/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="relative flex items-start justify-between">
+        <div>
+          <div class="flex items-center gap-2 mb-3">
+            <div class="w-2 h-2 bg-emerald-400 rounded-full pulse"></div>
+            <span class="text-[10px] font-black text-slate-500 uppercase tracking-widest">GENTRACK INTELLIGENCE</span>
+          </div>
+          <h2 class="text-2xl font-black text-white tracking-tight leading-tight mb-2">
+            How Plants Reach<br />
+            <span class="text-emerald-400">the Pursuit List</span>
+          </h2>
+          <p class="text-sm text-slate-400 max-w-lg leading-relaxed">
+            Every plant in the Pursuit dashboards passed through a 6-stage automated pipeline — from raw generation data to confirmed, multi-source financing intelligence.
+          </p>
+        </div>
+        <button class="p-2 rounded-lg text-slate-600 hover:text-slate-300 hover:bg-slate-800 transition-colors flex-shrink-0 mt-1 cursor-pointer">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Pipeline Stages -->
+    <div class="px-8 py-6 space-y-0 max-h-[55vh] overflow-y-auto">
+
+      <!-- Stage 01: Curtailment Detection -->
+      <div class="rounded-xl border border-red-500/30 bg-red-500/10 p-4 flex gap-4">
+        <div class="flex flex-col items-center gap-1 flex-shrink-0">
+          <div class="w-10 h-10 rounded-xl border border-red-500/30 bg-red-500/10 flex items-center justify-center">
+            <svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+            </svg>
+          </div>
+          <span class="text-[9px] font-black tracking-widest text-red-400 opacity-60">01</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-0.5 flex-wrap">
+            <h3 class="text-sm font-black text-white">Curtailment Detection</h3>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-red-500/20 text-red-400">EIA Generation Data</span>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed mb-2">Every plant is benchmarked against its regional ISO/RTO peers using trailing 12-month capacity factor data from the EIA. Plants whose output lags the regional average by a meaningful margin are flagged as likely curtailed and enter the pipeline.</p>
+          <div class="flex flex-wrap gap-1">
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-red-500/30 text-red-400 bg-slate-900/60">Capacity Factor</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-red-500/30 text-red-400 bg-slate-900/60">Regional Benchmark</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-red-500/30 text-red-400 bg-slate-900/60">TTM Average</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Connector 01→02 -->
+      <div class="flex flex-col items-center py-0.5">
+        <div class="w-px h-4" style="background: linear-gradient(to bottom, rgba(239,68,68,0.4), rgba(6,182,212,0.4))"></div>
+        <svg class="w-3 h-3 text-cyan-400 opacity-50" fill="currentColor" viewBox="0 0 24 24"><path d="M12 16l-6-6h12l-6 6z"/></svg>
+      </div>
+
+      <!-- Stage 02: Lender & Tax Equity Search -->
+      <div class="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-4 flex gap-4">
+        <div class="flex flex-col items-center gap-1 flex-shrink-0">
+          <div class="w-10 h-10 rounded-xl border border-cyan-500/30 bg-cyan-500/10 flex items-center justify-center">
+            <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+            </svg>
+          </div>
+          <span class="text-[9px] font-black tracking-widest text-cyan-400 opacity-60">02</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-0.5 flex-wrap">
+            <h3 class="text-sm font-black text-white">Lender & Tax Equity Search</h3>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-400">Perplexity AI</span>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed mb-2">For each curtailed plant, Perplexity is queried to surface financing activity — debt closings, tax equity commitments, loan announcements. Named counterparties (banks, credit facilities, tax equity investors) are extracted and written to the plant's financing record.</p>
+          <div class="flex flex-wrap gap-1">
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-cyan-500/30 text-cyan-400 bg-slate-900/60">Perplexity AI</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-cyan-500/30 text-cyan-400 bg-slate-900/60">Named Counterparties</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-cyan-500/30 text-cyan-400 bg-slate-900/60">Debt Close</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-cyan-500/30 text-cyan-400 bg-slate-900/60">Tax Equity</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Connector 02→03 -->
+      <div class="flex flex-col items-center py-0.5">
+        <div class="w-px h-4" style="background: linear-gradient(to bottom, rgba(6,182,212,0.4), rgba(139,92,246,0.4))"></div>
+        <svg class="w-3 h-3 text-violet-400 opacity-50" fill="currentColor" viewBox="0 0 24 24"><path d="M12 16l-6-6h12l-6 6z"/></svg>
+      </div>
+
+      <!-- Stage 03: Perplexity Deep Dive (Conditional) -->
+      <div class="rounded-xl border border-violet-500/30 bg-violet-500/10 p-4 flex gap-4">
+        <div class="flex flex-col items-center gap-1 flex-shrink-0">
+          <div class="w-10 h-10 rounded-xl border border-violet-500/30 bg-violet-500/10 flex items-center justify-center">
+            <svg class="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          <span class="text-[9px] font-black tracking-widest text-violet-400 opacity-60">03</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1 flex-wrap">
+            <h3 class="text-sm font-black text-white">Perplexity Deep Dive</h3>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-400">Conditional — lenders confirmed</span>
+          </div>
+          <!-- Conditional badge -->
+          <div class="inline-flex items-center gap-1.5 mb-2 px-2 py-1 rounded-lg border border-violet-500/30 bg-violet-500/10">
+            <svg class="w-3 h-3 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span class="text-[9px] font-bold text-violet-400">Only runs if lenders were found in Step 02</span>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed mb-2">If lenders or tax equity investors are confirmed in step 2, a second targeted Perplexity search is triggered specifically on that plant. This deep dive pulls additional context — operational issues, project history, ownership changes — beyond what the financing search returned.</p>
+          <div class="flex flex-wrap gap-1">
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-violet-500/30 text-violet-400 bg-slate-900/60">Perplexity AI</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-violet-500/30 text-violet-400 bg-slate-900/60">Plant-Specific Query</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-violet-500/30 text-violet-400 bg-slate-900/60">Extended Context</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Connector 03→04 -->
+      <div class="flex flex-col items-center py-0.5">
+        <div class="w-px h-4" style="background: linear-gradient(to bottom, rgba(139,92,246,0.4), rgba(59,130,246,0.4))"></div>
+        <svg class="w-3 h-3 text-blue-400 opacity-50" fill="currentColor" viewBox="0 0 24 24"><path d="M12 16l-6-6h12l-6 6z"/></svg>
+      </div>
+
+      <!-- Stage 04: News Intelligence Aggregation -->
+      <div class="rounded-xl border border-blue-500/30 bg-blue-500/10 p-4 flex gap-4">
+        <div class="flex flex-col items-center gap-1 flex-shrink-0">
+          <div class="w-10 h-10 rounded-xl border border-blue-500/30 bg-blue-500/10 flex items-center justify-center">
+            <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
+            </svg>
+          </div>
+          <span class="text-[9px] font-black tracking-widest text-blue-400 opacity-60">04</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-0.5 flex-wrap">
+            <h3 class="text-sm font-black text-white">News Intelligence Aggregation</h3>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400">RSS + Perplexity Combined</span>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed mb-2">Google News and Bing News RSS feeds are swept for each plant and merged with the Perplexity results from steps 2 and 3. The full article corpus — RSS and AI-sourced — is fed in batches to Gemini for unified classification across sentiment, event type, importance, and impact tags.</p>
+          <div class="flex flex-wrap gap-1">
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-blue-500/30 text-blue-400 bg-slate-900/60">Google News RSS</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-blue-500/30 text-blue-400 bg-slate-900/60">Bing RSS</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-blue-500/30 text-blue-400 bg-slate-900/60">Gemini Classification</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-blue-500/30 text-blue-400 bg-slate-900/60">Sentiment</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Connector 04→05 -->
+      <div class="flex flex-col items-center py-0.5">
+        <div class="w-px h-4" style="background: linear-gradient(to bottom, rgba(59,130,246,0.4), rgba(245,158,11,0.4))"></div>
+        <svg class="w-3 h-3 text-amber-400 opacity-50" fill="currentColor" viewBox="0 0 24 24"><path d="M12 16l-6-6h12l-6 6z"/></svg>
+      </div>
+
+      <!-- Stage 05: Distress Scoring -->
+      <div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex gap-4">
+        <div class="flex flex-col items-center gap-1 flex-shrink-0">
+          <div class="w-10 h-10 rounded-xl border border-amber-500/30 bg-amber-500/10 flex items-center justify-center">
+            <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          </div>
+          <span class="text-[9px] font-black tracking-widest text-amber-400 opacity-60">05</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-0.5 flex-wrap">
+            <h3 class="text-sm font-black text-white">Distress Scoring</h3>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400">Signal Synthesis</span>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed mb-2">Curtailment severity, classified news sentiment, lender confirmation, and article recency are combined into a single distress score per plant. Higher scores surface assets where multiple independent signals — generation data, news coverage, and financing history — all align.</p>
+          <div class="flex flex-wrap gap-1">
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-amber-500/30 text-amber-400 bg-slate-900/60">Distress Score</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-amber-500/30 text-amber-400 bg-slate-900/60">Signal Weight</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-amber-500/30 text-amber-400 bg-slate-900/60">Recency Decay</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Connector 05→06 -->
+      <div class="flex flex-col items-center py-0.5">
+        <div class="w-px h-4" style="background: linear-gradient(to bottom, rgba(245,158,11,0.4), rgba(16,185,129,0.4))"></div>
+        <svg class="w-3 h-3 text-emerald-400 opacity-50" fill="currentColor" viewBox="0 0 24 24"><path d="M12 16l-6-6h12l-6 6z"/></svg>
+      </div>
+
+      <!-- Stage 06: Pursuit List -->
+      <div class="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex gap-4">
+        <div class="flex flex-col items-center gap-1 flex-shrink-0">
+          <div class="w-10 h-10 rounded-xl border border-emerald-500/30 bg-emerald-500/10 flex items-center justify-center">
+            <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </div>
+          <span class="text-[9px] font-black tracking-widest text-emerald-400 opacity-60">06</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-0.5 flex-wrap">
+            <h3 class="text-sm font-black text-white">Pursuit List</h3>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">Actionable Deal Flow</span>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed mb-2">Plants that are curtailed and have confirmed lender or tax equity counterparties surface in the Pursuit dashboards, ranked by distress score. These are underwriting-ready targets with corroborated financing histories and multi-source news intelligence backing every signal.</p>
+          <div class="flex flex-wrap gap-1">
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-emerald-500/30 text-emerald-400 bg-slate-900/60">Plant Pursuits</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-emerald-500/30 text-emerald-400 bg-slate-900/60">Lender Pursuits</span>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded border border-emerald-500/30 text-emerald-400 bg-slate-900/60">Tax Equity Pursuits</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="px-8 pb-8 pt-4">
+      <div class="bg-slate-800/50 border border-slate-700/50 rounded-xl px-4 py-3 mb-4 flex items-start gap-3">
+        <svg class="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          <span class="font-bold text-slate-300">What this means for you: </span>
+          Plants in the Pursuit list aren't flagged on generation data alone — they have Perplexity-confirmed financing counterparties, a targeted deep dive, and aggregated multi-source news all feeding into their distress score.
+        </p>
+      </div>
+      <button class="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm tracking-wide transition-all flex items-center justify-center gap-2 cursor-pointer">
+        Start Exploring
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+    </div>
+
+  </div>
+</body>
+</html>
