@@ -33,7 +33,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
   const [pursuitPlants, setPursuitPlants] = useState<PursuitPlant[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [sort, setSort] = useState<'distress' | 'plants' | 'name'>('distress');
+  const [sort, setSort] = useState<'distress' | 'plants' | 'name'>('plants');
 
   useEffect(() => {
     Promise.all([fetchAllLenderStats(), fetchPursuitPlants()]).then(([s, p]) => {
@@ -57,7 +57,11 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     }
     return [...rows].sort((a, b) => {
       if (sort === 'distress') return (b.distressScore ?? 0) - (a.distressScore ?? 0);
-      if (sort === 'plants')   return b.assetCount - a.assetCount;
+      if (sort === 'plants') {
+        const ac = a.plantCodes.filter(c => plantNameMap[c]).length;
+        const bc = b.plantCodes.filter(c => plantNameMap[c]).length;
+        return bc - ac;
+      }
       return a.lenderName.localeCompare(b.lenderName);
     });
   }, [stats, search, sort]);
@@ -84,7 +88,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
       <div className="px-6 pt-6 pb-4 border-b border-slate-800 flex-shrink-0">
         <h1 className="text-xl font-bold text-slate-100">Lender Pursuits</h1>
         <p className="text-sm text-slate-500 mt-0.5">
-          Lenders with exposure to curtailed plants — ranked by distress
+          Lenders with exposure to curtailed plants — ranked by plant count
         </p>
 
         {/* Summary cards */}
@@ -182,22 +186,9 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                       )}
                     </td>
 
-                    {/* Plant count dots */}
+                    {/* Plant count */}
                     <td className="px-4 py-4 text-right align-top">
-                      <div className="flex items-center justify-end gap-1">
-                        {Array.from({ length: Math.min(lender.assetCount, 6) }).map((_, i) => (
-                          <span
-                            key={i}
-                            className={`w-2 h-2 rounded-full ${i < curtailedCodes.length ? 'bg-red-500' : 'bg-slate-600'}`}
-                          />
-                        ))}
-                        {lender.assetCount > 6 && (
-                          <span className="text-[10px] text-slate-500 ml-1">+{lender.assetCount - 6}</span>
-                        )}
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-1 text-right">
-                        {curtailedCodes.length}/{lender.assetCount} curtailed
-                      </div>
+                      <span className="text-sm font-bold text-slate-200">{curtailedCodes.length}</span>
                     </td>
 
                     {/* Distress */}
