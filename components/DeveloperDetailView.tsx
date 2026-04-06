@@ -1,19 +1,37 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import {
   fetchDeveloperAssets, fetchChangelog,
   approveStagedAssets,
   DeveloperRow, AssetRegistryRow, ChangelogRow,
 } from '../services/developerService';
+import { PowerPlant, CapacityFactorStats } from '../types';
+import type { DeveloperAssetMapPoint } from './DeveloperAssetMap';
 
 interface Props {
   developer: DeveloperRow;
   onBack: () => void;
   onAssetClick: (assetId: string) => void;
   onPlantClick?: (plantId: string) => void;
+  plants: PowerPlant[];
+  statsMap: Record<string, CapacityFactorStats>;
   initialTab?: Tab;
 }
 
-type Tab = 'overview' | 'portfolio';
+type Tab = 'overview' | 'portfolio' | 'map';
+type MapPerformanceFilter = 'all' | 'strong' | 'watch' | 'risk' | 'offline' | 'unknown';
+
+const DeveloperAssetMap = lazy(() => import('./DeveloperAssetMap'));
+
+function getMapPerformanceBand(point: DeveloperAssetMapPoint): Exclude<MapPerformanceFilter, 'all'> {
+  if (point.isMaintenanceOffline) return 'offline';
+  if (point.dataMonthsCount != null && point.dataMonthsCount < 6) return 'unknown';
+  if (point.ttmAverage == null && point.curtailmentScore == null) return 'unknown';
+  if (point.curtailmentScore != null && point.curtailmentScore >= 60) return 'risk';
+  if (point.isLikelyCurtailed) return 'risk';
+  if (point.ttmAverage != null && point.ttmAverage < 0.15) return 'risk';
+  if (point.ttmAverage != null && point.ttmAverage >= 0.25) return 'strong';
+  return 'watch';
+}
 
 function confidenceColor(score: number | null) {
   if (!score) return 'text-slate-500';
@@ -32,7 +50,7 @@ function matchBadge(confidence: string | null) {
   return styles[confidence || 'none'] || styles.none;
 }
 
-export default function DeveloperDetailView({ developer, onBack, onAssetClick, onPlantClick, initialTab = 'overview' }: Props) {
+export default function DeveloperDetailView({ developer, onBack, onAssetClick, onPlantClick, plants, statsMap, initialTab = 'overview' }: Props) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [assets, setAssets] = useState<AssetRegistryRow[]>([]);
   const [changelog, setChangelog] = useState<ChangelogRow[]>([]);
@@ -40,6 +58,10 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
   const [approving, setApproving] = useState(false);
   const [selectedStaged, setSelectedStaged] = useState<Set<string>>(new Set());
   const [assetSearch, setAssetSearch] = useState('');
+  const [mapSearch, setMapSearch] = useState('');
+  const [mapSelectedState, setMapSelectedState] = useState('all');
+  const [mapSelectedTech, setMapSelectedTech] = useState('all');
+  const [mapPerformanceFilter, setMapPerformanceFilter] = useState<MapPerformanceFilter>('all');
 
   useEffect(() => {
     setLoading(true);
@@ -81,6 +103,71 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
     }
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
   }, [assets]);
+
+  const plantsByEia = useMemo(() => {
+    const map = new Map<string, PowerPlant>();
+    for (const plant of plants) {
+      map.set(plant.eiaPlantCode, plant);
+    }
+    return map;
+  }, [plants]);
+
+  const mapPoints = useMemo<DeveloperAssetMapPoint[]>(() => {
+    return assets
+      .map((asset) => {
+        const matchedPlant = asset.eia_plant_code ? plantsByEia.get(asset.eia_plant_code) : undefined;
+        const stats = matchedPlant ? statsMap[matchedPlant.id] : undefined;
+        const lat = matchedPlant?.location?.lat ?? asset.lat;
+        const lng = matchedPlant?.location?.lng ?? asset.lng;
+        if (lat == null || lng == null) return null;
+
+        return {
+          id: asset.id,
+          assetId: asset.id,
+          name: matchedPlant?.name || asset.name,
+          eiaPlantCode: asset.eia_plant_code,
+          technology: asset.technology || matchedPlant?.fuelSource || null,
+          status: asset.status,
+          state: matchedPlant?.location?.state || asset.state,
+          county: matchedPlant?.location?.county || asset.county,
+          lat,
+          lng,
+          capacityMw: Math.max(0, matchedPlant?.nameplateCapacityMW ?? asset.capacity_mw ?? 0),
+          ttmAverage: stats?.ttmAverage ?? null,
+          curtailmentScore: stats?.curtailmentScore ?? null,
+          isLikelyCurtailed: Boolean(stats?.isLikelyCurtailed),
+          isMaintenanceOffline: Boolean(stats?.isMaintenanceOffline),
+          dataMonthsCount: stats?.dataMonthsCount ?? null,
+          hasPlantMatch: Boolean(matchedPlant),
+        };
+      })
+      .filter((point): point is DeveloperAssetMapPoint => point !== null);
+  }, [assets, plantsByEia, statsMap]);
+
+  const unmappedCount = assets.length - mapPoints.length;
+
+  const mapStateOptions = useMemo(() => {
+    return Array.from(new Set(mapPoints.map((point) => point.state).filter((state): state is string => Boolean(state)))).sort();
+  }, [mapPoints]);
+
+  const mapTechOptions = useMemo(() => {
+    return Array.from(new Set(mapPoints.map((point) => point.technology).filter((tech): tech is string => Boolean(tech)))).sort();
+  }, [mapPoints]);
+
+  const filteredMapPoints = useMemo(() => {
+    const q = mapSearch.trim().toLowerCase();
+    return mapPoints.filter((point) => {
+      const stateMatch = mapSelectedState === 'all' || point.state === mapSelectedState;
+      const techMatch = mapSelectedTech === 'all' || point.technology === mapSelectedTech;
+      const perfMatch = mapPerformanceFilter === 'all' || getMapPerformanceBand(point) === mapPerformanceFilter;
+      const searchMatch = !q
+        || point.name.toLowerCase().includes(q)
+        || (point.state || '').toLowerCase().includes(q)
+        || (point.county || '').toLowerCase().includes(q)
+        || (point.eiaPlantCode || '').toLowerCase().includes(q);
+      return stateMatch && techMatch && perfMatch && searchMatch;
+    });
+  }, [mapPoints, mapSearch, mapSelectedState, mapSelectedTech, mapPerformanceFilter]);
 
   const handleApprove = async () => {
     if (selectedStaged.size === 0) return;
@@ -134,7 +221,7 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 bg-slate-900 rounded-xl p-1 w-fit border border-slate-800">
-        {(['overview', 'portfolio'] as Tab[]).map(t => (
+        {(['overview', 'portfolio', 'map'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -142,7 +229,7 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
               tab === t ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-300'
             }`}
           >
-            {t === 'overview' ? 'Overview' : 'Portfolio'}
+            {t === 'overview' ? 'Overview' : t === 'portfolio' ? 'Portfolio' : 'Asset Map'}
           </button>
         ))}
       </div>
@@ -377,6 +464,82 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
                 </table>
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Asset Map Tab ── */}
+      {tab === 'map' && (
+        <div className="space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <input
+                type="text"
+                placeholder="Search by name, state, county, or EIA code"
+                value={mapSearch}
+                onChange={(e) => setMapSearch(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan-600 transition-colors"
+              />
+
+              <select
+                value={mapSelectedState}
+                onChange={(e) => setMapSelectedState(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-300 focus:outline-none focus:border-cyan-600 transition-colors"
+              >
+                <option value="all">All States</option>
+                {mapStateOptions.map((state) => (
+                  <option key={state} value={state}>{state}</option>
+                ))}
+              </select>
+
+              <select
+                value={mapSelectedTech}
+                onChange={(e) => setMapSelectedTech(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-300 focus:outline-none focus:border-cyan-600 transition-colors"
+              >
+                <option value="all">All Technologies</option>
+                {mapTechOptions.map((tech) => (
+                  <option key={tech} value={tech}>{tech}</option>
+                ))}
+              </select>
+
+              <select
+                value={mapPerformanceFilter}
+                onChange={(e) => setMapPerformanceFilter(e.target.value as MapPerformanceFilter)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-300 focus:outline-none focus:border-cyan-600 transition-colors"
+              >
+                <option value="all">All Performance Bands</option>
+                <option value="strong">Strong CF</option>
+                <option value="watch">Moderate</option>
+                <option value="risk">Curtailed Risk</option>
+                <option value="offline">Offline</option>
+                <option value="unknown">Limited Data</option>
+              </select>
+            </div>
+            <div className="text-xs text-slate-500 mt-3">
+              Showing {filteredMapPoints.length.toLocaleString()} of {mapPoints.length.toLocaleString()} mapped assets. {unmappedCount.toLocaleString()} assets have no coordinates.
+            </div>
+          </div>
+
+          {filteredMapPoints.length === 0 ? (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-sm text-slate-400">
+              No assets match current map filters. Try clearing search or widening state/technology/performance filters.
+            </div>
+          ) : (
+            <Suspense
+              fallback={(
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-sm text-slate-400">
+                  Loading asset map...
+                </div>
+              )}
+            >
+              <DeveloperAssetMap
+                points={filteredMapPoints}
+                unmappedCount={unmappedCount}
+                onAssetClick={onAssetClick}
+                onPlantClick={onPlantClick}
+              />
+            </Suspense>
           )}
         </div>
       )}
