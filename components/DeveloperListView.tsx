@@ -55,12 +55,6 @@ function scoreTone(score: number | null): string {
   return 'text-emerald-400';
 }
 
-function scoreBarColor(score: number): string {
-  if (score >= 70) return 'bg-red-500';
-  if (score >= 50) return 'bg-amber-500';
-  return 'bg-emerald-500';
-}
-
 export default function DeveloperListView({ onDeveloperClick }: Props) {
   const [developers, setDevelopers] = useState<DeveloperRow[]>([]);
   const [stats, setStats] = useState<Record<string, DevStats>>({});
@@ -71,7 +65,6 @@ export default function DeveloperListView({ onDeveloperClick }: Props) {
   const [fuelFilter, setFuelFilter] = useState('all');
   const [minLeadScore, setMinLeadScore] = useState(0);
   const [serviceLineFilter, setServiceLineFilter] = useState('all');
-  const [selectedDeveloperId, setSelectedDeveloperId] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([fetchDevelopers(), fetchDeveloperOpportunityScores()]).then(async ([devs, oppMap]) => {
@@ -139,27 +132,6 @@ export default function DeveloperListView({ onDeveloperClick }: Props) {
     }
     return rows;
   }, [developers, search, stateFilter, fuelFilter, minLeadScore, serviceLineFilter, stats, opportunities]);
-
-  useEffect(() => {
-    if (filtered.length === 0) {
-      setSelectedDeveloperId(null);
-      return;
-    }
-    if (!selectedDeveloperId || !filtered.some((d) => d.id === selectedDeveloperId)) {
-      setSelectedDeveloperId(filtered[0].id);
-    }
-  }, [filtered, selectedDeveloperId]);
-
-  const selectedDeveloper = useMemo(() => {
-    if (!selectedDeveloperId) return null;
-    const developer = developers.find((d) => d.id === selectedDeveloperId) || null;
-    if (!developer) return null;
-    return {
-      developer,
-      stats: stats[developer.id],
-      opportunity: opportunities[developer.id],
-    };
-  }, [developers, opportunities, selectedDeveloperId, stats]);
 
   if (loading) {
     return (
@@ -242,7 +214,6 @@ export default function DeveloperListView({ onDeveloperClick }: Props) {
                 <th className="px-6 py-5 text-right">Assets</th>
                 <th className="px-6 py-5 text-right">Portfolio (GW)</th>
                 <th className="px-6 py-5 text-right">Avg Capacity Factor</th>
-                <th className="px-6 py-5 text-right">Inspect</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -282,18 +253,6 @@ export default function DeveloperListView({ onDeveloperClick }: Props) {
                     <td className="px-6 py-5 text-right font-mono text-sm text-emerald-400">
                       {s ? `${(s.avgCf * 100).toFixed(1)}%` : '—'}
                     </td>
-                    <td className="px-6 py-5 text-right">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedDeveloperId(dev.id);
-                        }}
-                        className="px-2 py-1 text-[10px] font-bold rounded border border-slate-700 text-slate-300 hover:text-white hover:border-blue-500"
-                      >
-                        Inspect
-                      </button>
-                    </td>
                   </tr>
                 );
               })}
@@ -307,73 +266,6 @@ export default function DeveloperListView({ onDeveloperClick }: Props) {
           </div>
         )}
       </div>
-
-      {selectedDeveloper && (
-        <div className="mt-6 bg-slate-900 border border-slate-800 rounded-2xl p-6">
-          <div className="flex items-start justify-between gap-4 mb-5">
-            <div>
-              <h3 className="text-lg font-black text-white">Lead Drilldown: {selectedDeveloper.developer.name}</h3>
-              <p className="text-xs text-slate-500 mt-1">Opportunity components for triage and outreach planning.</p>
-            </div>
-            <div className={`text-3xl font-black font-mono ${scoreTone(selectedDeveloper.opportunity?.opportunity_score ?? null)}`}>
-              {(selectedDeveloper.opportunity?.opportunity_score ?? 0).toFixed(1)}
-            </div>
-          </div>
-
-          {selectedDeveloper.opportunity ? (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                {[
-                  ['Distress', selectedDeveloper.opportunity.distress_score],
-                  ['Complexity', selectedDeveloper.opportunity.complexity_score],
-                  ['Trigger Immediacy', selectedDeveloper.opportunity.trigger_immediacy_score],
-                  ['Engagement Potential', selectedDeveloper.opportunity.engagement_potential_score],
-                ].map(([label, value]) => (
-                  <div key={label} className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">{label}</div>
-                    <div className="h-2 bg-slate-800 rounded-full overflow-hidden mb-2">
-                      <div className={`h-full ${scoreBarColor(Number(value))}`} style={{ width: `${Math.min(100, Math.max(0, Number(value)))}%` }} />
-                    </div>
-                    <div className="text-sm font-mono text-slate-300">{Number(value).toFixed(1)}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Top Signals</div>
-                  <div className="space-y-2 text-sm text-slate-300">
-                    {(selectedDeveloper.opportunity.top_signals || []).map((signal) => (
-                      <div key={signal} className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">{signal}</div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Recommended Service Lines</div>
-                  <div className="flex flex-wrap gap-2 mb-4">
-                    {(selectedDeveloper.opportunity.recommended_service_lines || []).map((line) => (
-                      <span key={line} className="px-2 py-1 rounded-full text-[10px] font-bold bg-blue-900/30 border border-blue-500/30 text-blue-300 uppercase tracking-wide">
-                        {line.replace(/_/g, ' ')}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="text-xs text-slate-500 space-y-1">
-                    <div>Total MW at risk: <span className="text-slate-300 font-mono">{selectedDeveloper.opportunity.total_mw_at_risk.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></div>
-                    <div>High-risk assets: <span className="text-slate-300 font-mono">{selectedDeveloper.opportunity.high_risk_asset_count}</span></div>
-                    <div>Likely curtailed: <span className="text-slate-300 font-mono">{selectedDeveloper.opportunity.likely_curtailed_count}</span></div>
-                    <div>Weekly delta: <span className={selectedDeveloper.opportunity.weekly_delta_score != null && selectedDeveloper.opportunity.weekly_delta_score > 0 ? 'text-red-400 font-mono' : selectedDeveloper.opportunity.weekly_delta_score != null && selectedDeveloper.opportunity.weekly_delta_score < 0 ? 'text-emerald-400 font-mono' : 'text-slate-400 font-mono'}>{selectedDeveloper.opportunity.weekly_delta_score == null ? '—' : `${selectedDeveloper.opportunity.weekly_delta_score > 0 ? '+' : ''}${selectedDeveloper.opportunity.weekly_delta_score.toFixed(1)}`}</span></div>
-                  </div>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="text-sm text-slate-500">
-              No opportunity score snapshot found for this developer yet. Run score:developers to populate lead analytics.
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
