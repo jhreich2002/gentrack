@@ -641,6 +641,19 @@ const App: React.FC = () => {
               </div>
             </header>
 
+            {/* Search Bar */}
+            {activeTab === 'Overview' && (
+              <div className="mb-6">
+                <input
+                  type="text"
+                  placeholder="Search by plant name, operator, state, EIA code…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full max-w-md px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-blue-600 transition-colors"
+                />
+              </div>
+            )}
+
             {/* Overview Summary */}
             {activeTab === 'Overview' && (
               <RegionalComparison plants={plants} statsMap={statsMap} selectedFuels={selectedFuels} />
