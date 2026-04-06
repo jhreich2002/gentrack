@@ -11,8 +11,6 @@ interface Props {
   setSelectedSubRegions: (subs: string[]) => void;
   search: string;
   setSearch: (s: string) => void;
-  noGenMonths: number;
-  setNoGenMonths: (n: number) => void;
   minCurtailmentLag: number;
   setMinCurtailmentLag: (n: number) => void;
   maxCFThreshold: number | null;
@@ -44,8 +42,6 @@ const FilterControls: React.FC<Props> = ({
   setSelectedSubRegions,
   search,
   setSearch,
-  noGenMonths,
-  setNoGenMonths,
   minCurtailmentLag,
   setMinCurtailmentLag,
   maxCFThreshold,
@@ -80,7 +76,6 @@ const FilterControls: React.FC<Props> = ({
   const isRegionalTab = activeRegion !== 'Overview' && activeRegion !== 'Watchlist';
 
   const activeFiltersCount = [
-    noGenMonths > 0,
     minCurtailmentLag > 0,
     maxCFThreshold !== null,
   ].filter(Boolean).length;
@@ -143,7 +138,7 @@ const FilterControls: React.FC<Props> = ({
 
         {activeFiltersCount > 0 && (
           <button
-            onClick={() => { setNoGenMonths(0); setMinCurtailmentLag(0); setMaxCFThreshold(null); setCfInput(''); }}
+            onClick={() => { setMinCurtailmentLag(0); setMaxCFThreshold(null); setCfInput(''); }}
             className="px-3 py-2 rounded-lg text-xs font-bold border border-slate-600 bg-slate-800 text-slate-400 hover:text-white hover:border-slate-400 transition-all self-end"
           >
             ✕ Clear Filters ({activeFiltersCount})
@@ -153,33 +148,6 @@ const FilterControls: React.FC<Props> = ({
 
       {/* Row 2: Advanced Filters */}
       <div className="flex flex-wrap items-start gap-6 pt-3 border-t border-slate-800">
-
-        {/* Hide No-Generation Filter */}
-        <div>
-          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 block">
-            No Generation
-          </label>
-          <div className="flex gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700">
-            {[{ label: 'Off', value: 0 }, { label: '3 Mo', value: 3 }, { label: '6 Mo', value: 6 }, { label: '9 Mo', value: 9 }, { label: '12 Mo', value: 12 }].map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setNoGenMonths(opt.value)}
-                className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${
-                  noGenMonths === opt.value
-                    ? 'bg-amber-600/70 text-white shadow-md'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-          {noGenMonths > 0 && (
-            <p className="text-[10px] text-amber-500/70 mt-1.5">
-              Hiding plants with zero generation in the last {noGenMonths} months
-            </p>
-          )}
-        </div>
 
         {/* Curtailment Lag */}
         <div>

@@ -19,8 +19,12 @@ import TaxEquityPursuitsDashboard from './components/TaxEquityPursuitsDashboard'
 import PipelineTourModal from './components/PipelineTourModal';
 import WelcomeModal from './components/WelcomeModal';
 import WatchlistDashboard from './components/WatchlistDashboard';
+import DeveloperListView from './components/DeveloperListView';
+import DeveloperDetailView from './components/DeveloperDetailView';
+import AssetRegistryDetailView from './components/AssetRegistryDetailView';
+import { fetchDevelopers, DeveloperRow } from './services/developerService';
 
-type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity';
+type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor' | 'data';
 
@@ -80,9 +84,32 @@ const App: React.FC = () => {
   const [cameFromEntity, setCameFromEntity]         = useState(false);
   const [companyActiveTab, setCompanyActiveTab]     = useState<'overview' | 'portfolio'>('overview');
   const [selectedEntity, setSelectedEntity]         = useState<{ name: string; type: 'lender' | 'tax_equity' } | null>(null);
+  const [selectedDeveloper, setSelectedDeveloper]   = useState<DeveloperRow | null>(null);
+  const [selectedAssetId, setSelectedAssetId]       = useState<string | null>(null);
+  const [developersList, setDevelopersList]         = useState<DeveloperRow[]>([]);
   const [generationLoading, setGenerationLoading] = useState(false);
   const [regionalTrend, setRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
   const [subRegionalTrend, setSubRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
+
+  // Developer registry handlers
+  const handleDeveloperClick = (developerId: string) => {
+    const dev = developersList.find(d => d.id === developerId);
+    if (!dev) {
+      fetchDevelopers().then(devs => {
+        setDevelopersList(devs);
+        const found = devs.find(d => d.id === developerId);
+        if (found) { setSelectedDeveloper(found); setView('developer-detail'); }
+      });
+    } else {
+      setSelectedDeveloper(dev);
+      setView('developer-detail');
+    }
+  };
+
+  const handleAssetRegistryClick = (assetId: string) => {
+    setSelectedAssetId(assetId);
+    setView('asset-detail');
+  };
 
   const handleLenderClick = (lenderName: string) => {
     setSelectedEntity({ name: lenderName, type: 'lender' });
@@ -477,6 +504,19 @@ const App: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setView('developers')}
+            title={sidebarCollapsed ? 'Developer Registry' : undefined}
+            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
+              view === 'developers' || view === 'developer-detail' || view === 'asset-detail'
+                ? 'bg-orange-700 text-white shadow-lg shadow-orange-900/20'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+            }`}
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Developer Registry</span>}
+          </button>
+
+          <button
             onClick={() => { setActiveTab('Overview'); setView('dashboard'); }}
             title={sidebarCollapsed ? 'National Overview' : undefined}
             className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
@@ -773,6 +813,12 @@ const App: React.FC = () => {
             ? <PlantPursuitsDashboard onPlantClick={handlePlantClickFromPursuits} />
             : view === 'entity' && selectedEntity
             ? <EntityDetailView entityName={selectedEntity.name} entityType={selectedEntity.type} onBack={() => setView(selectedEntity.type === 'lender' ? 'lenders' : 'taxequity')} onPlantClick={handlePlantClickFromEntity} />
+            : view === 'developers'
+            ? <DeveloperListView onDeveloperClick={handleDeveloperClick} />
+            : view === 'developer-detail' && selectedDeveloper
+            ? <DeveloperDetailView developer={selectedDeveloper} onBack={() => setView('developers')} onAssetClick={handleAssetRegistryClick} onPlantClick={handlePlantClickFromPursuits} />
+            : view === 'asset-detail' && selectedAssetId
+            ? <AssetRegistryDetailView assetId={selectedAssetId} onBack={() => selectedDeveloper ? setView('developer-detail') : setView('developers')} onPlantClick={handlePlantClickFromPursuits} />
             : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.includes(selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, selectedPlant.id)} onBack={() => { if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
         )}
       </main>

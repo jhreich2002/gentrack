@@ -61,6 +61,7 @@ export interface CapacityFactorStats {
   hasNoRecentData: boolean; // true when <6 active TTM months and not in maintenance
   isMaintenanceOffline: boolean; // true when ≥3 trailing consecutive zero/null months (planned outage)
   trailingZeroMonths: number; // count of consecutive trailing zero/null months
+  dataMonthsCount: number; // count of months with non-null mwh across full EIA history
 }
 
 export interface AnalysisResult {

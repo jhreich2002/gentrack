@@ -576,7 +576,8 @@ async function main() {
       ? 0
       : Math.round(Math.min(100, Math.max(0, ((regionalRef - activeAvgCF) / regionalRef) * 100)));
 
-    return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed, isMaintenanceOffline, trailingZeroMonths: trailingZeroCount };
+    const dataMonthsCount = history.filter(h => h.mwh !== null).length;
+    return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed, isMaintenanceOffline, trailingZeroMonths: trailingZeroCount, dataMonthsCount };
   }
 
   // ─── Write output ────────────────────────────────────────────────
@@ -632,6 +633,7 @@ async function main() {
         is_likely_curtailed: s.isLikelyCurtailed,
         is_maintenance_offline: s.isMaintenanceOffline,
         trailing_zero_months: s.trailingZeroMonths,
+        data_months_count: s.dataMonthsCount,
         last_updated: now,
       };
     });

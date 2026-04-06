@@ -35,6 +35,7 @@ interface PlantRow {
   is_likely_curtailed: boolean;
   is_maintenance_offline: boolean | null;
   trailing_zero_months: number | null;
+  data_months_count: number | null;
   last_updated: string;
 }
 
@@ -84,6 +85,7 @@ function rowToStats(row: PlantRow): CapacityFactorStats {
     hasNoRecentData,
     isMaintenanceOffline,
     trailingZeroMonths: row.trailing_zero_months ?? 0,
+    dataMonthsCount: row.data_months_count ?? 0,
   };
 }
 
