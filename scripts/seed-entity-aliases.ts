@@ -58,6 +58,8 @@ const ALIAS_SEEDS: { alias_name: string; canonical_name: string; entity_type: st
   { alias_name: 'US Bank', canonical_name: 'U.S. Bank', entity_type: 'lender' },
   { alias_name: 'MUFG Bank', canonical_name: 'MUFG', entity_type: 'lender' },
   { alias_name: 'Mitsubishi UFJ Financial Group', canonical_name: 'MUFG', entity_type: 'lender' },
+  { alias_name: 'Mitsubishi UFJ Financial Group (MUFG)', canonical_name: 'MUFG', entity_type: 'lender' },
+  { alias_name: 'Bank of Tokyo-Mitsubishi UFJ', canonical_name: 'MUFG', entity_type: 'lender' },
   { alias_name: 'SMBC', canonical_name: 'Sumitomo Mitsui Banking Corporation', entity_type: 'lender' },
   { alias_name: 'Sumitomo Mitsui', canonical_name: 'Sumitomo Mitsui Banking Corporation', entity_type: 'lender' },
   { alias_name: 'Credit Agricole CIB', canonical_name: 'Credit Agricole', entity_type: 'lender' },
