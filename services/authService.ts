@@ -21,6 +21,41 @@ export interface AdminUserRow {
   last_sign_in_at: string | null;
 }
 
+export type ActivityEventType = 'app_open' | 'view_change' | 'filter_search' | 'watchlist_toggle';
+
+export interface AdminDailyActivityRow {
+  day: string;
+  active_users: number;
+  action_count: number;
+  app_open_count: number;
+}
+
+export interface AdminUserDailyActivityRow {
+  day: string;
+  user_id: string;
+  email: string;
+  action_count: number;
+  app_open_count: number;
+  last_seen_at: string;
+}
+
+export interface AdminMonthlyCostLine {
+  month_start: string;
+  service_name: string;
+  cost_type: 'variable' | 'fixed';
+  amount_usd: number;
+}
+
+export interface AdminMonthlyCostTotal {
+  month_start: string;
+  total_usd: number;
+}
+
+export interface AdminCostForecastPoint {
+  month_start: string;
+  projected_total_usd: number;
+}
+
 // -------------------------------------------------------
 // Regular auth operations (anon key)
 // -------------------------------------------------------
@@ -45,11 +80,28 @@ export async function getSession() {
   return data.session;
 }
 
-export function onAuthStateChange(callback: (session: any) => void) {
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-    callback(session);
+export function onAuthStateChange(callback: (session: any, event?: string) => void) {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    callback(session, event);
   });
   return subscription;
+}
+
+export async function trackUserActivityEvent(
+  userId: string,
+  eventType: ActivityEventType,
+  eventName: string,
+  eventMetadata?: Record<string, unknown>
+): Promise<void> {
+  const { error } = await supabase
+    .from('user_activity_events')
+    .insert({
+      user_id: userId,
+      event_type: eventType,
+      event_name: eventName,
+      event_metadata: eventMetadata ?? {},
+    });
+  if (error) throw error;
 }
 
 export async function getProfile(userId: string): Promise<UserProfile | null> {
@@ -145,5 +197,72 @@ export async function fetchDataHealth() {
     genRowCount: genCount,
     lastUpdated,
     fuelBreakdown,
+  };
+}
+
+export async function fetchAdminUserActivity(monthStart: string): Promise<{
+  daily: AdminDailyActivityRow[];
+  users: AdminUserDailyActivityRow[];
+}> {
+  const admin = getAdminClient();
+  const start = new Date(`${monthStart}T00:00:00Z`);
+  const end = new Date(start);
+  end.setUTCMonth(end.getUTCMonth() + 1);
+  const endIso = end.toISOString().slice(0, 10);
+
+  const [{ data: dailyData, error: dailyError }, { data: userData, error: userError }] = await Promise.all([
+    admin
+      .from('admin_user_activity_daily')
+      .select('*')
+      .gte('day', monthStart)
+      .lt('day', endIso)
+      .order('day', { ascending: true }),
+    admin
+      .from('admin_user_activity_user_daily')
+      .select('*')
+      .gte('day', monthStart)
+      .lt('day', endIso)
+      .order('day', { ascending: false })
+      .order('action_count', { ascending: false }),
+  ]);
+
+  if (dailyError) throw dailyError;
+  if (userError) throw userError;
+
+  return {
+    daily: (dailyData ?? []) as AdminDailyActivityRow[],
+    users: (userData ?? []) as AdminUserDailyActivityRow[],
+  };
+}
+
+export async function fetchAdminMonthlyCosts(monthStart: string): Promise<{
+  lines: AdminMonthlyCostLine[];
+  totals: AdminMonthlyCostTotal[];
+  forecast: AdminCostForecastPoint[];
+}> {
+  const admin = getAdminClient();
+
+  const [{ data: linesData, error: linesError }, { data: totalsData, error: totalsError }, { data: forecastData, error: forecastError }] = await Promise.all([
+    admin
+      .from('admin_platform_cost_monthly_lines')
+      .select('*')
+      .eq('month_start', monthStart)
+      .order('amount_usd', { ascending: false }),
+    admin
+      .from('admin_platform_cost_monthly_totals')
+      .select('*')
+      .order('month_start', { ascending: false })
+      .limit(12),
+    admin.rpc('admin_cost_forecast', { months_ahead: 3 }),
+  ]);
+
+  if (linesError) throw linesError;
+  if (totalsError) throw totalsError;
+  if (forecastError) throw forecastError;
+
+  return {
+    lines: (linesData ?? []) as AdminMonthlyCostLine[],
+    totals: (totalsData ?? []) as AdminMonthlyCostTotal[],
+    forecast: (forecastData ?? []) as AdminCostForecastPoint[],
   };
 }

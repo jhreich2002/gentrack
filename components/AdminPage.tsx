@@ -1,5 +1,17 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { fetchAllUsers, setUserRole, fetchDataHealth, AdminUserRow, UserRole } from '../services/authService';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import {
+  fetchAllUsers,
+  setUserRole,
+  fetchAdminUserActivity,
+  fetchAdminMonthlyCosts,
+  AdminDailyActivityRow,
+  AdminUserDailyActivityRow,
+  AdminMonthlyCostLine,
+  AdminMonthlyCostTotal,
+  AdminCostForecastPoint,
+  AdminUserRow,
+  UserRole,
+} from '../services/authService';
 
 interface Props {
   currentUserId: string;
@@ -14,13 +26,26 @@ const ROLE_STYLES: Record<UserRole, string> = {
   blocked: 'bg-red-900/30 text-red-400 border-red-500/30',
 };
 
+function monthStart(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
+
 const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
 
-  const [health, setHealth] = useState<Awaited<ReturnType<typeof fetchDataHealth>> | null>(null);
-  const [healthLoading, setHealthLoading] = useState(true);
+  const [selectedMonth, setSelectedMonth] = useState(() => monthStart(new Date()));
+  const [dailyActivity, setDailyActivity] = useState<AdminDailyActivityRow[]>([]);
+  const [dailyUserActivity, setDailyUserActivity] = useState<AdminUserDailyActivityRow[]>([]);
+  const [activityLoading, setActivityLoading] = useState(true);
+  const [activityError, setActivityError] = useState<string | null>(null);
+
+  const [costLines, setCostLines] = useState<AdminMonthlyCostLine[]>([]);
+  const [monthlyTotals, setMonthlyTotals] = useState<AdminMonthlyCostTotal[]>([]);
+  const [forecast, setForecast] = useState<AdminCostForecastPoint[]>([]);
+  const [costLoading, setCostLoading] = useState(true);
+  const [costError, setCostError] = useState<string | null>(null);
 
   const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus>('idle');
   const [lastRun, setLastRun] = useState<string | null>(null);
@@ -39,22 +64,73 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
     }
   }, []);
 
-  const loadHealth = useCallback(async () => {
-    setHealthLoading(true);
+  const loadActivity = useCallback(async (month: string) => {
+    setActivityLoading(true);
+    setActivityError(null);
     try {
-      const data = await fetchDataHealth();
-      setHealth(data);
-    } catch {
-      /* non-critical */
+      const data = await fetchAdminUserActivity(month);
+      setDailyActivity(data.daily);
+      setDailyUserActivity(data.users);
+    } catch (err: any) {
+      setActivityError(err.message ?? 'Failed to load activity metrics');
     } finally {
-      setHealthLoading(false);
+      setActivityLoading(false);
+    }
+  }, []);
+
+  const loadCosts = useCallback(async (month: string) => {
+    setCostLoading(true);
+    setCostError(null);
+    try {
+      const data = await fetchAdminMonthlyCosts(month);
+      setCostLines(data.lines);
+      setMonthlyTotals(data.totals);
+      setForecast(data.forecast);
+    } catch (err: any) {
+      setCostError(err.message ?? 'Failed to load monthly costs');
+    } finally {
+      setCostLoading(false);
     }
   }, []);
 
   useEffect(() => {
     loadUsers();
-    loadHealth();
-  }, [loadUsers, loadHealth]);
+  }, [loadUsers]);
+
+  useEffect(() => {
+    loadActivity(selectedMonth);
+    loadCosts(selectedMonth);
+  }, [selectedMonth, loadActivity, loadCosts]);
+
+  const monthOptions = useMemo(() => {
+    const options = new Set<string>();
+    options.add(selectedMonth);
+    for (const t of monthlyTotals) options.add(t.month_start);
+    const now = new Date();
+    for (let i = 1; i <= 2; i++) {
+      options.add(monthStart(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))));
+    }
+    return Array.from(options).sort((a, b) => b.localeCompare(a));
+  }, [monthlyTotals, selectedMonth]);
+
+  const selectedMonthTotal = useMemo(() => {
+    return monthlyTotals.find(t => t.month_start === selectedMonth)?.total_usd ?? costLines.reduce((sum, row) => sum + Number(row.amount_usd || 0), 0);
+  }, [monthlyTotals, costLines, selectedMonth]);
+
+  const topUsers = useMemo(() => {
+    const totals = new Map<string, { email: string; actions: number; opens: number; lastSeenAt: string }>();
+    for (const row of dailyUserActivity) {
+      const existing = totals.get(row.user_id) ?? { email: row.email, actions: 0, opens: 0, lastSeenAt: row.last_seen_at };
+      existing.actions += Number(row.action_count || 0);
+      existing.opens += Number(row.app_open_count || 0);
+      if (!existing.lastSeenAt || row.last_seen_at > existing.lastSeenAt) existing.lastSeenAt = row.last_seen_at;
+      totals.set(row.user_id, existing);
+    }
+    return Array.from(totals.entries())
+      .map(([userId, val]) => ({ userId, ...val }))
+      .sort((a, b) => (b.actions + b.opens) - (a.actions + a.opens))
+      .slice(0, 8);
+  }, [dailyUserActivity]);
 
   // Poll GitHub Actions for workflow status after a trigger
   const pollWorkflowStatus = useCallback(async () => {
@@ -159,40 +235,157 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
 
       <div className="space-y-8">
 
-        {/* ── Data Health ─────────────────────────────── */}
+        {/* ── User Activity ─────────────────────────────── */}
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
-          <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6">Data Health</h2>
-          {healthLoading ? (
-            <div className="text-slate-600 text-sm">Loading...</div>
-          ) : health ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-              <div>
-                <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Plants in DB</div>
-                <div className="text-2xl font-black text-white">{health.plantCount.toLocaleString()}</div>
-              </div>
-              <div>
-                <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Generation Rows</div>
-                <div className="text-2xl font-black text-blue-400">{(health.genRowCount as number).toLocaleString()}</div>
-              </div>
-              <div>
-                <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Last Updated</div>
-                <div className="text-sm font-black text-white">
-                  {health.lastUpdated
-                    ? new Date(health.lastUpdated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                    : 'Unknown'}
+          <div className="flex items-center justify-between mb-6 gap-4">
+            <div>
+              <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">User Activity</h2>
+              <p className="text-xs text-slate-600">Daily user visits, actions, and app opens for selected month</p>
+            </div>
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-300 focus:outline-none focus:border-blue-600"
+            >
+              {monthOptions.map((month) => (
+                <option key={month} value={month}>
+                  {new Date(`${month}T00:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {activityLoading ? (
+            <div className="text-slate-600 text-sm">Loading activity...</div>
+          ) : activityError ? (
+            <div className="text-red-400 text-sm">{activityError}</div>
+          ) : (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Active Users (Month)</div>
+                  <div className="text-2xl font-black text-white">
+                    {new Set(dailyUserActivity.map((r) => r.user_id)).size.toLocaleString()}
+                  </div>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Actions (Month)</div>
+                  <div className="text-2xl font-black text-blue-400">
+                    {dailyActivity.reduce((sum, d) => sum + Number(d.action_count || 0), 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">App Opens (Month)</div>
+                  <div className="text-2xl font-black text-emerald-400">
+                    {dailyActivity.reduce((sum, d) => sum + Number(d.app_open_count || 0), 0).toLocaleString()}
+                  </div>
                 </div>
               </div>
-              <div>
-                <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Fuel Breakdown</div>
-                <div className="flex flex-col gap-0.5">
-                  {Object.entries(health.fuelBreakdown).map(([fuel, count]) => (
-                    <div key={fuel} className="text-xs text-slate-400 font-mono">{fuel}: <span className="text-white font-bold">{count as number}</span></div>
-                  ))}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <h3 className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3">Day by Day</h3>
+                  <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {dailyActivity.length === 0 ? (
+                      <div className="text-xs text-slate-600">No activity tracked for this month yet.</div>
+                    ) : dailyActivity.map((row) => (
+                      <div key={row.day} className="grid grid-cols-4 gap-2 text-xs py-2 border-b border-slate-800">
+                        <div className="text-slate-400 font-mono">{new Date(`${row.day}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
+                        <div className="text-white">{Number(row.active_users || 0)} users</div>
+                        <div className="text-blue-400">{Number(row.action_count || 0)} actions</div>
+                        <div className="text-emerald-400">{Number(row.app_open_count || 0)} opens</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <h3 className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3">Most Active Users (Month)</h3>
+                  <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {topUsers.length === 0 ? (
+                      <div className="text-xs text-slate-600">No user activity available yet.</div>
+                    ) : topUsers.map((user) => (
+                      <div key={user.userId} className="py-2 border-b border-slate-800">
+                        <div className="text-xs text-slate-300 truncate">{user.email}</div>
+                        <div className="text-[10px] text-slate-500 mt-1">
+                          <span className="text-blue-400 font-bold">{user.actions}</span> actions · <span className="text-emerald-400 font-bold">{user.opens}</span> opens
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
+          )}
+        </section>
+
+        {/* ── Platform Cost ─────────────────────────────── */}
+        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
+          <div className="mb-6">
+            <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Platform Cost</h2>
+            <p className="text-xs text-slate-600">Monthly cost buildup by service, fixed subscriptions, and 3-month forecast</p>
+          </div>
+
+          {costLoading ? (
+            <div className="text-slate-600 text-sm">Loading monthly costs...</div>
+          ) : costError ? (
+            <div className="text-red-400 text-sm">{costError}</div>
           ) : (
-            <div className="text-slate-600 text-sm">Could not load health data.</div>
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Monthly Total</div>
+                  <div className="text-2xl font-black text-white">${Number(selectedMonthTotal || 0).toFixed(2)}</div>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Variable</div>
+                  <div className="text-2xl font-black text-amber-400">
+                    ${costLines.filter(c => c.cost_type === 'variable').reduce((sum, c) => sum + Number(c.amount_usd || 0), 0).toFixed(2)}
+                  </div>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Fixed</div>
+                  <div className="text-2xl font-black text-indigo-400">
+                    ${costLines.filter(c => c.cost_type === 'fixed').reduce((sum, c) => sum + Number(c.amount_usd || 0), 0).toFixed(2)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <h3 className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3">Service Cost Buildup</h3>
+                  <div className="space-y-2">
+                    {costLines.length === 0 ? (
+                      <div className="text-xs text-slate-600">No cost line items found for this month.</div>
+                    ) : costLines.map((line, idx) => (
+                      <div key={`${line.service_name}-${idx}`} className="flex items-center justify-between py-2 border-b border-slate-800 text-xs">
+                        <div className="text-slate-300">{line.service_name}</div>
+                        <div className="flex items-center gap-3">
+                          <span className={`text-[10px] uppercase font-bold ${line.cost_type === 'fixed' ? 'text-indigo-400' : 'text-amber-400'}`}>{line.cost_type}</span>
+                          <span className="font-mono text-white">${Number(line.amount_usd || 0).toFixed(2)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <h3 className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3">3-Month Forecast</h3>
+                  <div className="space-y-2">
+                    {forecast.length === 0 ? (
+                      <div className="text-xs text-slate-600">Forecast unavailable until at least one month of cost data exists.</div>
+                    ) : forecast.map((point) => (
+                      <div key={point.month_start} className="flex items-center justify-between py-2 border-b border-slate-800 text-xs">
+                        <span className="text-slate-300">
+                          {new Date(`${point.month_start}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                        </span>
+                        <span className="font-mono text-emerald-400">${Number(point.projected_total_usd || 0).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
         </section>
 

@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useMemo, useTransition } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useTransition } from 'react';
 import { PowerPlant, Region, FuelSource, CapacityFactorStats, AnalysisResult } from './types';
 import { REGIONS, FUEL_SOURCES, COLORS, SUBREGIONS } from './constants';
 import { fetchPowerPlants, fetchGenerationHistory, fetchRegionalTrend, fetchSubRegionalTrend, calculateCapacityFactorStats, getDataTimestamp } from './services/dataService';
 import { getGeminiInsights } from './services/geminiService';
-import { onAuthStateChange, getProfile, fetchWatchlist, addToWatchlist, removeFromWatchlist, signOut } from './services/authService';
+import { onAuthStateChange, getProfile, fetchWatchlist, addToWatchlist, removeFromWatchlist, signOut, trackUserActivityEvent } from './services/authService';
 import { supabase } from './services/supabaseClient';
 import CapacityChart from './components/CapacityChart';
 import RegionalComparison from './components/RegionalComparison';
@@ -91,6 +91,8 @@ const App: React.FC = () => {
   const [generationLoading, setGenerationLoading] = useState(false);
   const [regionalTrend, setRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
   const [subRegionalTrend, setSubRegionalTrend] = useState<{ month: string; factor: number }[]>([]);
+  const previousViewRef = useRef<View | null>(null);
+  const filtersTrackingReadyRef = useRef(false);
 
   // Developer registry handlers
   const handleDeveloperClick = (developerId: string) => {
@@ -219,10 +221,13 @@ const App: React.FC = () => {
       setSession(data.session);
       if (!data.session) setAuthLoading(false);
     });
-    const sub = onAuthStateChange(async (sess) => {
+    const sub = onAuthStateChange(async (sess, event) => {
       setSession(sess);
       setAuthLoading(false);
       if (sess) {
+        if (event === 'SIGNED_IN') {
+          trackUserActivityEvent(sess.user.id, 'app_open', 'login_success').catch(() => {});
+        }
         const profile = await getProfile(sess.user.id);
         setUserRole(profile?.role ?? 'user');
         try { const wl = await fetchWatchlist(sess.user.id); setWatchlist(wl); }
@@ -234,6 +239,36 @@ const App: React.FC = () => {
     });
     return () => sub.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    if (previousViewRef.current === null) {
+      previousViewRef.current = view;
+      return;
+    }
+    if (previousViewRef.current === view) return;
+    trackUserActivityEvent(session.user.id, 'view_change', 'view_navigation', {
+      from: previousViewRef.current,
+      to: view,
+    }).catch(() => {});
+    previousViewRef.current = view;
+  }, [view, session]);
+
+  useEffect(() => {
+    if (!session || view !== 'dashboard') return;
+    if (!filtersTrackingReadyRef.current) {
+      filtersTrackingReadyRef.current = true;
+      return;
+    }
+    trackUserActivityEvent(session.user.id, 'filter_search', 'dashboard_filters_updated', {
+      activeTab,
+      searchLength: search.length,
+      selectedFuelCount: selectedFuels.length,
+      selectedSubRegionCount: selectedSubRegions.length,
+      minCurtailmentLag,
+      maxCFThreshold,
+    }).catch(() => {});
+  }, [session, view, activeTab, search, selectedFuels, selectedSubRegions, minCurtailmentLag, maxCFThreshold]);
 
 
   useEffect(() => {
@@ -359,9 +394,11 @@ const App: React.FC = () => {
       const isWatched = prev.includes(id);
       if (isWatched) {
         removeFromWatchlist(userId, id).catch(console.error);
+        trackUserActivityEvent(userId, 'watchlist_toggle', 'watchlist_remove', { plantId: id }).catch(() => {});
         return prev.filter(i => i !== id);
       } else {
         addToWatchlist(userId, id).catch(console.error);
+        trackUserActivityEvent(userId, 'watchlist_toggle', 'watchlist_add', { plantId: id }).catch(() => {});
         return [...prev, id];
       }
     });
