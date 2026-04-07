@@ -72,7 +72,15 @@ export interface AnalysisResult {
 
 export interface DeveloperInsightResult {
   headline: string;
-  keyFindings: string[];
+  insights: Array<{
+    angle: string;
+    groupType: 'iso' | 'state' | 'technology';
+    groupName: string;
+    developerCfPct: number;
+    benchmarkCfPct: number;
+    gapPct: number;
+    takeaway: string;
+  }>;
   engagementSignals: string[];
   watchGroup: string;
 }
@@ -103,6 +111,13 @@ export interface PerformanceSignals {
     developerAvg: number;
     benchmarkAvg: number;
     gap: number;
+  }>;
+  angleCandidates: Array<{
+    groupType: 'iso' | 'state' | 'technology';
+    groupName: string;
+    developerCfPct: number;
+    benchmarkCfPct: number;
+    gapPct: number;
   }>;
   outlierAssets: Array<{
     name: string;

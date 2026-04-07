@@ -312,12 +312,6 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
     return Array.from(monthMap.values()).sort((a, b) => a.month.localeCompare(b.month));
   }, [devLineData, benchmarkLineData]);
 
-  const benchmarkByMonth = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const row of benchmarkLineData) map.set(row.month, row.benchmark);
-    return map;
-  }, [benchmarkLineData]);
-
   const performanceSignals = useMemo<PerformanceSignals>(() => {
     const recent = chartData.slice(-12).filter((r) => r.dev != null || r.benchmark != null);
     const devVals = recent.map(r => r.dev).filter((v): v is number => v != null);
@@ -353,16 +347,35 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
     }
 
     const groupRows: PerformanceSignals['underperformingGroups'] = [];
+    const systemPlantsFiltered = plants.filter((plant) => {
+      if (isoFilter !== 'all' && String(plant.region) !== isoFilter) return false;
+      if (stateFilter !== 'all' && plant.location.state !== stateFilter) return false;
+      if (techFilter !== 'all' && plant.fuelSource.toLowerCase() !== techFilter.toLowerCase()) return false;
+      return true;
+    });
+
+    const systemTtmByGroup = {
+      iso: new Map<string, number[]>(),
+      state: new Map<string, number[]>(),
+      technology: new Map<string, number[]>(),
+    };
+    for (const plant of systemPlantsFiltered) {
+      const ttm = statsMap[plant.id]?.ttmAverage;
+      if (ttm == null) continue;
+      const iso = String(plant.region);
+      const state = plant.location.state || 'Unknown';
+      const tech = String(plant.fuelSource);
+      systemTtmByGroup.iso.set(iso, [...(systemTtmByGroup.iso.get(iso) || []), ttm]);
+      systemTtmByGroup.state.set(state, [...(systemTtmByGroup.state.get(state) || []), ttm]);
+      systemTtmByGroup.technology.set(tech, [...(systemTtmByGroup.technology.get(tech) || []), ttm]);
+    }
+
     const addGroup = (groupType: 'iso' | 'state' | 'technology', name: string, points: DeveloperAssetMapPoint[]) => {
       if (points.length === 0) return;
       const vals = points.map(p => p.ttmAverage).filter((v): v is number => v != null);
       if (vals.length === 0) return;
       const devGroupAvg = vals.reduce((a, b) => a + b, 0) / vals.length;
-      const bmValsLocal = points
-        .map((p) => p.eiaPlantCode ? plantsByEia.get(p.eiaPlantCode) : undefined)
-        .filter((pl): pl is PowerPlant => Boolean(pl))
-        .map((pl) => statsMap[pl.id]?.ttmAverage)
-        .filter((v): v is number => v != null);
+      const bmValsLocal = systemTtmByGroup[groupType].get(name) || [];
       const bmGroupAvg = bmValsLocal.length > 0
         ? bmValsLocal.reduce((a, b) => a + b, 0) / bmValsLocal.length
         : bmAvg;
@@ -409,6 +422,17 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
         };
       });
 
+    const angleCandidates = groupRows
+      .sort((a, b) => a.gap - b.gap)
+      .slice(0, 6)
+      .map((g) => ({
+        groupType: g.groupType,
+        groupName: g.name,
+        developerCfPct: g.developerAvg * 100,
+        benchmarkCfPct: g.benchmarkAvg * 100,
+        gapPct: (g.developerAvg - g.benchmarkAvg) * 100,
+      }));
+
     return {
       developerName: developer.name,
       filterScope: {
@@ -425,10 +449,11 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
       trend,
       worstMonth,
       underperformingGroups: groupRows.sort((a, b) => a.gap - b.gap).slice(0, 8),
+      angleCandidates,
       outlierAssets,
     };
   }, [
-    chartData, benchmarkLineData, filteredDevPoints, plantsByEia, statsMap,
+    chartData, filteredDevPoints, plants, plantsByEia, statsMap,
     developer.name, isoFilter, stateFilter, techFilter,
   ]);
 
@@ -876,12 +901,23 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
               <div className="space-y-4">
                 <h3 className="text-lg font-black text-white leading-tight">{insight.headline}</h3>
                 <div>
-                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.15em] mb-2">Key Findings</div>
-                  <ul className="space-y-1.5 text-sm text-slate-300 list-disc list-inside">
-                    {insight.keyFindings.map((finding, idx) => (
-                      <li key={`${finding}-${idx}`}>{finding}</li>
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.15em] mb-2">Portfolio Angles</div>
+                  <div className="space-y-2">
+                    {insight.insights.map((item, idx) => (
+                      <div key={`${item.groupType}-${item.groupName}-${idx}`} className="bg-slate-950 border border-slate-800 rounded-lg p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-semibold text-slate-200">{item.angle}</div>
+                          <div className={`text-xs font-mono ${item.gapPct < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                            {item.gapPct > 0 ? '+' : ''}{item.gapPct.toFixed(1)} pts
+                          </div>
+                        </div>
+                        <div className="text-xs text-slate-400 mt-1">
+                          {item.groupType.toUpperCase()} {item.groupName}: {item.developerCfPct.toFixed(1)}% vs {item.benchmarkCfPct.toFixed(1)}% benchmark
+                        </div>
+                        <div className="text-xs text-slate-300 mt-1.5">{item.takeaway}</div>
+                      </div>
                     ))}
-                  </ul>
+                  </div>
                 </div>
                 <div>
                   <div className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.15em] mb-2">Engagement Signals</div>

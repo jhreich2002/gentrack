@@ -84,9 +84,18 @@ export const getDeveloperInsights = async (
 ): Promise<DeveloperInsightResult> => {
   const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey) {
+    const fallbackInsights = signals.angleCandidates.slice(0, 3).map((c) => ({
+      angle: `${c.groupType.toUpperCase()}: ${c.groupName}`,
+      groupType: c.groupType,
+      groupName: c.groupName,
+      developerCfPct: c.developerCfPct,
+      benchmarkCfPct: c.benchmarkCfPct,
+      gapPct: c.gapPct,
+      takeaway: `${c.groupName} is under benchmark by ${Math.abs(c.gapPct).toFixed(1)} percentage points.`,
+    }));
     return {
       headline: 'AI insight unavailable: missing Gemini API key.',
-      keyFindings: [],
+      insights: fallbackInsights,
       engagementSignals: ['Configure GEMINI_API_KEY or API_KEY in environment settings.'],
       watchGroup: 'Unavailable',
     };
@@ -104,7 +113,12 @@ ${JSON.stringify(signals, null, 2)}
 
 Instructions:
 1) Headline: one sentence, data-specific, mention the most material underperformance and exposure context.
-2) keyFindings: 2-4 bullets; must cite regions/states/technology/months where available.
+2) insights: return 3-5 structured insights from the strongest underperforming angles.
+  - groupType must be one of iso, state, technology.
+  - groupName must match candidate names from the data.
+  - developerCfPct, benchmarkCfPct, gapPct must be numeric and consistent with the data.
+  - gapPct must be negative when underperforming.
+  - takeaway should be concise and actionable.
 3) engagementSignals: 2-3 concrete FTI-style advisory opportunities (turnaround, market strategy, portfolio optimization, transaction readiness).
 4) watchGroup: identify the single highest-priority weak slice.
 Keep all statements grounded in the provided data only.
@@ -120,11 +134,26 @@ Keep all statements grounded in the provided data only.
           type: Type.OBJECT,
           properties: {
             headline: { type: Type.STRING },
-            keyFindings: { type: Type.ARRAY, items: { type: Type.STRING } },
+            insights: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  angle: { type: Type.STRING },
+                  groupType: { type: Type.STRING },
+                  groupName: { type: Type.STRING },
+                  developerCfPct: { type: Type.NUMBER },
+                  benchmarkCfPct: { type: Type.NUMBER },
+                  gapPct: { type: Type.NUMBER },
+                  takeaway: { type: Type.STRING },
+                },
+                required: ['angle', 'groupType', 'groupName', 'developerCfPct', 'benchmarkCfPct', 'gapPct', 'takeaway'],
+              },
+            },
             engagementSignals: { type: Type.ARRAY, items: { type: Type.STRING } },
             watchGroup: { type: Type.STRING },
           },
-          required: ['headline', 'keyFindings', 'engagementSignals', 'watchGroup'],
+          required: ['headline', 'insights', 'engagementSignals', 'watchGroup'],
         },
       },
     });
@@ -134,11 +163,18 @@ Keep all statements grounded in the provided data only.
     return JSON.parse(text) as DeveloperInsightResult;
   } catch (error) {
     console.error('Gemini Developer Insight Error:', error);
+    const fallbackInsights = signals.angleCandidates.slice(0, 3).map((c) => ({
+      angle: `${c.groupType.toUpperCase()}: ${c.groupName}`,
+      groupType: c.groupType,
+      groupName: c.groupName,
+      developerCfPct: c.developerCfPct,
+      benchmarkCfPct: c.benchmarkCfPct,
+      gapPct: c.gapPct,
+      takeaway: `${c.groupName} is under benchmark by ${Math.abs(c.gapPct).toFixed(1)} percentage points.`,
+    }));
     return {
       headline: 'AI insight unavailable for this filter scope.',
-      keyFindings: [
-        'Try narrowing ISO, state, or technology filters to improve signal quality.',
-      ],
+      insights: fallbackInsights,
       engagementSignals: [
         'Use the chart gap and lowest-CF assets as immediate outreach leads.',
       ],
