@@ -7,7 +7,8 @@ import {
   approveStagedAssets,
   DeveloperRow, AssetRegistryRow, ChangelogRow,
 } from '../services/developerService';
-import { PowerPlant, CapacityFactorStats } from '../types';
+import { getDeveloperInsights } from '../services/geminiService';
+import { PowerPlant, CapacityFactorStats, DeveloperInsightResult, PerformanceSignals } from '../types';
 import { formatMonthYear } from '../constants';
 import type { DeveloperAssetMapPoint, DeveloperMapViewport } from './DeveloperAssetMap';
 
@@ -75,6 +76,11 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
   const [devMonthlyRows, setDevMonthlyRows] = useState<{ plant_id: string; month: string; mwh: number | null }[]>([]);
   const [benchmarkMonthlyRows, setBenchmarkMonthlyRows] = useState<{ plant_id: string; month: string; mwh: number | null }[]>([]);
   const [perfLoading, setPerfLoading] = useState(false);
+  const [insight, setInsight] = useState<DeveloperInsightResult | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [insightError, setInsightError] = useState<string | null>(null);
+  const [insightUpdatedAt, setInsightUpdatedAt] = useState<string | null>(null);
+  const [insightRefreshKey, setInsightRefreshKey] = useState(0);
 
   useEffect(() => {
     setLoading(true);
@@ -305,6 +311,155 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
     }
     return Array.from(monthMap.values()).sort((a, b) => a.month.localeCompare(b.month));
   }, [devLineData, benchmarkLineData]);
+
+  const benchmarkByMonth = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of benchmarkLineData) map.set(row.month, row.benchmark);
+    return map;
+  }, [benchmarkLineData]);
+
+  const performanceSignals = useMemo<PerformanceSignals>(() => {
+    const recent = chartData.slice(-12).filter((r) => r.dev != null || r.benchmark != null);
+    const devVals = recent.map(r => r.dev).filter((v): v is number => v != null);
+    const bmVals = recent.map(r => r.benchmark).filter((v): v is number => v != null);
+    const devAvg = devVals.length > 0 ? devVals.reduce((a, b) => a + b, 0) / devVals.length : null;
+    const bmAvg = bmVals.length > 0 ? bmVals.reduce((a, b) => a + b, 0) / bmVals.length : null;
+    const gap = devAvg != null && bmAvg != null ? devAvg - bmAvg : null;
+
+    const paired = chartData.filter((r): r is { month: string; dev: number; benchmark: number } => r.dev != null && r.benchmark != null);
+    let worstMonth: PerformanceSignals['worstMonth'] = null;
+    for (const row of paired) {
+      const g = row.dev - row.benchmark;
+      if (!worstMonth || g < worstMonth.gap) {
+        worstMonth = { month: row.month, developer: row.dev, benchmark: row.benchmark, gap: g };
+      }
+    }
+
+    const devSeries = chartData.filter((r): r is { month: string; dev: number } => r.dev != null);
+    let trend: PerformanceSignals['trend'] = 'flat';
+    if (devSeries.length >= 3) {
+      const n = devSeries.length;
+      const xMean = (n - 1) / 2;
+      const yMean = devSeries.reduce((s, p) => s + p.dev, 0) / n;
+      let num = 0;
+      let den = 0;
+      for (let i = 0; i < n; i++) {
+        num += (i - xMean) * (devSeries[i].dev - yMean);
+        den += (i - xMean) * (i - xMean);
+      }
+      const slope = den === 0 ? 0 : num / den;
+      if (slope > 0.002) trend = 'improving';
+      else if (slope < -0.002) trend = 'declining';
+    }
+
+    const groupRows: PerformanceSignals['underperformingGroups'] = [];
+    const addGroup = (groupType: 'iso' | 'state' | 'technology', name: string, points: DeveloperAssetMapPoint[]) => {
+      if (points.length === 0) return;
+      const vals = points.map(p => p.ttmAverage).filter((v): v is number => v != null);
+      if (vals.length === 0) return;
+      const devGroupAvg = vals.reduce((a, b) => a + b, 0) / vals.length;
+      const bmValsLocal = points
+        .map((p) => p.eiaPlantCode ? plantsByEia.get(p.eiaPlantCode) : undefined)
+        .filter((pl): pl is PowerPlant => Boolean(pl))
+        .map((pl) => statsMap[pl.id]?.ttmAverage)
+        .filter((v): v is number => v != null);
+      const bmGroupAvg = bmValsLocal.length > 0
+        ? bmValsLocal.reduce((a, b) => a + b, 0) / bmValsLocal.length
+        : bmAvg;
+      if (bmGroupAvg == null) return;
+      groupRows.push({
+        groupType,
+        name,
+        developerAvg: devGroupAvg,
+        benchmarkAvg: bmGroupAvg,
+        gap: devGroupAvg - bmGroupAvg,
+      });
+    };
+
+    const isoMap = new Map<string, DeveloperAssetMapPoint[]>();
+    const stateMap = new Map<string, DeveloperAssetMapPoint[]>();
+    const techMap = new Map<string, DeveloperAssetMapPoint[]>();
+    for (const point of filteredDevPoints) {
+      const plant = point.eiaPlantCode ? plantsByEia.get(point.eiaPlantCode) : undefined;
+      const iso = plant?.region ? String(plant.region) : 'Unmapped';
+      const state = point.state || 'Unknown';
+      const tech = point.technology || 'Unknown';
+      isoMap.set(iso, [...(isoMap.get(iso) || []), point]);
+      stateMap.set(state, [...(stateMap.get(state) || []), point]);
+      techMap.set(tech, [...(techMap.get(tech) || []), point]);
+    }
+    for (const [name, points] of isoMap.entries()) addGroup('iso', name, points);
+    for (const [name, points] of stateMap.entries()) addGroup('state', name, points);
+    for (const [name, points] of techMap.entries()) addGroup('technology', name, points);
+
+    const outlierAssets = filteredDevPoints
+      .filter((p) => {
+        if (p.ttmAverage == null || bmAvg == null) return false;
+        return p.ttmAverage < bmAvg * 0.7;
+      })
+      .slice(0, 8)
+      .map((p) => {
+        const plant = p.eiaPlantCode ? plantsByEia.get(p.eiaPlantCode) : undefined;
+        return {
+          name: p.name,
+          iso: plant?.region ? String(plant.region) : 'Unmapped',
+          state: p.state || 'Unknown',
+          technology: p.technology || 'Unknown',
+          cf: p.ttmAverage ?? 0,
+        };
+      });
+
+    return {
+      developerName: developer.name,
+      filterScope: {
+        iso: isoFilter,
+        state: stateFilter,
+        technology: techFilter,
+      },
+      assetCount: filteredDevPoints.length,
+      ttm: {
+        developerAvg: devAvg,
+        benchmarkAvg: bmAvg,
+        gap,
+      },
+      trend,
+      worstMonth,
+      underperformingGroups: groupRows.sort((a, b) => a.gap - b.gap).slice(0, 8),
+      outlierAssets,
+    };
+  }, [
+    chartData, benchmarkLineData, filteredDevPoints, plantsByEia, statsMap,
+    developer.name, isoFilter, stateFilter, techFilter,
+  ]);
+
+  useEffect(() => {
+    if (tab !== 'lead') return;
+    if (chartData.length === 0) {
+      setInsight(null);
+      setInsightError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setInsightLoading(true);
+    setInsightError(null);
+
+    getDeveloperInsights(performanceSignals)
+      .then((result) => {
+        if (cancelled) return;
+        setInsight(result);
+        setInsightUpdatedAt(new Date().toISOString());
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setInsightError('AI analysis unavailable for this filter scope.');
+      })
+      .finally(() => {
+        if (!cancelled) setInsightLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [tab, chartData, performanceSignals, insightRefreshKey]);
 
   const handleApprove = async () => {
     if (selectedStaged.size === 0) return;
@@ -690,6 +845,66 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
       {/* ── Performance Tab ── */}
       {tab === 'lead' && (
         <div className="space-y-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-[10px] font-bold uppercase tracking-[0.15em] text-blue-400">AI Analysis</div>
+              <div className="flex items-center gap-3">
+                {insightUpdatedAt && (
+                  <span className="text-[10px] text-slate-600">
+                    Updated {new Date(insightUpdatedAt).toLocaleTimeString()}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setInsightRefreshKey((k) => k + 1)}
+                  className="text-[11px] font-semibold text-slate-300 hover:text-white px-2.5 py-1 rounded-md border border-slate-700 hover:border-slate-500 transition-colors"
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            {insightLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-4 bg-slate-800 rounded w-3/4" />
+                <div className="h-3 bg-slate-800 rounded w-full" />
+                <div className="h-3 bg-slate-800 rounded w-5/6" />
+              </div>
+            ) : insightError ? (
+              <div className="text-sm text-amber-400">{insightError}</div>
+            ) : insight ? (
+              <div className="space-y-4">
+                <h3 className="text-lg font-black text-white leading-tight">{insight.headline}</h3>
+                <div>
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.15em] mb-2">Key Findings</div>
+                  <ul className="space-y-1.5 text-sm text-slate-300 list-disc list-inside">
+                    {insight.keyFindings.map((finding, idx) => (
+                      <li key={`${finding}-${idx}`}>{finding}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.15em] mb-2">Engagement Signals</div>
+                  <div className="flex flex-wrap gap-2">
+                    {insight.engagementSignals.map((signal, idx) => (
+                      <span
+                        key={`${signal}-${idx}`}
+                        className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-blue-900/20 text-blue-300 border border-blue-700/40"
+                      >
+                        {signal}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="text-xs text-amber-300 bg-amber-900/10 border border-amber-700/30 rounded-lg px-3 py-2">
+                  Closest watch: <span className="font-semibold">{insight.watchGroup}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-slate-500">AI insights will appear once enough chart data is available.</div>
+            )}
+          </div>
+
           {/* Title */}
           <div>
             <h2 className="text-xl font-black text-white">Portfolio Performance</h2>

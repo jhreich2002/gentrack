@@ -1,5 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { PowerPlant, CapacityFactorStats, AnalysisResult, NewsAnalysis, NewsItem } from "../types";
+import {
+  PowerPlant, CapacityFactorStats, AnalysisResult, NewsAnalysis, NewsItem,
+  PerformanceSignals, DeveloperInsightResult,
+} from "../types";
 
 /**
  * Analyzes US power generation data using Gemini AI.
@@ -72,6 +75,74 @@ export const getGeminiInsights = async (
       summary: "Could not generate AI insights at this time. Please check your connectivity.",
       outliers: [],
       recommendations: ["Check manual capacity factor trends below."]
+    };
+  }
+};
+
+export const getDeveloperInsights = async (
+  signals: PerformanceSignals
+): Promise<DeveloperInsightResult> => {
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return {
+      headline: 'AI insight unavailable: missing Gemini API key.',
+      keyFindings: [],
+      engagementSignals: ['Configure GEMINI_API_KEY or API_KEY in environment settings.'],
+      watchGroup: 'Unavailable',
+    };
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = `
+You are an FTI Consulting power-sector advisor.
+Use the structured performance signals below to identify underperformance and translate it into actionable advisory opportunities.
+
+Return JSON only.
+
+Signals:
+${JSON.stringify(signals, null, 2)}
+
+Instructions:
+1) Headline: one sentence, data-specific, mention the most material underperformance and exposure context.
+2) keyFindings: 2-4 bullets; must cite regions/states/technology/months where available.
+3) engagementSignals: 2-3 concrete FTI-style advisory opportunities (turnaround, market strategy, portfolio optimization, transaction readiness).
+4) watchGroup: identify the single highest-priority weak slice.
+Keep all statements grounded in the provided data only.
+`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            headline: { type: Type.STRING },
+            keyFindings: { type: Type.ARRAY, items: { type: Type.STRING } },
+            engagementSignals: { type: Type.ARRAY, items: { type: Type.STRING } },
+            watchGroup: { type: Type.STRING },
+          },
+          required: ['headline', 'keyFindings', 'engagementSignals', 'watchGroup'],
+        },
+      },
+    });
+
+    const text = response.text;
+    if (!text) throw new Error('Empty response from AI');
+    return JSON.parse(text) as DeveloperInsightResult;
+  } catch (error) {
+    console.error('Gemini Developer Insight Error:', error);
+    return {
+      headline: 'AI insight unavailable for this filter scope.',
+      keyFindings: [
+        'Try narrowing ISO, state, or technology filters to improve signal quality.',
+      ],
+      engagementSignals: [
+        'Use the chart gap and lowest-CF assets as immediate outreach leads.',
+      ],
+      watchGroup: 'No clear watch group',
     };
   }
 };

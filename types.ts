@@ -70,6 +70,49 @@ export interface AnalysisResult {
   recommendations: string[];
 }
 
+export interface DeveloperInsightResult {
+  headline: string;
+  keyFindings: string[];
+  engagementSignals: string[];
+  watchGroup: string;
+}
+
+export interface PerformanceSignals {
+  developerName: string;
+  filterScope: {
+    iso: string;
+    state: string;
+    technology: string;
+  };
+  assetCount: number;
+  ttm: {
+    developerAvg: number | null;
+    benchmarkAvg: number | null;
+    gap: number | null;
+  };
+  trend: 'improving' | 'declining' | 'flat';
+  worstMonth: {
+    month: string;
+    developer: number;
+    benchmark: number;
+    gap: number;
+  } | null;
+  underperformingGroups: Array<{
+    groupType: 'iso' | 'state' | 'technology';
+    name: string;
+    developerAvg: number;
+    benchmarkAvg: number;
+    gap: number;
+  }>;
+  outlierAssets: Array<{
+    name: string;
+    iso: string;
+    state: string;
+    technology: string;
+    cf: number;
+  }>;
+}
+
 export interface NewsItem {
   title: string;
   url: string;
