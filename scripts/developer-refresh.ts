@@ -592,7 +592,7 @@ async function run(): Promise<void> {
         status: 'completed',
         completed_at: new Date().toISOString(),
         total_cost_usd: cost.total_usd,
-        api_calls: { total: cost.call_count },
+        api_calls: { total: cost.call_count, developer_refresh: cost.total_usd },
         assets_graduated: graduated,
         assets_staged: staged,
       }).eq('id', crawlRunId);
