@@ -117,20 +117,37 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
     return monthlyTotals.find(t => t.month_start === selectedMonth)?.total_usd ?? costLines.reduce((sum, row) => sum + Number(row.amount_usd || 0), 0);
   }, [monthlyTotals, costLines, selectedMonth]);
 
-  const topUsers = useMemo(() => {
-    const totals = new Map<string, { email: string; actions: number; opens: number; lastSeenAt: string }>();
-    for (const row of dailyUserActivity) {
-      const existing = totals.get(row.user_id) ?? { email: row.email, actions: 0, opens: 0, lastSeenAt: row.last_seen_at };
-      existing.actions += Number(row.action_count || 0);
-      existing.opens += Number(row.app_open_count || 0);
-      if (!existing.lastSeenAt || row.last_seen_at > existing.lastSeenAt) existing.lastSeenAt = row.last_seen_at;
-      totals.set(row.user_id, existing);
-    }
-    return Array.from(totals.entries())
-      .map(([userId, val]) => ({ userId, ...val }))
-      .sort((a, b) => (b.actions + b.opens) - (a.actions + a.opens))
-      .slice(0, 8);
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+
+  // Auto-refresh activity every 30s
+  useEffect(() => {
+    const id = setInterval(() => {
+      loadActivity(selectedMonth);
+      setLastRefreshed(new Date());
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [selectedMonth, loadActivity]);
+
+  const [selectedDay, setSelectedDay] = useState<string>('all');
+
+  // Reset day filter when month changes
+  useEffect(() => { setSelectedDay('all'); }, [selectedMonth]);
+
+  const sortedUserActivity = useMemo(() => {
+    return [...dailyUserActivity].sort(
+      (a, b) => b.day.localeCompare(a.day) || Number(b.action_count || 0) - Number(a.action_count || 0)
+    );
   }, [dailyUserActivity]);
+
+  const dayOptions = useMemo(() => {
+    const days = Array.from(new Set(sortedUserActivity.map((r) => r.day))).sort((a, b) => b.localeCompare(a));
+    return days;
+  }, [sortedUserActivity]);
+
+  const filteredUserActivity = useMemo(() => {
+    if (selectedDay === 'all') return sortedUserActivity;
+    return sortedUserActivity.filter((r) => r.day === selectedDay);
+  }, [sortedUserActivity, selectedDay]);
 
   // Poll GitHub Actions for workflow status after a trigger
   const pollWorkflowStatus = useCallback(async () => {
@@ -240,7 +257,10 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
           <div className="flex items-center justify-between mb-6 gap-4">
             <div>
               <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">User Activity</h2>
-              <p className="text-xs text-slate-600">Daily user visits, actions, and app opens for selected month</p>
+              <p className="text-xs text-slate-600">
+                Per-user daily actions and app opens · auto-refreshes every 30s
+                {' · '}<span className="text-slate-500">last updated {lastRefreshed.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+              </p>
             </div>
             <select
               value={selectedMonth}
@@ -282,37 +302,51 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                  <h3 className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3">Day by Day</h3>
-                  <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {dailyActivity.length === 0 ? (
-                      <div className="text-xs text-slate-600">No activity tracked for this month yet.</div>
-                    ) : dailyActivity.map((row) => (
-                      <div key={row.day} className="grid grid-cols-4 gap-2 text-xs py-2 border-b border-slate-800">
-                        <div className="text-slate-400 font-mono">{new Date(`${row.day}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
-                        <div className="text-white">{Number(row.active_users || 0)} users</div>
-                        <div className="text-blue-400">{Number(row.action_count || 0)} actions</div>
-                        <div className="text-emerald-400">{Number(row.app_open_count || 0)} opens</div>
-                      </div>
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Activity by User</h3>
+                  <select
+                    value={selectedDay}
+                    onChange={(e) => setSelectedDay(e.target.value)}
+                    className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-300 focus:outline-none focus:border-blue-600"
+                  >
+                    <option value="all">All days</option>
+                    {dayOptions.map((day) => (
+                      <option key={day} value={day}>
+                        {new Date(`${day}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                      </option>
                     ))}
-                  </div>
+                  </select>
                 </div>
-
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                  <h3 className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3">Most Active Users (Month)</h3>
-                  <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {topUsers.length === 0 ? (
-                      <div className="text-xs text-slate-600">No user activity available yet.</div>
-                    ) : topUsers.map((user) => (
-                      <div key={user.userId} className="py-2 border-b border-slate-800">
-                        <div className="text-xs text-slate-300 truncate">{user.email}</div>
-                        <div className="text-[10px] text-slate-500 mt-1">
-                          <span className="text-blue-400 font-bold">{user.actions}</span> actions · <span className="text-emerald-400 font-bold">{user.opens}</span> opens
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                <div className="max-h-96 overflow-y-auto custom-scrollbar">
+                  {filteredUserActivity.length === 0 ? (
+                    <div className="text-xs text-slate-600">No activity tracked for this {selectedDay === 'all' ? 'month' : 'date'} yet.</div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-slate-950 z-10">
+                        <tr className="text-[10px] text-slate-500 uppercase border-b border-slate-800">
+                          {selectedDay === 'all' && <th className="text-left py-2 pr-6 font-black tracking-widest">Date</th>}
+                          <th className="text-left py-2 pr-6 font-black tracking-widest">Email</th>
+                          <th className="text-right py-2 pr-6 font-black tracking-widest">Actions</th>
+                          <th className="text-right py-2 font-black tracking-widest">Opens</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredUserActivity.map((row) => (
+                          <tr key={`${row.day}-${row.user_id}`} className="border-b border-slate-800/50 hover:bg-slate-900/40">
+                            {selectedDay === 'all' && (
+                              <td className="py-2 pr-6 text-slate-400 font-mono whitespace-nowrap">
+                                {new Date(`${row.day}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                              </td>
+                            )}
+                            <td className="py-2 pr-6 text-slate-300 truncate max-w-[200px]">{row.email}</td>
+                            <td className="py-2 pr-6 text-blue-400 text-right font-bold">{Number(row.action_count || 0)}</td>
+                            <td className="py-2 text-emerald-400 text-right font-bold">{Number(row.app_open_count || 0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
               </div>
             </div>
