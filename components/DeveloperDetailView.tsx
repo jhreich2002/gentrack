@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from 'recharts';
+import {
   fetchDeveloperAssets, fetchChangelog,
-  fetchDeveloperOpportunityScore,
   approveStagedAssets,
-  DeveloperRow, AssetRegistryRow, ChangelogRow, DeveloperOpportunityScoreRow,
+  DeveloperRow, AssetRegistryRow, ChangelogRow,
 } from '../services/developerService';
 import { PowerPlant, CapacityFactorStats } from '../types';
+import { formatMonthYear } from '../constants';
 import type { DeveloperAssetMapPoint, DeveloperMapViewport } from './DeveloperAssetMap';
 
 interface Props {
@@ -44,19 +47,6 @@ function confidenceColor(score: number | null) {
   return 'text-red-400';
 }
 
-function scoreTone(score: number | null) {
-  if (score == null) return 'text-slate-600';
-  if (score >= 70) return 'text-red-400';
-  if (score >= 50) return 'text-amber-400';
-  return 'text-emerald-400';
-}
-
-function scoreBarColor(score: number) {
-  if (score >= 70) return 'bg-red-500';
-  if (score >= 50) return 'bg-amber-500';
-  return 'bg-emerald-500';
-}
-
 function matchBadge(confidence: string | null) {
   const styles: Record<string, string> = {
     high: 'bg-emerald-900/30 text-emerald-400 border-emerald-500/30',
@@ -71,7 +61,6 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
   const [tab, setTab] = useState<Tab>(initialTab);
   const [assets, setAssets] = useState<AssetRegistryRow[]>([]);
   const [changelog, setChangelog] = useState<ChangelogRow[]>([]);
-  const [opportunity, setOpportunity] = useState<DeveloperOpportunityScoreRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [selectedStaged, setSelectedStaged] = useState<Set<string>>(new Set());
@@ -80,17 +69,18 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
   const [mapSelectedState, setMapSelectedState] = useState('all');
   const [mapSelectedTech, setMapSelectedTech] = useState('all');
   const [mapPerformanceFilter, setMapPerformanceFilter] = useState<MapPerformanceFilter>('all');
+  const [isoFilter, setIsoFilter] = useState('all');
+  const [stateFilter, setStateFilter] = useState('all');
+  const [techFilter, setTechFilter] = useState('all');
 
   useEffect(() => {
     setLoading(true);
     Promise.all([
       fetchDeveloperAssets(developer.id),
       fetchChangelog(developer.id),
-      fetchDeveloperOpportunityScore(developer.id),
-    ]).then(([a, ch, opp]) => {
+    ]).then(([a, ch]) => {
       setAssets(a);
       setChangelog(ch);
-      setOpportunity(opp);
       setLoading(false);
     });
   }, [developer.id]);
@@ -189,6 +179,98 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
     });
   }, [mapPoints, mapSearch, mapSelectedState, mapSelectedTech, mapPerformanceFilter]);
 
+  // ── Performance tab filter options ───────────────────────────────────────
+  const isoFilterOptions = useMemo(() => {
+    const regions = new Set<string>();
+    for (const point of mapPoints) {
+      if (!point.eiaPlantCode) continue;
+      const plant = plantsByEia.get(point.eiaPlantCode);
+      if (plant?.region) regions.add(String(plant.region));
+    }
+    return Array.from(regions).sort();
+  }, [mapPoints, plantsByEia]);
+
+  const perfStateFilterOptions = useMemo(() => {
+    return Array.from(
+      new Set(mapPoints.map(p => p.state).filter((s): s is string => Boolean(s)))
+    ).sort();
+  }, [mapPoints]);
+
+  const perfTechFilterOptions = useMemo(() => {
+    return Array.from(
+      new Set(mapPoints.map(p => p.technology).filter((t): t is string => Boolean(t)))
+    ).sort();
+  }, [mapPoints]);
+
+  const filteredDevPoints = useMemo(() => {
+    return mapPoints.filter(point => {
+      if (isoFilter !== 'all') {
+        const plant = point.eiaPlantCode ? plantsByEia.get(point.eiaPlantCode) : undefined;
+        if (String(plant?.region ?? '') !== isoFilter) return false;
+      }
+      if (stateFilter !== 'all' && point.state !== stateFilter) return false;
+      if (techFilter !== 'all' && (point.technology ?? '').toLowerCase() !== techFilter.toLowerCase()) return false;
+      return true;
+    });
+  }, [mapPoints, plantsByEia, isoFilter, stateFilter, techFilter]);
+
+  const devLineData = useMemo(() => {
+    const plantIds = filteredDevPoints
+      .map(p => p.eiaPlantCode ? plantsByEia.get(p.eiaPlantCode)?.id : undefined)
+      .filter((id): id is string => Boolean(id));
+    const monthMap = new Map<string, { total: number; count: number }>();
+    for (const pid of plantIds) {
+      const stats = statsMap[pid];
+      if (!stats) continue;
+      for (const { month, factor } of stats.monthlyFactors) {
+        if (factor == null) continue;
+        const agg = monthMap.get(month) ?? { total: 0, count: 0 };
+        agg.total += factor;
+        agg.count += 1;
+        monthMap.set(month, agg);
+      }
+    }
+    return Array.from(monthMap.entries())
+      .map(([month, { total, count }]) => ({ month, dev: total / count }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+  }, [filteredDevPoints, plantsByEia, statsMap]);
+
+  const benchmarkLineData = useMemo(() => {
+    const filtered = plants.filter(plant => {
+      if (isoFilter !== 'all' && String(plant.region) !== isoFilter) return false;
+      if (stateFilter !== 'all' && plant.location.state !== stateFilter) return false;
+      if (techFilter !== 'all' && plant.fuelSource.toLowerCase() !== techFilter.toLowerCase()) return false;
+      return true;
+    });
+    const monthMap = new Map<string, { total: number; count: number }>();
+    for (const plant of filtered) {
+      const stats = statsMap[plant.id];
+      if (!stats) continue;
+      for (const { month, factor } of stats.monthlyFactors) {
+        if (factor == null) continue;
+        const agg = monthMap.get(month) ?? { total: 0, count: 0 };
+        agg.total += factor;
+        agg.count += 1;
+        monthMap.set(month, agg);
+      }
+    }
+    return Array.from(monthMap.entries())
+      .map(([month, { total, count }]) => ({ month, benchmark: total / count }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+  }, [plants, statsMap, isoFilter, stateFilter, techFilter]);
+
+  const chartData = useMemo(() => {
+    const monthMap = new Map<string, { month: string; dev?: number; benchmark?: number }>();
+    for (const d of devLineData) {
+      monthMap.set(d.month, { month: d.month, dev: d.dev });
+    }
+    for (const b of benchmarkLineData) {
+      const existing = monthMap.get(b.month) ?? { month: b.month };
+      monthMap.set(b.month, { ...existing, benchmark: b.benchmark });
+    }
+    return Array.from(monthMap.values()).sort((a, b) => a.month.localeCompare(b.month));
+  }, [devLineData, benchmarkLineData]);
+
   const handleApprove = async () => {
     if (selectedStaged.size === 0) return;
     setApproving(true);
@@ -254,7 +336,7 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
               tab === t ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-300'
             }`}
           >
-            {t === 'overview' ? 'Overview' : t === 'portfolio' ? 'Portfolio' : t === 'map' ? 'Asset Map' : 'Lead Drilldown'}
+            {t === 'overview' ? 'Overview' : t === 'portfolio' ? 'Portfolio' : t === 'map' ? 'Asset Map' : 'Performance'}
           </button>
         ))}
       </div>
@@ -570,71 +652,221 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
         </div>
       )}
 
-      {/* ── Lead Drilldown Tab ── */}
+      {/* ── Performance Tab ── */}
       {tab === 'lead' && (
         <div className="space-y-6">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-            <div className="flex items-start justify-between gap-4 mb-5">
+          {/* Title */}
+          <div>
+            <h2 className="text-xl font-black text-white">Portfolio Performance</h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Capacity factor over time vs. system benchmark · filtered by ISO/RTO, state, and technology
+            </p>
+          </div>
+
+          {/* Filter bar */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <div className="grid grid-cols-3 gap-3">
               <div>
-                <h3 className="text-lg font-black text-white">FTI Lead Drilldown</h3>
-                <p className="text-xs text-slate-500 mt-1">Opportunity components for outreach prioritization.</p>
+                <label className="text-[10px] font-bold text-slate-600 uppercase tracking-widest block mb-1.5">ISO / RTO</label>
+                <select
+                  value={isoFilter}
+                  onChange={e => setIsoFilter(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-300 focus:outline-none focus:border-blue-600 transition-colors"
+                >
+                  <option value="all">All ISOs</option>
+                  {isoFilterOptions.map(iso => (
+                    <option key={iso} value={iso}>{iso}</option>
+                  ))}
+                </select>
               </div>
-              <div className={`text-3xl font-black font-mono ${scoreTone(opportunity?.opportunity_score ?? null)}`}>
-                {(opportunity?.opportunity_score ?? 0).toFixed(1)}
+              <div>
+                <label className="text-[10px] font-bold text-slate-600 uppercase tracking-widest block mb-1.5">State</label>
+                <select
+                  value={stateFilter}
+                  onChange={e => setStateFilter(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-300 focus:outline-none focus:border-blue-600 transition-colors"
+                >
+                  <option value="all">All States</option>
+                  {perfStateFilterOptions.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-600 uppercase tracking-widest block mb-1.5">Technology</label>
+                <select
+                  value={techFilter}
+                  onChange={e => setTechFilter(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-300 focus:outline-none focus:border-blue-600 transition-colors"
+                >
+                  <option value="all">All Technologies</option>
+                  {perfTechFilterOptions.map(t => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
               </div>
             </div>
+            {/* Summary pills */}
+            <div className="flex items-center gap-4 mt-4 text-xs text-slate-400">
+              <span><span className="font-mono text-slate-200">{filteredDevPoints.length}</span> assets shown</span>
+              <span className="text-slate-700">•</span>
+              <span>
+                Avg CF:{' '}
+                <span className="font-mono text-slate-200">
+                  {(() => {
+                    const withCf = filteredDevPoints.filter(p => p.ttmAverage != null);
+                    if (withCf.length === 0) return '—';
+                    const avg = withCf.reduce((s, p) => s + p.ttmAverage!, 0) / withCf.length;
+                    return `${(avg * 100).toFixed(1)}%`;
+                  })()}
+                </span>
+              </span>
+              <span className="text-slate-700">•</span>
+              <span>
+                Curtailed: <span className="font-mono text-red-400">{filteredDevPoints.filter(p => p.isLikelyCurtailed).length}</span>
+              </span>
+            </div>
+          </div>
 
-            {opportunity ? (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                  {[
-                    ['Distress', opportunity.distress_score],
-                    ['Complexity', opportunity.complexity_score],
-                    ['Trigger Immediacy', opportunity.trigger_immediacy_score],
-                    ['Engagement Potential', opportunity.engagement_potential_score],
-                  ].map(([label, value]) => (
-                    <div key={label} className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">{label}</div>
-                      <div className="h-2 bg-slate-800 rounded-full overflow-hidden mb-2">
-                        <div className={scoreBarColor(Number(value))} style={{ width: `${Math.min(100, Math.max(0, Number(value)))}%`, height: '100%' }} />
-                      </div>
-                      <div className="text-sm font-mono text-slate-300">{Number(value).toFixed(1)}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Top Signals</div>
-                    <div className="space-y-2 text-sm text-slate-300">
-                      {(opportunity.top_signals || []).map((signal) => (
-                        <div key={signal} className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">{signal}</div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Recommended Service Lines</div>
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {(opportunity.recommended_service_lines || []).map((line) => (
-                        <span key={line} className="px-2 py-1 rounded-full text-[10px] font-bold bg-blue-900/30 border border-blue-500/30 text-blue-300 uppercase tracking-wide">
-                          {line.replace(/_/g, ' ')}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="text-xs text-slate-500 space-y-1">
-                      <div>Total MW at risk: <span className="text-slate-300 font-mono">{opportunity.total_mw_at_risk.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></div>
-                      <div>High-risk assets: <span className="text-slate-300 font-mono">{opportunity.high_risk_asset_count}</span></div>
-                      <div>Likely curtailed: <span className="text-slate-300 font-mono">{opportunity.likely_curtailed_count}</span></div>
-                      <div>Weekly delta: <span className={opportunity.weekly_delta_score != null && opportunity.weekly_delta_score > 0 ? 'text-red-400 font-mono' : opportunity.weekly_delta_score != null && opportunity.weekly_delta_score < 0 ? 'text-emerald-400 font-mono' : 'text-slate-400 font-mono'}>{opportunity.weekly_delta_score == null ? '—' : `${opportunity.weekly_delta_score > 0 ? '+' : ''}${opportunity.weekly_delta_score.toFixed(1)}`}</span></div>
-                    </div>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="text-sm text-slate-500">
-                No lead score snapshot found yet. Run score:developers to populate this tab.
+          {/* Chart */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+            <div className="mb-4">
+              <h3 className="text-sm font-bold text-white">Monthly Capacity Factor</h3>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                {developer.name} vs. system average for the same filter scope
+              </p>
+            </div>
+            {chartData.length === 0 ? (
+              <div className="flex items-center justify-center h-[240px] text-sm text-slate-600">
+                No generation data available for assets matching these filters.
               </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart data={chartData} margin={{ top: 4, right: 16, left: 8, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis
+                    dataKey="month"
+                    tickFormatter={formatMonthYear}
+                    tick={{ fill: '#64748b', fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={{ stroke: '#1e293b' }}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
+                    tick={{ fill: '#64748b', fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={44}
+                  />
+                  <Tooltip
+                    formatter={(value: number, name: string) => [`${(value * 100).toFixed(1)}%`, name]}
+                    labelFormatter={(label: string) => formatMonthYear(label)}
+                    contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }}
+                    labelStyle={{ color: '#94a3b8' }}
+                    itemStyle={{ color: '#e2e8f0' }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#64748b', paddingTop: 12 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="dev"
+                    name={developer.name}
+                    stroke="#60a5fa"
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4, fill: '#60a5fa' }}
+                    connectNulls={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="benchmark"
+                    name="System Avg (filtered)"
+                    stroke="#475569"
+                    strokeWidth={1.5}
+                    strokeDasharray="4 4"
+                    dot={false}
+                    activeDot={{ r: 3, fill: '#475569' }}
+                    connectNulls={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* Asset table */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-800">
+              <h3 className="text-sm font-bold text-white">Matched Assets</h3>
+              <p className="text-[10px] text-slate-500 mt-0.5">Projects included in the chart above · sorted by lowest CF first</p>
+            </div>
+            {filteredDevPoints.length === 0 ? (
+              <div className="px-5 py-8 text-sm text-slate-600 text-center">
+                No assets match the current filters.
+              </div>
+            ) : (
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-800/60 text-slate-500 text-[10px] font-bold uppercase tracking-[0.12em]">
+                    <th className="px-5 py-3">Asset</th>
+                    <th className="px-5 py-3">ISO</th>
+                    <th className="px-5 py-3">State</th>
+                    <th className="px-5 py-3">Technology</th>
+                    <th className="px-5 py-3 text-right">MW</th>
+                    <th className="px-5 py-3 text-right">TTM CF</th>
+                    <th className="px-5 py-3 text-center">Curtailed</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {[...filteredDevPoints]
+                    .sort((a, b) => {
+                      if (a.ttmAverage == null && b.ttmAverage == null) return 0;
+                      if (a.ttmAverage == null) return 1;
+                      if (b.ttmAverage == null) return -1;
+                      return a.ttmAverage - b.ttmAverage;
+                    })
+                    .map(point => {
+                      const plant = point.eiaPlantCode ? plantsByEia.get(point.eiaPlantCode) : undefined;
+                      const cfPct = point.ttmAverage != null ? point.ttmAverage * 100 : null;
+                      const cfColor = cfPct == null
+                        ? 'text-slate-600'
+                        : cfPct < 15
+                        ? 'text-red-400'
+                        : cfPct < 25
+                        ? 'text-amber-400'
+                        : 'text-emerald-400';
+                      return (
+                        <tr
+                          key={point.id}
+                          onClick={() => point.eiaPlantCode && onPlantClick ? onPlantClick(point.eiaPlantCode) : onAssetClick(point.assetId)}
+                          className="hover:bg-slate-800/40 cursor-pointer transition-colors"
+                        >
+                          <td className="px-5 py-3">
+                            <div className="text-sm font-medium text-slate-200 hover:text-blue-400 transition-colors">{point.name}</div>
+                            {point.eiaPlantCode && <div className="text-[10px] text-slate-600 font-mono">EIA {point.eiaPlantCode}</div>}
+                          </td>
+                          <td className="px-5 py-3 text-xs text-slate-400">{plant?.region ?? '—'}</td>
+                          <td className="px-5 py-3 text-xs text-slate-400">{point.state ?? '—'}</td>
+                          <td className="px-5 py-3">
+                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-blue-900/20 text-blue-400 border border-blue-500/20">
+                              {point.technology ?? '—'}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-right font-mono text-sm text-slate-300">
+                            {point.capacityMw > 0 ? point.capacityMw.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
+                          </td>
+                          <td className={`px-5 py-3 text-right font-mono text-sm font-bold ${cfColor}`}>
+                            {cfPct != null ? `${cfPct.toFixed(1)}%` : '—'}
+                          </td>
+                          <td className="px-5 py-3 text-center">
+                            {point.isLikelyCurtailed
+                              ? <span className="text-[10px] font-bold text-red-400 bg-red-900/20 border border-red-500/20 px-2 py-0.5 rounded">Yes</span>
+                              : <span className="text-[10px] text-slate-700">—</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
             )}
           </div>
         </div>

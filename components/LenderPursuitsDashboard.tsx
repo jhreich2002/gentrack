@@ -160,7 +160,6 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
               <tr className="border-b border-slate-800">
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-10 text-center">#</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Lender</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-28">Plants</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-36">Distress</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-32">Facility Types</th>
               </tr>
@@ -205,11 +204,6 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                           ))}
                         </div>
                       )}
-                    </td>
-
-                    {/* Plant count */}
-                    <td className="px-4 py-4 text-right align-top">
-                      <span className="text-sm font-bold text-slate-200">{curtailedCodes.length}</span>
                     </td>
 
                     {/* Distress */}

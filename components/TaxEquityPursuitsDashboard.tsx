@@ -148,7 +148,6 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
               <tr className="border-b border-slate-800">
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-10 text-center">#</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Investor</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-28">Plants</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-36">Distress</th>
               </tr>
             </thead>
@@ -192,11 +191,6 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
                           ))}
                         </div>
                       )}
-                    </td>
-
-                    {/* Plant count */}
-                    <td className="px-4 py-4 text-right align-top">
-                      <span className="text-sm font-bold text-slate-200">{curtailedCodes.length}</span>
                     </td>
 
                     {/* Distress */}
