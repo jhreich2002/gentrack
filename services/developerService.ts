@@ -297,6 +297,22 @@ export async function fetchAssetOwners(assetId: string): Promise<{ developer_nam
   }));
 }
 
+export async function fetchPlantsMonthlyGeneration(
+  plantIds: string[]
+): Promise<{ plant_id: string; month: string; mwh: number | null }[]> {
+  if (plantIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from('monthly_generation')
+    .select('plant_id, month, mwh')
+    .in('plant_id', plantIds)
+    .order('month');
+  if (error) {
+    console.error('fetchPlantsMonthlyGeneration error:', error.message);
+    return [];
+  }
+  return (data ?? []) as { plant_id: string; month: string; mwh: number | null }[];
+}
+
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 export async function approveStagedAssets(assetIds: string[]): Promise<number> {

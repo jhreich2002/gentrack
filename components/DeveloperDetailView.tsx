@@ -3,10 +3,11 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import {
-  fetchDeveloperAssets, fetchChangelog,
+  fetchDeveloperAssets, fetchChangelog, fetchPlantsMonthlyGeneration,
   approveStagedAssets,
   DeveloperRow, AssetRegistryRow, ChangelogRow,
 } from '../services/developerService';
+import { fetchRegionalTrend } from '../services/dataService';
 import { PowerPlant, CapacityFactorStats } from '../types';
 import { formatMonthYear } from '../constants';
 import type { DeveloperAssetMapPoint, DeveloperMapViewport } from './DeveloperAssetMap';
@@ -72,6 +73,9 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
   const [isoFilter, setIsoFilter] = useState('all');
   const [stateFilter, setStateFilter] = useState('all');
   const [techFilter, setTechFilter] = useState('all');
+  const [devMonthlyRows, setDevMonthlyRows] = useState<{ plant_id: string; month: string; mwh: number | null }[]>([]);
+  const [benchmarkTrend, setBenchmarkTrend] = useState<{ month: string; factor: number }[]>([]);
+  const [perfLoading, setPerfLoading] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -214,50 +218,76 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
     });
   }, [mapPoints, plantsByEia, isoFilter, stateFilter, techFilter]);
 
-  const devLineData = useMemo(() => {
-    const plantIds = filteredDevPoints
-      .map(p => p.eiaPlantCode ? plantsByEia.get(p.eiaPlantCode)?.id : undefined)
-      .filter((id): id is string => Boolean(id));
-    const monthMap = new Map<string, { total: number; count: number }>();
-    for (const pid of plantIds) {
-      const stats = statsMap[pid];
-      if (!stats) continue;
-      for (const { month, factor } of stats.monthlyFactors) {
-        if (factor == null) continue;
-        const agg = monthMap.get(month) ?? { total: 0, count: 0 };
-        agg.total += factor;
-        agg.count += 1;
-        monthMap.set(month, agg);
-      }
-    }
-    return Array.from(monthMap.entries())
-      .map(([month, { total, count }]) => ({ month, dev: total / count }))
-      .sort((a, b) => a.month.localeCompare(b.month));
-  }, [filteredDevPoints, plantsByEia, statsMap]);
-
-  const benchmarkLineData = useMemo(() => {
-    const filtered = plants.filter(plant => {
-      if (isoFilter !== 'all' && String(plant.region) !== isoFilter) return false;
-      if (stateFilter !== 'all' && plant.location.state !== stateFilter) return false;
-      if (techFilter !== 'all' && plant.fuelSource.toLowerCase() !== techFilter.toLowerCase()) return false;
-      return true;
+  // Fetch monthly generation for developer's matched plants when Performance tab opens
+  useEffect(() => {
+    if (tab !== 'lead') return;
+    const plantIds = Array.from(new Set(
+      mapPoints
+        .filter(p => p.eiaPlantCode)
+        .map(p => plantsByEia.get(p.eiaPlantCode!)?.id)
+        .filter((id): id is string => Boolean(id))
+    ));
+    if (plantIds.length === 0) { setDevMonthlyRows([]); return; }
+    setPerfLoading(true);
+    fetchPlantsMonthlyGeneration(plantIds).then(rows => {
+      setDevMonthlyRows(rows);
+      setPerfLoading(false);
     });
-    const monthMap = new Map<string, { total: number; count: number }>();
-    for (const plant of filtered) {
-      const stats = statsMap[plant.id];
-      if (!stats) continue;
-      for (const { month, factor } of stats.monthlyFactors) {
-        if (factor == null) continue;
-        const agg = monthMap.get(month) ?? { total: 0, count: 0 };
-        agg.total += factor;
-        agg.count += 1;
-        monthMap.set(month, agg);
+  }, [tab, developer.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch benchmark trend (regional avg) when iso/tech filters or tab changes
+  useEffect(() => {
+    if (tab !== 'lead') return;
+    // Determine effective ISO and tech from filters or developer's dominant values
+    let effectiveIso = isoFilter !== 'all' ? isoFilter : null;
+    let effectiveTech = techFilter !== 'all' ? techFilter : null;
+    if (!effectiveIso || !effectiveTech) {
+      const regionCounts = new Map<string, number>();
+      const techCounts = new Map<string, number>();
+      for (const point of filteredDevPoints) {
+        const plant = point.eiaPlantCode ? plantsByEia.get(point.eiaPlantCode) : undefined;
+        if (plant?.region) regionCounts.set(String(plant.region), (regionCounts.get(String(plant.region)) ?? 0) + 1);
+        if (point.technology) techCounts.set(point.technology, (techCounts.get(point.technology) ?? 0) + 1);
       }
+      if (!effectiveIso) effectiveIso = Array.from(regionCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+      if (!effectiveTech) effectiveTech = Array.from(techCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    }
+    if (!effectiveIso || !effectiveTech) { setBenchmarkTrend([]); return; }
+    fetchRegionalTrend(effectiveIso, effectiveTech).then(trend => {
+      setBenchmarkTrend(trend);
+    });
+  }, [tab, isoFilter, techFilter, developer.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Developer line: compute monthly avg CF from raw MWh rows for currently filtered plants
+  const devLineData = useMemo(() => {
+    const capacityById = new Map<string, number>();
+    for (const point of filteredDevPoints) {
+      if (!point.eiaPlantCode) continue;
+      const plant = plantsByEia.get(point.eiaPlantCode);
+      if (plant) capacityById.set(plant.id, plant.nameplateCapacityMW);
+    }
+    if (capacityById.size === 0) return [];
+    const relevantIds = new Set(capacityById.keys());
+    const monthMap = new Map<string, { sum: number; count: number }>();
+    for (const row of devMonthlyRows) {
+      if (!relevantIds.has(row.plant_id) || row.mwh == null) continue;
+      const cap = capacityById.get(row.plant_id)!;
+      if (cap <= 0) continue;
+      const [yr, mo] = row.month.split('-').map(Number);
+      const maxMwh = cap * new Date(yr, mo, 0).getDate() * 24;
+      const cf = Math.min(1, Math.max(0, row.mwh / maxMwh));
+      const agg = monthMap.get(row.month) ?? { sum: 0, count: 0 };
+      monthMap.set(row.month, { sum: agg.sum + cf, count: agg.count + 1 });
     }
     return Array.from(monthMap.entries())
-      .map(([month, { total, count }]) => ({ month, benchmark: total / count }))
+      .map(([month, { sum, count }]) => ({ month, dev: sum / count }))
       .sort((a, b) => a.month.localeCompare(b.month));
-  }, [plants, statsMap, isoFilter, stateFilter, techFilter]);
+  }, [devMonthlyRows, filteredDevPoints, plantsByEia]);
+
+  // Benchmark line: directly from the fetched regional trend
+  const benchmarkLineData = useMemo(() => {
+    return benchmarkTrend.map(r => ({ month: r.month, benchmark: r.factor }));
+  }, [benchmarkTrend]);
 
   const chartData = useMemo(() => {
     const monthMap = new Map<string, { month: string; dev?: number; benchmark?: number }>();
@@ -736,7 +766,11 @@ export default function DeveloperDetailView({ developer, onBack, onAssetClick, o
                 {developer.name} vs. system average for the same filter scope
               </p>
             </div>
-            {chartData.length === 0 ? (
+            {perfLoading ? (
+              <div className="flex items-center justify-center h-[240px] text-sm text-slate-600">
+                Loading generation data…
+              </div>
+            ) : chartData.length === 0 ? (
               <div className="flex items-center justify-center h-[240px] text-sm text-slate-600">
                 No generation data available for assets matching these filters.
               </div>
