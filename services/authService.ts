@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { supabase } from './supabaseClient';
 
 // -------------------------------------------------------
@@ -144,26 +143,26 @@ export async function removeFromWatchlist(userId: string, plantId: string): Prom
 }
 
 // -------------------------------------------------------
-// Admin operations (service role key — admin only)
+// Admin operations (authenticated admin user + RLS)
 // -------------------------------------------------------
 
-function getAdminClient() {
-  const url = import.meta.env.VITE_SUPABASE_URL as string;
-  const serviceKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY as string;
-  if (!url || !serviceKey) throw new Error('Admin credentials not available');
-  return createClient(url, serviceKey, { auth: { persistSession: false } });
-}
-
 export async function fetchAllUsers(): Promise<AdminUserRow[]> {
-  const admin = getAdminClient();
-  const { data, error } = await admin.from('admin_user_list').select('*');
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, email, role, created_at')
+    .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data ?? []) as AdminUserRow[];
+  return (data ?? []).map((row: any) => ({
+    id: row.id,
+    email: row.email,
+    role: row.role,
+    created_at: row.created_at,
+    last_sign_in_at: null,
+  })) as AdminUserRow[];
 }
 
 export async function setUserRole(userId: string, role: UserRole): Promise<void> {
-  const admin = getAdminClient();
-  const { error } = await admin
+  const { error } = await supabase
     .from('profiles')
     .update({ role })
     .eq('id', userId);
@@ -175,10 +174,9 @@ export async function setUserRole(userId: string, role: UserRole): Promise<void>
 // -------------------------------------------------------
 
 export async function fetchDataHealth() {
-  const admin = getAdminClient();
   const [plantRes, genRes] = await Promise.allSettled([
-    admin.from('plants').select('fuel_source, last_updated', { count: 'exact', head: false }),
-    admin.from('monthly_generation').select('id', { count: 'exact', head: true }),
+    supabase.from('plants').select('fuel_source, last_updated', { count: 'exact', head: false }),
+    supabase.from('monthly_generation').select('id', { count: 'exact', head: true }),
   ]);
 
   const plants = plantRes.status === 'fulfilled' ? (plantRes.value.data ?? []) : [];
@@ -204,20 +202,19 @@ export async function fetchAdminUserActivity(monthStart: string): Promise<{
   daily: AdminDailyActivityRow[];
   users: AdminUserDailyActivityRow[];
 }> {
-  const admin = getAdminClient();
   const start = new Date(`${monthStart}T00:00:00Z`);
   const end = new Date(start);
   end.setUTCMonth(end.getUTCMonth() + 1);
   const endIso = end.toISOString().slice(0, 10);
 
   const [{ data: dailyData, error: dailyError }, { data: userData, error: userError }] = await Promise.all([
-    admin
+    supabase
       .from('admin_user_activity_daily')
       .select('*')
       .gte('day', monthStart)
       .lt('day', endIso)
       .order('day', { ascending: true }),
-    admin
+    supabase
       .from('admin_user_activity_user_daily')
       .select('*')
       .gte('day', monthStart)
@@ -240,20 +237,18 @@ export async function fetchAdminMonthlyCosts(monthStart: string): Promise<{
   totals: AdminMonthlyCostTotal[];
   forecast: AdminCostForecastPoint[];
 }> {
-  const admin = getAdminClient();
-
   const [{ data: linesData, error: linesError }, { data: totalsData, error: totalsError }, { data: forecastData, error: forecastError }] = await Promise.all([
-    admin
+    supabase
       .from('admin_platform_cost_monthly_lines')
       .select('*')
       .eq('month_start', monthStart)
       .order('amount_usd', { ascending: false }),
-    admin
+    supabase
       .from('admin_platform_cost_monthly_totals')
       .select('*')
       .order('month_start', { ascending: false })
       .limit(12),
-    admin.rpc('admin_cost_forecast', { months_ahead: 3 }),
+    supabase.rpc('admin_cost_forecast', { months_ahead: 3 }),
   ]);
 
   if (linesError) throw linesError;
