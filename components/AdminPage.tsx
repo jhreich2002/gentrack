@@ -1,8 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-} from 'recharts';
-import {
   fetchAllUsers,
   setUserRole,
   fetchAdminUserActivity,
@@ -142,18 +139,6 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
     () => allMonths.reduce((sum, t) => sum + Number(t.total_usd || 0), 0),
     [allMonths]
   );
-
-  const cumulativeData = useMemo(() => {
-    let running = 0;
-    return allMonths.map(t => {
-      running += Number(t.total_usd || 0);
-      return {
-        month: new Date(`${t.month_start}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-        cumulative: parseFloat(running.toFixed(2)),
-        monthTotal: parseFloat(Number(t.total_usd || 0).toFixed(2)),
-      };
-    });
-  }, [allMonths]);
 
   const allServices = useMemo(() => {
     const totals = new Map<string, { type: string; total: number }>();
@@ -467,51 +452,7 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
                 </div>
               </div>
 
-              {/* Cumulative spend chart */}
-              {cumulativeData.length > 0 && (
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-5">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-4">
-                    Cumulative Spend
-                  </div>
-                  <ResponsiveContainer width="100%" height={160}>
-                    <AreaChart data={cumulativeData} margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="costGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                      <XAxis dataKey="month" tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} />
-                      <YAxis
-                        tick={{ fill: '#64748b', fontSize: 10 }}
-                        axisLine={false}
-                        tickLine={false}
-                        tickFormatter={(v) => `$${v}`}
-                        width={52}
-                      />
-                      <Tooltip
-                        contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 11 }}
-                        labelStyle={{ color: '#94a3b8', marginBottom: 4 }}
-                        formatter={(value: number, name: string) =>
-                          name === 'cumulative'
-                            ? [`$${value.toFixed(2)}`, 'Cumulative']
-                            : [`$${value.toFixed(2)}`, 'Month total']
-                        }
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="cumulative"
-                        stroke="#8b5cf6"
-                        strokeWidth={2}
-                        fill="url(#costGrad)"
-                        dot={{ r: 3, fill: '#8b5cf6', strokeWidth: 0 }}
-                        activeDot={{ r: 5 }}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
+
 
               {/* Service × Month matrix */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
