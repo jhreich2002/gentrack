@@ -232,32 +232,29 @@ export async function fetchAdminUserActivity(monthStart: string): Promise<{
   };
 }
 
-export async function fetchAdminMonthlyCosts(monthStart: string): Promise<{
+export async function fetchAdminMonthlyCosts(): Promise<{
   lines: AdminMonthlyCostLine[];
   totals: AdminMonthlyCostTotal[];
   forecast: AdminCostForecastPoint[];
 }> {
-  const [{ data: linesData, error: linesError }, { data: totalsData, error: totalsError }, { data: forecastData, error: forecastError }] = await Promise.all([
+  const [{ data: linesData, error: linesError }, { data: totalsData, error: totalsError }] = await Promise.all([
     supabase
       .from('admin_platform_cost_monthly_lines')
       .select('*')
-      .eq('month_start', monthStart)
+      .order('month_start', { ascending: true })
       .order('amount_usd', { ascending: false }),
     supabase
       .from('admin_platform_cost_monthly_totals')
       .select('*')
-      .order('month_start', { ascending: false })
-      .limit(12),
-    supabase.rpc('admin_cost_forecast', { months_ahead: 3 }),
+      .order('month_start', { ascending: true }),
   ]);
 
   if (linesError) throw linesError;
   if (totalsError) throw totalsError;
-  if (forecastError) throw forecastError;
 
   return {
     lines: (linesData ?? []) as AdminMonthlyCostLine[],
     totals: (totalsData ?? []) as AdminMonthlyCostTotal[],
-    forecast: (forecastData ?? []) as AdminCostForecastPoint[],
+    forecast: [],
   };
 }

@@ -1,5 +1,8 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+} from 'recharts';
+import {
   fetchAllUsers,
   setUserRole,
   fetchAdminUserActivity,
@@ -8,7 +11,6 @@ import {
   AdminUserDailyActivityRow,
   AdminMonthlyCostLine,
   AdminMonthlyCostTotal,
-  AdminCostForecastPoint,
   AdminUserRow,
   UserRole,
 } from '../services/authService';
@@ -43,7 +45,6 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
 
   const [costLines, setCostLines] = useState<AdminMonthlyCostLine[]>([]);
   const [monthlyTotals, setMonthlyTotals] = useState<AdminMonthlyCostTotal[]>([]);
-  const [forecast, setForecast] = useState<AdminCostForecastPoint[]>([]);
   const [costLoading, setCostLoading] = useState(true);
   const [costError, setCostError] = useState<string | null>(null);
 
@@ -78,14 +79,13 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
     }
   }, []);
 
-  const loadCosts = useCallback(async (month: string) => {
+  const loadCosts = useCallback(async () => {
     setCostLoading(true);
     setCostError(null);
     try {
-      const data = await fetchAdminMonthlyCosts(month);
+      const data = await fetchAdminMonthlyCosts();
       setCostLines(data.lines);
       setMonthlyTotals(data.totals);
-      setForecast(data.forecast);
     } catch (err: any) {
       setCostError(err.message ?? 'Failed to load monthly costs');
     } finally {
@@ -99,8 +99,14 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
 
   useEffect(() => {
     loadActivity(selectedMonth);
-    loadCosts(selectedMonth);
-  }, [selectedMonth, loadActivity, loadCosts]);
+  }, [selectedMonth, loadActivity]);
+
+  useEffect(() => {
+    loadCosts();
+    // Refresh costs once per day
+    const id = setInterval(loadCosts, 24 * 60 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [loadCosts]);
 
   const monthOptions = useMemo(() => {
     const options = new Set<string>();
@@ -113,9 +119,62 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
     return Array.from(options).sort((a, b) => b.localeCompare(a));
   }, [monthlyTotals, selectedMonth]);
 
-  const selectedMonthTotal = useMemo(() => {
-    return monthlyTotals.find(t => t.month_start === selectedMonth)?.total_usd ?? costLines.reduce((sum, row) => sum + Number(row.amount_usd || 0), 0);
-  }, [monthlyTotals, costLines, selectedMonth]);
+  // Cost memos
+  const selectedMonthLines = useMemo(
+    () => costLines.filter(c => c.month_start === selectedMonth),
+    [costLines, selectedMonth]
+  );
+
+  const selectedMonthTotal = useMemo(
+    () => monthlyTotals.find(t => t.month_start === selectedMonth)?.total_usd
+      ?? selectedMonthLines.reduce((sum, c) => sum + Number(c.amount_usd || 0), 0),
+    [monthlyTotals, selectedMonthLines, selectedMonth]
+  );
+
+  const allMonths = useMemo(
+    () => [...monthlyTotals].sort((a, b) => a.month_start.localeCompare(b.month_start)),
+    [monthlyTotals]
+  );
+
+  const earliestMonth = allMonths[0]?.month_start ?? null;
+
+  const cumulativeTotal = useMemo(
+    () => allMonths.reduce((sum, t) => sum + Number(t.total_usd || 0), 0),
+    [allMonths]
+  );
+
+  const cumulativeData = useMemo(() => {
+    let running = 0;
+    return allMonths.map(t => {
+      running += Number(t.total_usd || 0);
+      return {
+        month: new Date(`${t.month_start}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        cumulative: parseFloat(running.toFixed(2)),
+        monthTotal: parseFloat(Number(t.total_usd || 0).toFixed(2)),
+      };
+    });
+  }, [allMonths]);
+
+  const allServices = useMemo(() => {
+    const totals = new Map<string, { type: string; total: number }>();
+    for (const c of costLines) {
+      const existing = totals.get(c.service_name) ?? { type: c.cost_type, total: 0 };
+      existing.total += Number(c.amount_usd || 0);
+      totals.set(c.service_name, existing);
+    }
+    return Array.from(totals.entries())
+      .sort((a, b) => b[1].total - a[1].total)
+      .map(([name, meta]) => ({ name, type: meta.type }));
+  }, [costLines]);
+
+  const costMatrix = useMemo(() => {
+    const matrix = new Map<string, Map<string, number>>();
+    for (const c of costLines) {
+      if (!matrix.has(c.service_name)) matrix.set(c.service_name, new Map());
+      matrix.get(c.service_name)!.set(c.month_start, Number(c.amount_usd || 0));
+    }
+    return matrix;
+  }, [costLines]);
 
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
 
@@ -140,7 +199,7 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
   }, [dailyUserActivity]);
 
   const dayOptions = useMemo(() => {
-    const days = Array.from(new Set(sortedUserActivity.map((r) => r.day))).sort((a, b) => b.localeCompare(a));
+    const days = Array.from(new Set(sortedUserActivity.map((r) => r.day as string))).sort((a, b) => b.localeCompare(a));
     return days;
   }, [sortedUserActivity]);
 
@@ -355,9 +414,22 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
 
         {/* ── Platform Cost ─────────────────────────────── */}
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
-          <div className="mb-6">
-            <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Platform Cost</h2>
-            <p className="text-xs text-slate-600">Monthly cost buildup by service, fixed subscriptions, and 3-month forecast</p>
+          <div className="flex items-center justify-between mb-6 gap-4">
+            <div>
+              <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Platform Cost</h2>
+              <p className="text-xs text-slate-600">Service cost matrix by month · auto-refreshes daily</p>
+            </div>
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-300 focus:outline-none focus:border-blue-600"
+            >
+              {monthOptions.map((month) => (
+                <option key={month} value={month}>
+                  {new Date(`${month}T00:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                </option>
+              ))}
+            </select>
           </div>
 
           {costLoading ? (
@@ -366,59 +438,139 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
             <div className="text-red-400 text-sm">{costError}</div>
           ) : (
             <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+              {/* Stat cards */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Monthly Total</div>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">
+                    {new Date(`${selectedMonth}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })} Total
+                  </div>
                   <div className="text-2xl font-black text-white">${Number(selectedMonthTotal || 0).toFixed(2)}</div>
                 </div>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
                   <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Variable</div>
                   <div className="text-2xl font-black text-amber-400">
-                    ${costLines.filter(c => c.cost_type === 'variable').reduce((sum, c) => sum + Number(c.amount_usd || 0), 0).toFixed(2)}
+                    ${selectedMonthLines.filter(c => c.cost_type === 'variable').reduce((sum, c) => sum + Number(c.amount_usd || 0), 0).toFixed(2)}
                   </div>
                 </div>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
                   <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Fixed</div>
                   <div className="text-2xl font-black text-indigo-400">
-                    ${costLines.filter(c => c.cost_type === 'fixed').reduce((sum, c) => sum + Number(c.amount_usd || 0), 0).toFixed(2)}
+                    ${selectedMonthLines.filter(c => c.cost_type === 'fixed').reduce((sum, c) => sum + Number(c.amount_usd || 0), 0).toFixed(2)}
                   </div>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">
+                    Cumulative{earliestMonth ? ` since ${new Date(`${earliestMonth}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}` : ''}
+                  </div>
+                  <div className="text-2xl font-black text-violet-400">${cumulativeTotal.toFixed(2)}</div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                  <h3 className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3">Service Cost Buildup</h3>
-                  <div className="space-y-2">
-                    {costLines.length === 0 ? (
-                      <div className="text-xs text-slate-600">No cost line items found for this month.</div>
-                    ) : costLines.map((line, idx) => (
-                      <div key={`${line.service_name}-${idx}`} className="flex items-center justify-between py-2 border-b border-slate-800 text-xs">
-                        <div className="text-slate-300">{line.service_name}</div>
-                        <div className="flex items-center gap-3">
-                          <span className={`text-[10px] uppercase font-bold ${line.cost_type === 'fixed' ? 'text-indigo-400' : 'text-amber-400'}`}>{line.cost_type}</span>
-                          <span className="font-mono text-white">${Number(line.amount_usd || 0).toFixed(2)}</span>
-                        </div>
-                      </div>
-                    ))}
+              {/* Cumulative spend chart */}
+              {cumulativeData.length > 0 && (
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-5">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-4">
+                    Cumulative Spend
                   </div>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <AreaChart data={cumulativeData} margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="costGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
+                          <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                      <XAxis dataKey="month" tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <YAxis
+                        tick={{ fill: '#64748b', fontSize: 10 }}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(v) => `$${v}`}
+                        width={52}
+                      />
+                      <Tooltip
+                        contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 11 }}
+                        labelStyle={{ color: '#94a3b8', marginBottom: 4 }}
+                        formatter={(value: number, name: string) =>
+                          name === 'cumulative'
+                            ? [`$${value.toFixed(2)}`, 'Cumulative']
+                            : [`$${value.toFixed(2)}`, 'Month total']
+                        }
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="cumulative"
+                        stroke="#8b5cf6"
+                        strokeWidth={2}
+                        fill="url(#costGrad)"
+                        dot={{ r: 3, fill: '#8b5cf6', strokeWidth: 0 }}
+                        activeDot={{ r: 5 }}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
                 </div>
+              )}
 
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
-                  <h3 className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3">3-Month Forecast</h3>
-                  <div className="space-y-2">
-                    {forecast.length === 0 ? (
-                      <div className="text-xs text-slate-600">Forecast unavailable until at least one month of cost data exists.</div>
-                    ) : forecast.map((point) => (
-                      <div key={point.month_start} className="flex items-center justify-between py-2 border-b border-slate-800 text-xs">
-                        <span className="text-slate-300">
-                          {new Date(`${point.month_start}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
-                        </span>
-                        <span className="font-mono text-emerald-400">${Number(point.projected_total_usd || 0).toFixed(2)}</span>
-                      </div>
-                    ))}
-                  </div>
+              {/* Service × Month matrix */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                <div className="overflow-x-auto custom-scrollbar">
+                  {allServices.length === 0 ? (
+                    <div className="text-xs text-slate-600 p-4">No cost data available yet.</div>
+                  ) : (
+                    <table className="text-xs w-full min-w-max">
+                      <thead>
+                        <tr className="border-b border-slate-800 bg-slate-900/60">
+                          <th className="text-left py-3 px-4 font-black text-[10px] text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-900/60 z-10 min-w-[180px]">Service</th>
+                          {allMonths.map(t => (
+                            <th key={t.month_start} className="text-right py-3 px-4 font-black text-[10px] text-slate-500 uppercase tracking-widest whitespace-nowrap">
+                              {new Date(`${t.month_start}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allServices.map(svc => (
+                          <tr key={svc.name} className="border-b border-slate-800/50 hover:bg-slate-900/40">
+                            <td className="py-2.5 px-4 sticky left-0 bg-slate-950 hover:bg-slate-900/40 z-10">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${svc.type === 'fixed' ? 'bg-indigo-900/40 text-indigo-400' : 'bg-amber-900/40 text-amber-400'}`}>
+                                  {svc.type}
+                                </span>
+                                <span className="text-slate-300">{svc.name}</span>
+                              </div>
+                            </td>
+                            {allMonths.map(t => {
+                              const amt = costMatrix.get(svc.name)?.get(t.month_start);
+                              return (
+                                <td key={t.month_start} className="py-2.5 px-4 text-right font-mono whitespace-nowrap">
+                                  {amt != null ? (
+                                    <span className="text-white">${amt.toFixed(2)}</span>
+                                  ) : (
+                                    <span className="text-slate-700">—</span>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-700 bg-slate-900/60">
+                          <td className="py-3 px-4 font-black text-slate-400 text-[10px] uppercase tracking-widest sticky left-0 bg-slate-900/60 z-10">Monthly Total</td>
+                          {allMonths.map(t => (
+                            <td key={t.month_start} className="py-3 px-4 text-right font-mono font-black text-violet-400 whitespace-nowrap">
+                              ${Number(monthlyTotals.find(m => m.month_start === t.month_start)?.total_usd || 0).toFixed(2)}
+                            </td>
+                          ))}
+                        </tr>
+                      </tfoot>
+                    </table>
+                  )}
                 </div>
               </div>
+
             </div>
           )}
         </section>
