@@ -357,7 +357,7 @@ const PlantDetailView: React.FC<Props> = ({
                 </div>
                 <div className="h-48 w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={ttmTrendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <AreaChart data={ttmTrendData} margin={{ top: 10, right: 40, left: -20, bottom: 0 }}>
                       <defs>
                         <linearGradient id="colorFactor" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor={COLORS[plant.fuelSource]} stopOpacity={0.25}/>
