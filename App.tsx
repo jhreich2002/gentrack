@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useTransition } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useTransition, useCallback } from 'react';
 import { PowerPlant, Region, FuelSource, CapacityFactorStats, AnalysisResult } from './types';
 import { REGIONS, FUEL_SOURCES, COLORS, SUBREGIONS } from './constants';
 import { fetchPowerPlants, fetchGenerationHistory, fetchRegionalTrend, fetchSubRegionalTrend, calculateCapacityFactorStats, getDataTimestamp } from './services/dataService';
@@ -270,19 +270,22 @@ const App: React.FC = () => {
     }).catch(() => {});
   }, [session, view, activeTab, search, selectedFuels, selectedSubRegions, minCurtailmentLag, maxCFThreshold]);
 
+  const refreshAllPlantData = useCallback(async () => {
+    const { plants: data, statsMap: stats } = await fetchPowerPlants();
+    setPlants(data);
+    setStatsMap(stats);
+    const uniqueOwners = [...new Set(data.map(p => p.owner))].sort();
+    setSelectedOwners(uniqueOwners);
+  }, []);
 
   useEffect(() => {
     const init = async () => {
       setLoading(true);
-      const { plants: data, statsMap: stats } = await fetchPowerPlants();
-      setPlants(data);
-      setStatsMap(stats);
-      const uniqueOwners = [...new Set(data.map(p => p.owner))].sort();
-      setSelectedOwners(uniqueOwners);
+      await refreshAllPlantData();
       setLoading(false);
     };
     init();
-  }, []);
+  }, [refreshAllPlantData]);
 
   useEffect(() => {
     supabase
@@ -670,7 +673,11 @@ const App: React.FC = () => {
 
       <main className="flex-1 overflow-y-auto bg-slate-950 p-8 custom-scrollbar relative">
         {view === 'admin' && userRole === 'admin' ? (
-          <AdminPage currentUserId={session.user.id} onBack={() => setView('dashboard')} />
+          <AdminPage
+            currentUserId={session.user.id}
+            onBack={() => setView('dashboard')}
+            onDataIngested={refreshAllPlantData}
+          />
         ) : view === 'dashboard' ? (
           <>
             <header className="flex justify-between items-start mb-8">

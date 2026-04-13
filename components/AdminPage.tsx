@@ -4,6 +4,7 @@ import {
   setUserRole,
   fetchAdminUserActivity,
   fetchAdminMonthlyCosts,
+  fetchAdminIngestionFreshness,
   AdminDailyActivityRow,
   AdminUserDailyActivityRow,
   AdminMonthlyCostLine,
@@ -15,6 +16,7 @@ import {
 interface Props {
   currentUserId: string;
   onBack: () => void;
+  onDataIngested?: () => Promise<void> | void;
 }
 
 type WorkflowStatus = 'idle' | 'triggering' | 'queued' | 'in_progress' | 'success' | 'failure';
@@ -29,7 +31,7 @@ function monthStart(date: Date): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-01`;
 }
 
-const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
+const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) => {
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
@@ -47,6 +49,9 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
 
   const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus>('idle');
   const [lastRun, setLastRun] = useState<string | null>(null);
+  const [workflowDetail, setWorkflowDetail] = useState<string | null>(null);
+  const [preRunLatestMonth, setPreRunLatestMonth] = useState<string | null>(null);
+  const [preRunLatestPlantUpdateAt, setPreRunLatestPlantUpdateAt] = useState<string | null>(null);
   const [roleLoading, setRoleLoading] = useState<string | null>(null);
 
   const loadUsers = useCallback(async () => {
@@ -205,14 +210,69 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
       const json = await res.json();
       const run = json.workflow_runs?.[0];
       if (!run) return;
+
+      if (run.status === 'completed') {
+        if (run.conclusion !== 'success') {
+          setWorkflowStatus('failure');
+          setWorkflowDetail(`GitHub workflow failed (${run.conclusion ?? 'unknown'}).`);
+          setLastRun(run.updated_at);
+          return;
+        }
+
+        const freshness = await fetchAdminIngestionFreshness();
+        const latestMonth = freshness.latestGenerationMonth;
+        const latestPlantUpdate = freshness.latestPlantUpdateAt;
+        const monthAdvanced =
+          preRunLatestMonth === null
+            ? Boolean(latestMonth)
+            : Boolean(latestMonth && latestMonth > preRunLatestMonth);
+        const plantUpdated =
+          preRunLatestPlantUpdateAt === null
+            ? Boolean(latestPlantUpdate)
+            : Boolean(latestPlantUpdate && latestPlantUpdate > preRunLatestPlantUpdateAt);
+
+        if (!monthAdvanced || !plantUpdated) {
+          setWorkflowStatus('failure');
+          setWorkflowDetail(
+            `Workflow completed but no new ingestion detected (latest month ${latestMonth ?? 'none'}).`
+          );
+          setLastRun(run.updated_at);
+          return;
+        }
+
+        setWorkflowStatus('success');
+        setWorkflowDetail(`Ingestion confirmed at month ${latestMonth}. Triggering news refresh for curtailed plants...`);
+        setLastRun(run.updated_at);
+
+        // Trigger news-ingest for newly/still curtailed plants
+        try {
+          const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+          const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+          if (sbUrl && sbKey) {
+            fetch(`${sbUrl}/functions/v1/news-ingest`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${sbKey}`,
+              },
+              body: JSON.stringify({ plantCount: 30, limit: 15 }),
+            }).catch(() => {});
+          }
+        } catch { /* non-blocking */ }
+
+        if (onDataIngested) {
+          await Promise.resolve(onDataIngested());
+        }
+        return;
+      }
+
       const status: WorkflowStatus =
-        run.status === 'completed'
-          ? run.conclusion === 'success' ? 'success' : 'failure'
-          : run.status === 'in_progress' ? 'in_progress' : 'queued';
+        run.status === 'in_progress' ? 'in_progress' : 'queued';
       setWorkflowStatus(status);
+      setWorkflowDetail(null);
       setLastRun(run.updated_at);
     } catch { /* swallow */ }
-  }, []);
+  }, [onDataIngested, preRunLatestMonth, preRunLatestPlantUpdateAt]);
 
   // Poll every 10s while running/queued
   useEffect(() => {
@@ -224,6 +284,15 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
   const triggerFetch = async () => {
     const pat = import.meta.env.VITE_GITHUB_ADMIN_PAT as string;
     if (!pat) { alert('VITE_GITHUB_ADMIN_PAT is not configured.'); return; }
+    try {
+      const freshness = await fetchAdminIngestionFreshness();
+      setPreRunLatestMonth(freshness.latestGenerationMonth);
+      setPreRunLatestPlantUpdateAt(freshness.latestPlantUpdateAt);
+    } catch {
+      setPreRunLatestMonth(null);
+      setPreRunLatestPlantUpdateAt(null);
+    }
+    setWorkflowDetail(null);
     setWorkflowStatus('triggering');
     try {
       const res = await fetch(
@@ -543,6 +612,11 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack }) => {
               </span>
             )}
           </div>
+          {workflowDetail && (
+            <p className={`mt-3 text-[11px] ${workflowStatus === 'failure' ? 'text-red-400' : 'text-slate-500'}`}>
+              {workflowDetail}
+            </p>
+          )}
         </section>
 
         {/* ── User Management ───────────────────────────── */}

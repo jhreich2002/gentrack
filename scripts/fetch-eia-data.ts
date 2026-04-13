@@ -39,10 +39,11 @@ const RATE_LIMIT_DELAY_MS = 1_500; // delay between paginated requests
 const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL  || '';
 const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-// Data window — update these when new EIA releases are published
-const EIA923_START_MONTH = '2024-01';  // EIA-923 January 2024 (first month of current window)
-const EIA923_END_MONTH   = '2025-11';  // EIA-923 November 2025 (latest published final release)
-const EIA860_SURVEY_END  = '2024-12';  // EIA-860 2024 annual survey — December snapshot
+// Dynamic data window configuration
+const EIA923_TRAILING_MONTHS = 24;
+const FALLBACK_EIA923_END_MONTH = '2025-12';
+const FALLBACK_EIA860_SURVEY_MONTH = '2024-12';
+const MIN_EXPECTED_EIA923_MONTH = '2025-12';
 
 // -------------------------------------------------------------------
 // Types (mirrored from ../types.ts for standalone execution)
@@ -128,6 +129,19 @@ function getSubRegion(state: string, region: string): string {
   return subs[hash % subs.length];
 }
 
+function isMonthString(value: string): boolean {
+  return /^\d{4}-\d{2}$/.test(value);
+}
+
+function monthMinus(month: string, count: number): string {
+  const [yearStr, monthStr] = month.split('-');
+  const year = parseInt(yearStr, 10);
+  const monthNum = parseInt(monthStr, 10);
+  const date = new Date(Date.UTC(year, monthNum - 1, 1));
+  date.setUTCMonth(date.getUTCMonth() - count);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
 // -------------------------------------------------------------------
 // EIA fetch helpers
 // -------------------------------------------------------------------
@@ -164,11 +178,53 @@ async function fetchWithRetry(url: string, attempts = RETRY_ATTEMPTS): Promise<a
   }
 }
 
+async function fetchLatestEIA923MonthForFuel(fuel2002: string): Promise<string | null> {
+  const url = new URL(`${EIA_BASE_URL}electricity/facility-fuel/data/`);
+  url.searchParams.set('api_key', EIA_API_KEY);
+  url.searchParams.set('frequency', 'monthly');
+  url.searchParams.set('data[0]', 'generation');
+  url.searchParams.set('facets[fuel2002][]', fuel2002);
+  url.searchParams.set('sort[0][column]', 'period');
+  url.searchParams.set('sort[0][direction]', 'desc');
+  url.searchParams.set('length', '1');
+  url.searchParams.set('offset', '0');
+
+  const json = await fetchWithRetry(url.toString());
+  const latest = json?.response?.data?.[0]?.period;
+  if (!latest || !isMonthString(String(latest))) return null;
+  return String(latest);
+}
+
+async function fetchLatestEIA860Month(fuelCodes: string[]): Promise<string | null> {
+  let latest: string | null = null;
+
+  for (const code of fuelCodes) {
+    const url = new URL(`${EIA_BASE_URL}electricity/operating-generator-capacity/data/`);
+    url.searchParams.set('api_key', EIA_API_KEY);
+    url.searchParams.set('frequency', 'monthly');
+    url.searchParams.append('data[]', 'nameplate-capacity-mw');
+    url.searchParams.append('facets[status][]', 'OP');
+    url.searchParams.append('facets[energy_source_code][]', code);
+    url.searchParams.set('sort[0][column]', 'period');
+    url.searchParams.set('sort[0][direction]', 'desc');
+    url.searchParams.set('length', '1');
+    url.searchParams.set('offset', '0');
+
+    const json = await fetchWithRetry(url.toString());
+    const period = json?.response?.data?.[0]?.period;
+    if (!period || !isMonthString(String(period))) continue;
+    const month = String(period);
+    if (!latest || month > latest) latest = month;
+  }
+
+  return latest;
+}
+
 /**
  * Fetch ALL records for a fuel type using offset-based pagination.
  * EIA API limits each request to 5000 records, so we page through.
  */
-async function fetchAllFuelData(fuel2002: string): Promise<any[]> {
+async function fetchAllFuelData(fuel2002: string, startMonth: string, endMonth: string): Promise<any[]> {
   const allRecords: any[] = [];
   let offset = 0;
   let totalRecords = Infinity;
@@ -183,9 +239,9 @@ async function fetchAllFuelData(fuel2002: string): Promise<any[]> {
     url.searchParams.set('sort[0][direction]', 'asc');
     url.searchParams.set('length', String(PAGE_SIZE));
     url.searchParams.set('offset', String(offset));
-    // Pin to published EIA-923 window: January 2024 – November 2025
-    url.searchParams.set('start', EIA923_START_MONTH);
-    url.searchParams.set('end',   EIA923_END_MONTH);
+    // Use dynamic EIA-923 window based on latest available published month.
+    url.searchParams.set('start', startMonth);
+    url.searchParams.set('end',   endMonth);
 
     const json = await fetchWithRetry(url.toString());
     const data = json?.response?.data || [];
@@ -224,7 +280,8 @@ interface PlantCharacteristics {
  * Returns a Map keyed by plantCode, aggregated to plant level.
  */
 async function fetchEIA860Characteristics(
-  fuelCodes: string[]
+  fuelCodes: string[],
+  surveyMonth: string
 ): Promise<Map<string, PlantCharacteristics>> {
   const allRecords: any[] = [];
   let offset = 0;
@@ -248,9 +305,9 @@ async function fetchEIA860Characteristics(
     fuelCodes.forEach(code => {
       url.searchParams.append('facets[energy_source_code][]', code);
     });
-    // Pin to EIA-860 2024 annual survey — December 2024 is the final monthly snapshot
-    url.searchParams.set('start', EIA860_SURVEY_END);
-    url.searchParams.set('end',   EIA860_SURVEY_END);
+    // Pin to latest published EIA-860 monthly survey snapshot.
+    url.searchParams.set('start', surveyMonth);
+    url.searchParams.set('end',   surveyMonth);
     url.searchParams.set('sort[0][column]', 'plantid');
     url.searchParams.set('sort[0][direction]', 'asc');
     url.searchParams.set('length', String(PAGE_SIZE));
@@ -405,7 +462,7 @@ async function main() {
   console.log(`Date:    ${new Date().toISOString()}`);
   console.log(`API Key: ${EIA_API_KEY ? '****' + EIA_API_KEY.slice(-4) : '⚠ MISSING'}`);
   console.log(`Fuels:   ${FUEL_TYPES.map(f => f.name).join(', ')}`);
-  console.log(`Window:  Trailing 2 years`);
+  console.log(`Window:  Detecting latest published EIA periods...`);
   console.log('');
 
   if (!EIA_API_KEY) {
@@ -413,6 +470,42 @@ async function main() {
     console.error('   Set it in .env or pass via environment.');
     process.exit(1);
   }
+
+  const latest923ByFuel = new Map<string, string | null>();
+  for (const fuel of FUEL_TYPES) {
+    try {
+      const latest = await fetchLatestEIA923MonthForFuel(fuel.code);
+      latest923ByFuel.set(fuel.code, latest);
+      console.log(`  ✓ Latest EIA-923 month for ${fuel.name}: ${latest ?? 'unavailable'}`);
+    } catch (err: any) {
+      console.warn(`  ⚠ Could not detect latest EIA-923 month for ${fuel.name}: ${err.message}`);
+      latest923ByFuel.set(fuel.code, null);
+    }
+  }
+
+  let latestEia923Month = FALLBACK_EIA923_END_MONTH;
+  for (const month of latest923ByFuel.values()) {
+    if (month && month > latestEia923Month) latestEia923Month = month;
+  }
+
+  if (latestEia923Month < MIN_EXPECTED_EIA923_MONTH) {
+    throw new Error(
+      `Latest EIA-923 month (${latestEia923Month}) is older than expected minimum (${MIN_EXPECTED_EIA923_MONTH}).`
+    );
+  }
+
+  const eia923StartMonth = monthMinus(latestEia923Month, EIA923_TRAILING_MONTHS - 1);
+
+  let eia860SurveyMonth = FALLBACK_EIA860_SURVEY_MONTH;
+  try {
+    const detected860 = await fetchLatestEIA860Month(FUEL_TYPES.map(f => f.eia860Code));
+    if (detected860) eia860SurveyMonth = detected860;
+  } catch (err: any) {
+    console.warn(`  ⚠ Could not detect latest EIA-860 survey month: ${err.message}`);
+  }
+
+  console.log(`  ✓ EIA-923 fetch window: ${eia923StartMonth} → ${latestEia923Month}`);
+  console.log(`  ✓ EIA-860 survey month: ${eia860SurveyMonth}`);
 
   const allPlants: PowerPlant[] = [];
   const fuelBreakdown: Record<string, number> = {};
@@ -424,7 +517,7 @@ async function main() {
     console.log(`\n▶ Fetching ${fuel.name} (${fuel.code}) — all pages...`);
     const fuelStart = Date.now();
     try {
-      const records = await fetchAllFuelData(fuel.code);
+      const records = await fetchAllFuelData(fuel.code, eia923StartMonth, latestEia923Month);
       console.log(`  ✓ Received ${records.length} total records in ${((Date.now() - fuelStart) / 1000).toFixed(1)}s`);
 
       const plants = processRecords(records, fuel.name);
@@ -459,7 +552,7 @@ async function main() {
 
   try {
     const eia860Codes = FUEL_TYPES.map(f => f.eia860Code);
-    const characteristics = await fetchEIA860Characteristics(eia860Codes);
+    const characteristics = await fetchEIA860Characteristics(eia860Codes, eia860SurveyMonth);
 
     for (const plant of dedupedPlants) {
       const ch = characteristics.get(plant.eiaPlantCode);
@@ -605,6 +698,22 @@ async function main() {
     console.log('\n▶ Upserting to Supabase...');
     const db = createClient(SUPABASE_URL, SUPABASE_KEY);
     const now = new Date().toISOString();
+    const { data: beforeMaxMonthRows, error: beforeMaxMonthError } = await db
+      .from('monthly_generation')
+      .select('month')
+      .order('month', { ascending: false })
+      .limit(1);
+
+    if (beforeMaxMonthError) {
+      throw new Error(`Supabase pre-check error: ${beforeMaxMonthError.message}`);
+    }
+
+    const beforeMaxMonth = beforeMaxMonthRows?.[0]?.month ?? null;
+    if (beforeMaxMonth && beforeMaxMonth >= latestEia923Month) {
+      throw new Error(
+        `No new EIA month to ingest. Supabase already has ${beforeMaxMonth} (latest available ${latestEia923Month}).`
+      );
+    }
 
     // Build regional avg maps once for all plants, then score each plant against its peers
     const regionalAvgMaps = buildRegionalAvgMaps(finalPlants);
@@ -665,7 +774,33 @@ async function main() {
       }
     }
 
+    const { data: afterMaxMonthRows, error: afterMaxMonthError } = await db
+      .from('monthly_generation')
+      .select('month')
+      .order('month', { ascending: false })
+      .limit(1);
+
+    if (afterMaxMonthError) {
+      throw new Error(`Supabase post-check error: ${afterMaxMonthError.message}`);
+    }
+
+    const afterMaxMonth = afterMaxMonthRows?.[0]?.month ?? null;
+    if (!afterMaxMonth) {
+      throw new Error('Supabase post-check failed: monthly_generation has no rows after ingestion.');
+    }
+    if (afterMaxMonth < latestEia923Month) {
+      throw new Error(
+        `Supabase post-check failed: latest month is ${afterMaxMonth}, expected at least ${latestEia923Month}.`
+      );
+    }
+    if (beforeMaxMonth && afterMaxMonth <= beforeMaxMonth) {
+      throw new Error(
+        `Supabase post-check failed: latest month did not advance (before=${beforeMaxMonth}, after=${afterMaxMonth}).`
+      );
+    }
+
     console.log(`  ✓ Supabase sync complete`);
+    console.log(`  ✓ Supabase max month advanced: ${beforeMaxMonth ?? 'none'} → ${afterMaxMonth}`);
   } else {
     console.log('  ℹ Supabase credentials not set — skipping DB upsert (JSON only)');
   }

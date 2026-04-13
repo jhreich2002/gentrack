@@ -50,15 +50,30 @@ jobs:
         run: npm ci
 
       - name: Fetch fresh EIA data
-        continue-on-error: true
         env:
           VITE_EIA_API_KEY: ${{ secrets.VITE_EIA_API_KEY }}
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npx --yes tsx scripts/fetch-eia-data.ts
 
+      - name: Trigger news refresh for curtailed plants
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          echo "Triggering news-ingest for newly curtailed plants..."
+          HTTP_STATUS=$(curl -s -o /tmp/news-ingest-response.json -w "%{http_code}" \
+            -X POST "${SUPABASE_URL}/functions/v1/news-ingest" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -d '{"plantCount": 30, "limit": 15}')
+          echo "news-ingest response ($HTTP_STATUS):"
+          cat /tmp/news-ingest-response.json || true
+          if [ "$HTTP_STATUS" -ge 500 ]; then
+            echo "⚠ news-ingest returned $HTTP_STATUS — continuing (non-blocking)"
+          fi
+
       - name: Commit updated data (if changed)
-        continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

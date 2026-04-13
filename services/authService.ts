@@ -55,6 +55,11 @@ export interface AdminCostForecastPoint {
   projected_total_usd: number;
 }
 
+export interface AdminIngestionFreshness {
+  latestGenerationMonth: string | null;
+  latestPlantUpdateAt: string | null;
+}
+
 // -------------------------------------------------------
 // Regular auth operations (anon key)
 // -------------------------------------------------------
@@ -256,5 +261,28 @@ export async function fetchAdminMonthlyCosts(): Promise<{
     lines: (linesData ?? []) as AdminMonthlyCostLine[],
     totals: (totalsData ?? []) as AdminMonthlyCostTotal[],
     forecast: [],
+  };
+}
+
+export async function fetchAdminIngestionFreshness(): Promise<AdminIngestionFreshness> {
+  const [{ data: monthRows, error: monthError }, { data: plantRows, error: plantError }] = await Promise.all([
+    supabase
+      .from('monthly_generation')
+      .select('month')
+      .order('month', { ascending: false })
+      .limit(1),
+    supabase
+      .from('plants')
+      .select('last_updated')
+      .order('last_updated', { ascending: false })
+      .limit(1),
+  ]);
+
+  if (monthError) throw monthError;
+  if (plantError) throw plantError;
+
+  return {
+    latestGenerationMonth: (monthRows?.[0] as any)?.month ?? null,
+    latestPlantUpdateAt: (plantRows?.[0] as any)?.last_updated ?? null,
   };
 }
