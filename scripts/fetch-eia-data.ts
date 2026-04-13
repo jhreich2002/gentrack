@@ -710,9 +710,8 @@ async function main() {
 
     const beforeMaxMonth = beforeMaxMonthRows?.[0]?.month ?? null;
     if (beforeMaxMonth && beforeMaxMonth >= latestEia923Month) {
-      throw new Error(
-        `No new EIA month to ingest. Supabase already has ${beforeMaxMonth} (latest available ${latestEia923Month}).`
-      );
+      console.log(`\nℹ No new EIA month to ingest. Supabase already has ${beforeMaxMonth} (latest available ${latestEia923Month}). Skipping upsert.`);
+      process.exit(0);
     }
 
     // Build regional avg maps once for all plants, then score each plant against its peers
