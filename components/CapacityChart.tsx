@@ -38,7 +38,7 @@ const CapacityChart: React.FC<Props> = ({ plant, stats, regionalTrend }) => {
     <div className="h-72 w-full bg-slate-800/50 rounded-xl p-4 border border-slate-700">
       <h3 className="text-sm font-medium text-slate-400 mb-4">Capacity Factor Trend (%)</h3>
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
+        <LineChart data={data} margin={{ top: 5, right: 30, left: -20, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
           <XAxis 
             dataKey="name" 
