@@ -73,6 +73,13 @@ interface PowerPlant {
   county?: string;    // County from EIA-860
   generationHistory: MonthlyGeneration[];
   location: { state: string; county?: string; lat: number; lng: number };
+  // Pre-computed stats (populated after regional averages are built)
+  ttmAvgFactor?: number;
+  curtailmentScore?: number;
+  isLikelyCurtailed?: boolean;
+  isMaintenanceOffline?: boolean;
+  trailingZeroMonths?: number;
+  dataMonthsCount?: number;
 }
 
 interface DataManifest {
@@ -122,11 +129,63 @@ const SUBREGIONS: Record<string, string[]> = {
   Alaska: ['Railbelt', 'Remote'],
 };
 
-function getSubRegion(state: string, region: string): string {
-  const subs = SUBREGIONS[region];
-  if (!subs || subs.length === 0) return 'Unknown';
-  const hash = state.charCodeAt(0) + (state.charCodeAt(1) || 0);
-  return subs[hash % subs.length];
+// State-to-sub-region mapping for multi-state ISOs.
+// Single-state ISOs (CA/CAISO, TX/ERCOT, NY/NYISO) use lat/lng in getSubRegion.
+const STATE_TO_SUBREGION: Record<string, string> = {
+  // PJM
+  PA: 'Mid-Atlantic', NJ: 'Mid-Atlantic', MD: 'Mid-Atlantic', DE: 'Mid-Atlantic', DC: 'Mid-Atlantic',
+  OH: 'Western', WV: 'Western',
+  VA: 'Southern',
+  // MISO
+  MN: 'North', WI: 'North', ND: 'North', SD: 'North', MI: 'North',
+  IL: 'Central', IN: 'Central', IA: 'Central',
+  MO: 'South',
+  // SPP
+  KS: 'North', NE: 'North',
+  OK: 'Central',
+  AR: 'South',
+  // ISO-NE
+  ME: 'Maine/NH', NH: 'Maine/NH',
+  VT: 'VT/CT/RI', CT: 'VT/CT/RI', RI: 'VT/CT/RI',
+  MA: 'Massachusetts',
+  // Northwest
+  WA: 'WA/OR Coast', OR: 'WA/OR Coast',
+  ID: 'Inland PNW',
+  MT: 'Mountain', WY: 'Mountain',
+  // Southwest
+  AZ: 'Arizona/Nevada', NV: 'Arizona/Nevada',
+  NM: 'New Mexico',
+  CO: 'Colorado', UT: 'Colorado',
+  // Southeast
+  FL: 'Florida',
+  SC: 'Carolinas', NC: 'Carolinas',
+  GA: 'Deep South', AL: 'Deep South', MS: 'Deep South',
+  TN: 'Deep South', KY: 'Deep South', LA: 'Deep South',
+  // Single-island defaults for Hawaii and Alaska
+  HI: 'Oahu',
+  AK: 'Railbelt',
+};
+
+function getSubRegion(state: string, region: string, lat?: number, lng?: number): string {
+  // Coordinate-based assignment for single-state ISOs
+  if (state === 'CA' && lat != null) {
+    if (lat > 36.0) return 'NP15';
+    if (lat > 34.5) return 'ZP26';
+    return 'SP15';
+  }
+  if (state === 'TX' && lat != null && lng != null) {
+    if (lng < -100) return 'West';
+    if (lat > 32.5) return 'North';
+    if (lat < 29.5) return 'Coast';
+    return 'South';
+  }
+  if (state === 'NY' && lat != null) {
+    if (lat > 42.5) return 'Upstate';
+    if (lat > 41.0) return 'Hudson Valley';
+    return 'NYC/Long Island';
+  }
+  // State-based lookup for all other ISOs
+  return STATE_TO_SUBREGION[state] ?? (SUBREGIONS[region]?.[0] ?? 'Unknown');
 }
 
 function isMonthString(value: string): boolean {
@@ -578,6 +637,19 @@ async function main() {
     console.warn('  ⚠ Proceeding with estimated capacities from EIA-923 only');
   }
 
+  // Re-assign subRegion now that lat/lng are populated from EIA-860.
+  // The initial assignment in processRecords lacked coordinates; this corrects
+  // single-state ISO zones (CAISO NP15/SP15/ZP26, ERCOT West/North/South/Coast,
+  // NYISO Upstate/Hudson Valley/NYC) using actual plant coordinates.
+  for (const plant of dedupedPlants) {
+    plant.subRegion = getSubRegion(
+      plant.location.state,
+      plant.region,
+      plant.location.lat || undefined,
+      plant.location.lng || undefined,
+    );
+  }
+
   // NOTE: EIA API v2 does not expose EIA-860 Schedule 2 ownership percentage
   // data via any endpoint. The owners[] field is reserved for a future
   // integration (e.g. bulk Excel download parser). Owner name is sourced
@@ -589,14 +661,32 @@ async function main() {
   // ─── Compute pre-aggregated stats for each plant ─────────────────
   const TYPICAL: Record<string, number> = { Solar: 0.22, Wind: 0.35, Nuclear: 0.92 };
 
-  // First pass: build regional monthly average CF from all plants (only active months, CF > 2%).
-  // Key: "region-fuelSource" → Map<"YYYY-MM", avgCF>
-  function buildRegionalAvgMaps(plants: PowerPlant[]): Map<string, Map<string, number>> {
-    const accum = new Map<string, Map<string, { sum: number; count: number }>>();
+  // First pass: build regional and sub-regional monthly average CF from all plants
+  // (only active months, CF > 2%).
+  // regionMaps key:    "region-fuelSource"              → Map<"YYYY-MM", avgCF>
+  // subRegionMaps key: "region|subRegion|fuelSource"    → Map<"YYYY-MM", avgCF>
+  // subRegionPlantCount: same sub-region key            → number of distinct plants
+  function buildRegionalAvgMaps(plants: PowerPlant[]): {
+    regionMaps: Map<string, Map<string, number>>;
+    subRegionMaps: Map<string, Map<string, number>>;
+    subRegionPlantCount: Map<string, number>;
+  } {
+    const regionAccum    = new Map<string, Map<string, { sum: number; count: number }>>();
+    const subRegionAccum = new Map<string, Map<string, { sum: number; count: number }>>();
+    const subRegionPlants = new Map<string, Set<string>>();
+
     for (const plant of plants) {
-      const key = `${plant.region}-${plant.fuelSource}`;
-      if (!accum.has(key)) accum.set(key, new Map());
-      const monthMap = accum.get(key)!;
+      const regionKey    = `${plant.region}-${plant.fuelSource}`;
+      const subRegionKey = `${plant.region}|${plant.subRegion}|${plant.fuelSource}`;
+
+      if (!regionAccum.has(regionKey))    regionAccum.set(regionKey, new Map());
+      if (!subRegionAccum.has(subRegionKey)) subRegionAccum.set(subRegionKey, new Map());
+      if (!subRegionPlants.has(subRegionKey)) subRegionPlants.set(subRegionKey, new Set());
+      subRegionPlants.get(subRegionKey)!.add(plant.eiaPlantCode);
+
+      const regionMonthMap    = regionAccum.get(regionKey)!;
+      const subRegionMonthMap = subRegionAccum.get(subRegionKey)!;
+
       for (const h of plant.generationHistory) {
         if (h.mwh === null || h.mwh === 0) continue;
         const [yr, mo] = h.month.split('-').map(Number);
@@ -605,21 +695,44 @@ async function main() {
         if (max <= 0) continue;
         const cf = Math.min(1, Math.max(0, h.mwh / max));
         if (cf < 0.02) continue;
-        const prev = monthMap.get(h.month) ?? { sum: 0, count: 0 };
-        monthMap.set(h.month, { sum: prev.sum + cf, count: prev.count + 1 });
+
+        const prevR = regionMonthMap.get(h.month) ?? { sum: 0, count: 0 };
+        regionMonthMap.set(h.month, { sum: prevR.sum + cf, count: prevR.count + 1 });
+
+        const prevS = subRegionMonthMap.get(h.month) ?? { sum: 0, count: 0 };
+        subRegionMonthMap.set(h.month, { sum: prevS.sum + cf, count: prevS.count + 1 });
       }
     }
-    const result = new Map<string, Map<string, number>>();
-    for (const [key, monthMap] of accum) {
-      const avgMap = new Map<string, number>();
-      for (const [month, { sum, count }] of monthMap) avgMap.set(month, sum / count);
-      result.set(key, avgMap);
+
+    function toAvgMap(accum: Map<string, Map<string, { sum: number; count: number }>>) {
+      const result = new Map<string, Map<string, number>>();
+      for (const [key, monthMap] of accum) {
+        const avgMap = new Map<string, number>();
+        for (const [month, { sum, count }] of monthMap) avgMap.set(month, sum / count);
+        result.set(key, avgMap);
+      }
+      return result;
     }
-    return result;
+
+    const subRegionPlantCount = new Map<string, number>();
+    for (const [key, plantSet] of subRegionPlants) subRegionPlantCount.set(key, plantSet.size);
+
+    return {
+      regionMaps:       toAvgMap(regionAccum),
+      subRegionMaps:    toAvgMap(subRegionAccum),
+      subRegionPlantCount,
+    };
   }
 
   // Second pass: score each plant against its regional peers.
-  function computeStats(plant: PowerPlant, regionalAvgByMonth?: Map<string, number>) {
+  // Prefers sub-region benchmark when ≥ 3 distinct plants contribute and months overlap;
+  // falls back to ISO/RTO-level average otherwise.
+  function computeStats(
+    plant: PowerPlant,
+    regionalAvgByMonth?: Map<string, number>,
+    subRegionalAvgByMonth?: Map<string, number>,
+    subRegionPlantCount?: number,
+  ) {
     const history = plant.generationHistory;
     const monthlyFactors = history.map(h => {
       if (h.mwh === null) return null;
@@ -648,15 +761,24 @@ async function main() {
       .filter((m): m is { month: string; factor: number } => m.factor !== null && m.factor > 0.02);
     const hasEnoughData = activeTtmMonths.length >= 6;
 
-    // Regional benchmark: avg CF for this region+fuel on the plant's active months
+    // Benchmark: prefer sub-region avg when ≥ 3 plants contribute and months overlap;
+    // otherwise fall back to ISO/RTO-level average, then to typical CF.
     const typical = TYPICAL[plant.fuelSource] ?? 0.3;
     let regionalRef = typical;
-    if (regionalAvgByMonth && activeTtmMonths.length > 0) {
-      const regionVals = activeTtmMonths
-        .map(m => regionalAvgByMonth.get(m.month))
+
+    const useSubRegion =
+      subRegionalAvgByMonth != null &&
+      (subRegionPlantCount ?? 0) >= 3 &&
+      activeTtmMonths.some(m => subRegionalAvgByMonth.has(m.month));
+
+    const benchmarkMap = useSubRegion ? subRegionalAvgByMonth! : regionalAvgByMonth;
+
+    if (benchmarkMap && activeTtmMonths.length > 0) {
+      const benchmarkVals = activeTtmMonths
+        .map(m => benchmarkMap.get(m.month))
         .filter((v): v is number => v !== undefined);
-      if (regionVals.length > 0) {
-        regionalRef = regionVals.reduce((a, b) => a + b, 0) / regionVals.length;
+      if (benchmarkVals.length > 0) {
+        regionalRef = benchmarkVals.reduce((a, b) => a + b, 0) / benchmarkVals.length;
       }
     }
 
@@ -672,6 +794,27 @@ async function main() {
     const dataMonthsCount = history.filter(h => h.mwh !== null).length;
     return { ttmAvgFactor: ttmAvg, curtailmentScore: score, isLikelyCurtailed, isMaintenanceOffline, trailingZeroMonths: trailingZeroCount, dataMonthsCount };
   }
+
+  // ─── Compute stats for all plants (regional + sub-regional benchmarks) ──
+  console.log('\n▶ Computing regional benchmarks and curtailment scores...');
+  const { regionMaps, subRegionMaps, subRegionPlantCount } = buildRegionalAvgMaps(finalPlants);
+  for (const p of finalPlants) {
+    const regionKey    = `${p.region}-${p.fuelSource}`;
+    const subRegionKey = `${p.region}|${p.subRegion}|${p.fuelSource}`;
+    const s = computeStats(
+      p,
+      regionMaps.get(regionKey),
+      subRegionMaps.get(subRegionKey),
+      subRegionPlantCount.get(subRegionKey),
+    );
+    p.ttmAvgFactor        = s.ttmAvgFactor;
+    p.curtailmentScore    = s.curtailmentScore;
+    p.isLikelyCurtailed   = s.isLikelyCurtailed;
+    p.isMaintenanceOffline = s.isMaintenanceOffline;
+    p.trailingZeroMonths  = s.trailingZeroMonths;
+    p.dataMonthsCount     = s.dataMonthsCount;
+  }
+  console.log(`  ✓ Scored ${finalPlants.length} plants`);
 
   // ─── Write output ────────────────────────────────────────────────
   console.log('\n▶ Writing output...');
@@ -714,37 +857,30 @@ async function main() {
       process.exit(0);
     }
 
-    // Build regional avg maps once for all plants, then score each plant against its peers
-    const regionalAvgMaps = buildRegionalAvgMaps(finalPlants);
-
-    // Build plant rows
-    const plantRows = finalPlants.map(p => {
-      const key = `${p.region}-${p.fuelSource}`;
-      const s = computeStats(p, regionalAvgMaps.get(key));
-      return {
-        id: p.id,
-        eia_plant_code: p.eiaPlantCode,
-        operator_id: p.operatorId ?? null,
-        name: p.name,
-        owner: p.owner,
-        region: p.region,
-        sub_region: p.subRegion ?? '',
-        fuel_source: p.fuelSource,
-        nameplate_capacity_mw: p.nameplateCapacityMW,
-        cod: p.cod ?? null,
-        county: p.county ?? null,
-        state: p.location.state,
-        lat: p.location.lat,
-        lng: p.location.lng,
-        ttm_avg_factor: s.ttmAvgFactor,
-        curtailment_score: s.curtailmentScore,
-        is_likely_curtailed: s.isLikelyCurtailed,
-        is_maintenance_offline: s.isMaintenanceOffline,
-        trailing_zero_months: s.trailingZeroMonths,
-        data_months_count: s.dataMonthsCount,
-        last_updated: now,
-      };
-    });
+    // Build plant rows — use pre-computed stats embedded during the scoring pass above
+    const plantRows = finalPlants.map(p => ({
+      id: p.id,
+      eia_plant_code: p.eiaPlantCode,
+      operator_id: p.operatorId ?? null,
+      name: p.name,
+      owner: p.owner,
+      region: p.region,
+      sub_region: p.subRegion ?? '',
+      fuel_source: p.fuelSource,
+      nameplate_capacity_mw: p.nameplateCapacityMW,
+      cod: p.cod ?? null,
+      county: p.county ?? null,
+      state: p.location.state,
+      lat: p.location.lat,
+      lng: p.location.lng,
+      ttm_avg_factor:        p.ttmAvgFactor        ?? 0,
+      curtailment_score:     p.curtailmentScore     ?? 0,
+      is_likely_curtailed:   p.isLikelyCurtailed    ?? false,
+      is_maintenance_offline: p.isMaintenanceOffline ?? false,
+      trailing_zero_months:  p.trailingZeroMonths   ?? 0,
+      data_months_count:     p.dataMonthsCount      ?? 0,
+      last_updated: now,
+    }));
 
     // Upsert plants in batches of 500
     const BATCH = 500;
@@ -800,6 +936,32 @@ async function main() {
 
     console.log(`  ✓ Supabase sync complete`);
     console.log(`  ✓ Supabase max month advanced: ${beforeMaxMonth ?? 'none'} → ${afterMaxMonth}`);
+
+    // ── Trigger lender currency check (fire-and-forget) ──────────────────
+    // Runs after each successful EIA ingest to re-verify lender currency
+    // for any newly scored or changed plants. Non-fatal if it fails.
+    if (SUPABASE_URL && SUPABASE_KEY) {
+      const edgeUrl = `${SUPABASE_URL}/functions/v1/lender-currency-agent`;
+      try {
+        await fetch(edgeUrl, {
+          method:  'POST',
+          headers: {
+            'Content-Type':  'application/json',
+            'Authorization': `Bearer ${SUPABASE_KEY}`,
+          },
+          body: JSON.stringify({
+            mode:          'eia_trigger',
+            offset:        0,
+            limit:         10,
+            budget_limit:  12.00,
+            force_recheck: false,
+          }),
+        });
+        console.log('  ✓ Triggered lender-currency-agent (EIA trigger)');
+      } catch (err) {
+        console.warn('  ⚠ lender-currency-agent trigger failed (non-fatal):', String(err));
+      }
+    }
   } else {
     console.log('  ℹ Supabase credentials not set — skipping DB upsert (JSON only)');
   }
