@@ -51,7 +51,28 @@ function trendIndicator(cfTrend: number | null): React.ReactNode {
   return null;
 }
 
-type SortKey = 'pursuit' | 'distress' | 'opportunity' | 'mw' | 'lenders' | 'factor' | 'currency';
+const PITCH_ANGLE_ABBR: Record<string, string> = {
+  interconnection_advisory: 'IA',
+  asset_management:         'AM',
+  merchant_risk:            'MR',
+  refinancing_advisory:     'RA',
+  general_exposure:         'GE',
+};
+const PITCH_ANGLE_LABEL: Record<string, string> = {
+  interconnection_advisory: 'Interconnection Advisory',
+  asset_management:         'Asset Management',
+  merchant_risk:            'Merchant Risk',
+  refinancing_advisory:     'Refinancing Advisory',
+  general_exposure:         'General Exposure',
+};
+const SYNDICATE_LABEL: Record<string, string> = {
+  lead_arranger: 'Lead Arranger',
+  agent_bank:    'Agent Bank',
+  participant:   'Participant',
+  unknown:       '',
+};
+
+type SortKey = 'pursuit' | 'distress' | 'opportunity' | 'mw' | 'lenders' | 'factor' | 'currency' | 'urgency';
 type FuelFilter = 'all' | string;
 
 const PAGE_SIZE = 50;
@@ -113,6 +134,7 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
     if (sortKey === 'lenders')     sorted.sort((a, b) => dir * (a.lenders.length - b.lenders.length));
     if (sortKey === 'factor')      sorted.sort((a, b) => dir * ((a.ttmAvgFactor ?? 0) - (b.ttmAvgFactor ?? 0)));
     if (sortKey === 'currency')    sorted.sort((a, b) => dir * (a.activeLenderCount - b.activeLenderCount));
+    if (sortKey === 'urgency')     sorted.sort((a, b) => dir * ((a.maxUrgencyScore ?? 0) - (b.maxUrgencyScore ?? 0)));
 
     return sorted;
   }, [plants, search, stateFilter, fuelFilter, sortKey, sortDesc]);
@@ -200,6 +222,9 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
                 </th>
                 <th className="px-6 py-5 text-center cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('currency')}>
                   Active {sortKey === 'currency' && (sortDesc ? '↓' : '↑')}
+                </th>
+                <th className="px-6 py-5 text-center cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('urgency')} title="Highest pitch urgency score across lenders (0–100)">
+                  Urgency {sortKey === 'urgency' && (sortDesc ? '↓' : '↑')}
                 </th>
               </tr>
             </thead>
@@ -302,28 +327,30 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
                         ? (
                           <div className="flex flex-wrap gap-1 max-w-sm">
                             {plant.lenders.slice(0, 4).map((l, i) => {
-                              // Currency status dot color
-                              const dotColor = l.loanStatus === 'active'
-                                ? 'bg-emerald-400'
-                                : l.loanStatus === 'matured'
-                                  ? 'bg-slate-600'
-                                  : 'bg-amber-500';
-                              const dotTitle = l.loanStatus === 'active'
-                                ? 'Active loan'
-                                : l.loanStatus === 'matured'
-                                  ? 'Loan matured'
-                                  : l.loanStatus === 'refinanced'
-                                    ? 'Refinanced'
-                                    : 'Status unknown';
+                              const dotColor = l.loanStatus === 'active' ? 'bg-emerald-400' : l.loanStatus === 'matured' ? 'bg-slate-600' : 'bg-amber-500';
+                              const dotTitle = l.loanStatus === 'active' ? 'Active loan' : l.loanStatus === 'matured' ? 'Loan matured' : l.loanStatus === 'refinanced' ? 'Refinanced' : 'Status unknown';
+                              const isKeyRole = l.syndicateRole === 'lead_arranger' || l.syndicateRole === 'agent_bank';
+                              const pitchAbbr = l.pitchAngle ? PITCH_ANGLE_ABBR[l.pitchAngle] : null;
+                              const tipParts = [
+                                `${l.role} — ${l.facilityType}`,
+                                dotTitle,
+                                l.syndicateRole && SYNDICATE_LABEL[l.syndicateRole] ? SYNDICATE_LABEL[l.syndicateRole] : null,
+                                l.pitchAngle ? PITCH_ANGLE_LABEL[l.pitchAngle] : null,
+                                l.pitchUrgencyScore != null ? `Urgency ${l.pitchUrgencyScore}` : null,
+                                l.currencyConfidence != null ? `${l.currencyConfidence}% conf` : null,
+                              ].filter(Boolean).join(' | ');
                               return (
                                 <span
                                   key={i}
-                                  className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-medium"
-                                  title={`${l.role} — ${l.facilityType} | ${dotTitle}${l.currencyConfidence != null ? ` (${l.currencyConfidence}% conf)` : ''}`}
+                                  className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border font-medium ${isKeyRole ? 'bg-cyan-900/30 border-cyan-700/50 text-cyan-300' : 'bg-slate-800 border-slate-700 text-slate-300'}`}
+                                  title={tipParts}
                                 >
-                                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`} title={dotTitle} />
-                                  <span className="text-emerald-500 font-bold text-[8px]">{facilityTypeShort(l.facilityType)}</span>
+                                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`} />
+                                  <span className={`font-bold text-[8px] ${isKeyRole ? 'text-cyan-400' : 'text-emerald-500'}`}>{facilityTypeShort(l.facilityType)}</span>
                                   {l.name}
+                                  {pitchAbbr && (
+                                    <span className="text-[8px] text-amber-400 font-bold ml-0.5" title={PITCH_ANGLE_LABEL[l.pitchAngle!]}>{pitchAbbr}</span>
+                                  )}
                                 </span>
                               );
                             })}
@@ -346,6 +373,18 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
                           ? <span className="text-[10px] text-slate-600 font-mono">none</span>
                           : <span className="text-[10px] text-slate-600 font-mono">?</span>
                       }
+                    </td>
+
+                    {/* Urgency score */}
+                    <td className="px-6 py-5 text-center">
+                      {plant.maxUrgencyScore != null ? (() => {
+                        const u = plant.maxUrgencyScore;
+                        const cls = u >= 60 ? 'bg-red-900/40 border-red-700/50 text-red-400' : u >= 30 ? 'bg-amber-900/40 border-amber-700/50 text-amber-400' : 'bg-slate-800 border-slate-700 text-slate-400';
+                        return <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-bold ${cls}`}>{u}</span>;
+                      })() : <span className="text-slate-700 text-[10px]">—</span>}
+                      {plant.topPitchAngle && (
+                        <div className="text-[9px] text-amber-500 mt-0.5 font-mono">{PITCH_ANGLE_ABBR[plant.topPitchAngle] ?? ''}</div>
+                      )}
                     </td>
                   </tr>
                 );

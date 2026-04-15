@@ -31,6 +31,12 @@ export interface PlantLenderRow {
   maturityDate:        string | null;
   financialCloseDate:  string | null;
   refinancedAt:        string | null;
+  // Agentic pipeline fields
+  syndicateRole:       string | null;
+  pitchAngle:          string | null;
+  pitchAngleReasoning: string | null;
+  pitchUrgencyScore:   number | null;
+  sourceCount:         number | null;
 }
 
 export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<{
@@ -49,7 +55,9 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
         lender_name, role, facility_type, confidence, notes,
         loan_status, currency_confidence, currency_reasoning,
         currency_checked_at, currency_source,
-        maturity_date, financial_close_date, refinanced_at
+        maturity_date, financial_close_date, refinanced_at,
+        syndicate_role, pitch_angle, pitch_angle_reasoning,
+        pitch_urgency_score, source_count
       `)
       .eq('eia_plant_code', eiaPlantCode)
       .in('confidence', ['high', 'medium'])
@@ -66,19 +74,24 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
   } : null;
 
   const lenders: PlantLenderRow[] = (lendersRes.data ?? []).map((r: Record<string, unknown>) => ({
-    lenderName:         r.lender_name as string,
-    role:               r.role as string,
-    facilityType:       r.facility_type as string,
-    confidence:         r.confidence as string,
-    notes:              (r.notes as string | null) ?? null,
-    loanStatus:         (r.loan_status as PlantLenderRow['loanStatus']) ?? null,
-    currencyConfidence: r.currency_confidence != null ? Number(r.currency_confidence) : null,
-    currencyReasoning:  (r.currency_reasoning as string | null) ?? null,
-    currencyCheckedAt:  (r.currency_checked_at as string | null) ?? null,
-    currencySource:     (r.currency_source as string | null) ?? null,
-    maturityDate:       (r.maturity_date as string | null) ?? null,
-    financialCloseDate: (r.financial_close_date as string | null) ?? null,
-    refinancedAt:       (r.refinanced_at as string | null) ?? null,
+    lenderName:          r.lender_name as string,
+    role:                r.role as string,
+    facilityType:        r.facility_type as string,
+    confidence:          r.confidence as string,
+    notes:               (r.notes as string | null) ?? null,
+    loanStatus:          (r.loan_status as PlantLenderRow['loanStatus']) ?? null,
+    currencyConfidence:  r.currency_confidence != null ? Number(r.currency_confidence) : null,
+    currencyReasoning:   (r.currency_reasoning as string | null) ?? null,
+    currencyCheckedAt:   (r.currency_checked_at as string | null) ?? null,
+    currencySource:      (r.currency_source as string | null) ?? null,
+    maturityDate:        (r.maturity_date as string | null) ?? null,
+    financialCloseDate:  (r.financial_close_date as string | null) ?? null,
+    refinancedAt:        (r.refinanced_at as string | null) ?? null,
+    syndicateRole:       (r.syndicate_role as string | null) ?? null,
+    pitchAngle:          (r.pitch_angle as string | null) ?? null,
+    pitchAngleReasoning: (r.pitch_angle_reasoning as string | null) ?? null,
+    pitchUrgencyScore:   r.pitch_urgency_score != null ? Number(r.pitch_urgency_score) : null,
+    sourceCount:         r.source_count != null ? Number(r.source_count) : null,
   }));
 
   return { financing, lenders };

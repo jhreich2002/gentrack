@@ -24,14 +24,19 @@ export interface PursuitPlant {
   ttmAvgFactor:    number | null;
   pursuitStatus:   string | null;
   lenders:         {
-    name:              string;
-    role:              string;
-    facilityType:      string;
-    loanStatus:        string | null;
+    name:               string;
+    role:               string;
+    facilityType:       string;
+    loanStatus:         string | null;
     currencyConfidence: number | null;
+    syndicateRole:      string | null;
+    pitchAngle:         string | null;
+    pitchUrgencyScore:  number | null;
   }[];
-  activeLenderCount: number;
-  searchedAt:      string | null;
+  activeLenderCount:  number;
+  maxUrgencyScore:    number | null;
+  topPitchAngle:      string | null;
+  searchedAt:         string | null;
 }
 
 export interface LenderRanking {
@@ -50,18 +55,19 @@ export interface LenderRanking {
 }
 
 export async function fetchLenderRankings(): Promise<LenderRanking[]> {
-  // 1. Get all curtailed plants with confirmed lenders
-  const { data: summaryData, error: summaryErr } = await supabase
-    .from('plant_financing_summary')
+  // 1. Get all plant codes that have at least one high/medium confidence lender row
+  //    (covers both old lender-search pipeline and new agentic pipeline)
+  const { data: lenderCodeData, error: lenderCodeErr } = await supabase
+    .from('plant_lenders')
     .select('eia_plant_code')
-    .eq('lenders_found', true);
+    .in('confidence', ['high', 'medium']);
 
-  if (summaryErr) {
-    console.error('pursuitService: plant_financing_summary error:', summaryErr.message);
+  if (lenderCodeErr) {
+    console.error('pursuitService: plant_lenders code fetch error:', lenderCodeErr.message);
     return [];
   }
 
-  const codes = (summaryData ?? []).map((r: { eia_plant_code: string }) => r.eia_plant_code);
+  const codes = [...new Set((lenderCodeData ?? []).map((r: any) => r.eia_plant_code as string))];
   if (codes.length === 0) return [];
 
   // 2. Fetch curtailed plant info
@@ -81,7 +87,7 @@ export async function fetchLenderRankings(): Promise<LenderRanking[]> {
     const r = p as Record<string, unknown>;
     plantMap.set(r.eia_plant_code as string, {
       eiaPlantCode:  r.eia_plant_code as string,
-      name:          (r.name as string) ?? r.eia_plant_code,
+      name:          (r.name as string) ?? (r.eia_plant_code as string),
       state:         (r.state as string) ?? '',
       fuelSource:    (r.fuel_source as string) ?? '',
       nameplateMw:   Number(r.nameplate_capacity_mw) || 0,
@@ -134,23 +140,20 @@ export async function fetchLenderRankings(): Promise<LenderRanking[]> {
 }
 
 export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
-  // 1. Get all plant codes with confirmed lenders
-  const { data: summaryData, error: summaryErr } = await supabase
-    .from('plant_financing_summary')
-    .select('eia_plant_code, searched_at')
-    .eq('lenders_found', true);
+  // 1. Get all plant codes that have at least one high/medium confidence lender row
+  //    (covers both old lender-search pipeline and new agentic pipeline)
+  const { data: lenderCodeData, error: lenderCodeErr } = await supabase
+    .from('plant_lenders')
+    .select('eia_plant_code')
+    .in('confidence', ['high', 'medium']);
 
-  if (summaryErr) {
-    console.error('pursuitService: plant_financing_summary error:', summaryErr.message);
+  if (lenderCodeErr) {
+    console.error('pursuitService: plant_lenders code fetch error:', lenderCodeErr.message);
     return [];
   }
 
-  const codes = (summaryData ?? []).map((r: { eia_plant_code: string }) => r.eia_plant_code);
+  const codes = [...new Set((lenderCodeData ?? []).map((r: any) => r.eia_plant_code as string))];
   if (codes.length === 0) return [];
-
-  const searchedAtMap = new Map<string, string | null>(
-    (summaryData ?? []).map((r: { eia_plant_code: string; searched_at: string | null }) => [r.eia_plant_code, r.searched_at]),
-  );
 
   // 2. Fetch plant info (curtailed only) — use curtailment_score directly
   const { data: plantsData, error: plantsErr } = await supabase
@@ -168,17 +171,26 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
   const plantCodes = (plantsData ?? []).map((p: { eia_plant_code: string }) => p.eia_plant_code);
   if (plantCodes.length === 0) return [];
 
-  // 3. Fetch lender names for these plants (active/unknown only — exclude confirmed matured)
+  // 3. Fetch lender data with new agentic pipeline columns
   const { data: lendersData } = await supabase
     .from('plant_lenders')
-    .select('eia_plant_code, lender_name, role, facility_type, loan_status, currency_confidence')
+    .select('eia_plant_code, lender_name, role, facility_type, loan_status, currency_confidence, syndicate_role, pitch_angle, pitch_urgency_score')
     .in('eia_plant_code', plantCodes)
     .in('confidence', ['high', 'medium'])
     .in('loan_status', ['active', 'unknown']);
 
-  const lendersByCode = new Map<string, { name: string; role: string; facilityType: string; loanStatus: string | null; currencyConfidence: number | null }[]>();
+  type LenderRow = {
+    name: string; role: string; facilityType: string;
+    loanStatus: string | null; currencyConfidence: number | null;
+    syndicateRole: string | null; pitchAngle: string | null; pitchUrgencyScore: number | null;
+  };
+  const lendersByCode = new Map<string, LenderRow[]>();
   for (const row of lendersData ?? []) {
-    const r = row as { eia_plant_code: string; lender_name: string; role: string; facility_type: string; loan_status: string | null; currency_confidence: number | null };
+    const r = row as {
+      eia_plant_code: string; lender_name: string; role: string; facility_type: string;
+      loan_status: string | null; currency_confidence: number | null;
+      syndicate_role: string | null; pitch_angle: string | null; pitch_urgency_score: number | null;
+    };
     if (!lendersByCode.has(r.eia_plant_code)) lendersByCode.set(r.eia_plant_code, []);
     lendersByCode.get(r.eia_plant_code)!.push({
       name:              r.lender_name,
@@ -186,8 +198,23 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
       facilityType:      r.facility_type,
       loanStatus:        r.loan_status,
       currencyConfidence: r.currency_confidence,
+      syndicateRole:     r.syndicate_role ?? null,
+      pitchAngle:        r.pitch_angle ?? null,
+      pitchUrgencyScore: r.pitch_urgency_score != null ? Number(r.pitch_urgency_score) : null,
     });
   }
+
+  // 3b. Fetch searchedAt from plant_news_state (prefer lender_ingest_checked_at, fall back to lender_search_checked_at)
+  const { data: newsStateData } = await supabase
+    .from('plant_news_state')
+    .select('eia_plant_code, lender_ingest_checked_at, lender_search_checked_at')
+    .in('eia_plant_code', plantCodes);
+
+  const searchedAtMap = new Map<string, string | null>(
+    (newsStateData ?? []).map((r: { eia_plant_code: string; lender_ingest_checked_at: string | null; lender_search_checked_at: string | null }) =>
+      [r.eia_plant_code, r.lender_ingest_checked_at ?? r.lender_search_checked_at]
+    )
+  );
 
   // 4. Fetch precomputed news_risk_score (used once, no double-counting)
   const { data: ratingsData } = await supabase
@@ -263,6 +290,15 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
 
     const lenders = lendersByCode.get(code) ?? [];
     const activeLenderCount = lenders.filter(l => l.loanStatus === 'active').length;
+    const urgencyScores = lenders.map(l => l.pitchUrgencyScore).filter((s): s is number => s != null);
+    const maxUrgencyScore = urgencyScores.length > 0 ? Math.max(...urgencyScores) : null;
+    // Most common pitch angle across this plant's lenders
+    const angleCounts = new Map<string, number>();
+    for (const l of lenders) { if (l.pitchAngle) angleCounts.set(l.pitchAngle, (angleCounts.get(l.pitchAngle) ?? 0) + 1); }
+    const topPitchAngle = angleCounts.size > 0
+      ? [...angleCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+      : null;
+
     return {
       eiaPlantCode:    code,
       name:            (p.name as string) ?? code,
@@ -280,7 +316,9 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
       pursuitStatus:   (p.pursuit_status as string | null) ?? null,
       lenders,
       activeLenderCount,
-      searchedAt:      searchedAtMap.get(code) ?? null,
+      maxUrgencyScore,
+      topPitchAngle,
+      searchedAt:      (searchedAtMap.get(code) ?? null) as string | null,
     };
   });
 }
@@ -337,16 +375,17 @@ export async function fetchWatchlistPursuitData(eiaPlantCodes: string[]): Promis
 
   const { data: lendersData } = await supabase
     .from('plant_lenders')
-    .select('eia_plant_code, lender_name, role, facility_type, loan_status, currency_confidence')
+    .select('eia_plant_code, lender_name, role, facility_type, loan_status, currency_confidence, syndicate_role, pitch_angle, pitch_urgency_score')
     .in('eia_plant_code', plantCodes)
     .in('confidence', ['high', 'medium'])
     .in('loan_status', ['active', 'unknown']);
 
-  const lendersByCode = new Map<string, { name: string; role: string; facilityType: string; loanStatus: string | null; currencyConfidence: number | null }[]>();
+  type WLenderRow = { name: string; role: string; facilityType: string; loanStatus: string | null; currencyConfidence: number | null; syndicateRole: string | null; pitchAngle: string | null; pitchUrgencyScore: number | null };
+  const lendersByCode = new Map<string, WLenderRow[]>();
   for (const row of lendersData ?? []) {
-    const r = row as { eia_plant_code: string; lender_name: string; role: string; facility_type: string; loan_status: string | null; currency_confidence: number | null };
+    const r = row as { eia_plant_code: string; lender_name: string; role: string; facility_type: string; loan_status: string | null; currency_confidence: number | null; syndicate_role: string | null; pitch_angle: string | null; pitch_urgency_score: number | null };
     if (!lendersByCode.has(r.eia_plant_code)) lendersByCode.set(r.eia_plant_code, []);
-    lendersByCode.get(r.eia_plant_code)!.push({ name: r.lender_name, role: r.role, facilityType: r.facility_type, loanStatus: r.loan_status, currencyConfidence: r.currency_confidence });
+    lendersByCode.get(r.eia_plant_code)!.push({ name: r.lender_name, role: r.role, facilityType: r.facility_type, loanStatus: r.loan_status, currencyConfidence: r.currency_confidence, syndicateRole: r.syndicate_role ?? null, pitchAngle: r.pitch_angle ?? null, pitchUrgencyScore: r.pitch_urgency_score != null ? Number(r.pitch_urgency_score) : null });
   }
 
   const { data: ratingsData } = await supabase
@@ -416,6 +455,11 @@ export async function fetchWatchlistPursuitData(eiaPlantCodes: string[]): Promis
 
     const lenders = lendersByCode.get(code) ?? [];
     const activeLenderCount = lenders.filter(l => l.loanStatus === 'active').length;
+    const urgencyScores = lenders.map(l => l.pitchUrgencyScore).filter((s): s is number => s != null);
+    const maxUrgencyScore = urgencyScores.length > 0 ? Math.max(...urgencyScores) : null;
+    const angleCounts = new Map<string, number>();
+    for (const l of lenders) { if (l.pitchAngle) angleCounts.set(l.pitchAngle, (angleCounts.get(l.pitchAngle) ?? 0) + 1); }
+    const topPitchAngle = angleCounts.size > 0 ? [...angleCounts.entries()].sort((a, b) => b[1] - a[1])[0][0] : null;
     return {
       eiaPlantCode:    code,
       name:            (p.name as string) ?? code,
@@ -433,6 +477,8 @@ export async function fetchWatchlistPursuitData(eiaPlantCodes: string[]): Promis
       pursuitStatus:   (p.pursuit_status as string | null) ?? null,
       lenders,
       activeLenderCount,
+      maxUrgencyScore,
+      topPitchAngle,
       searchedAt:      null,
     };
   });

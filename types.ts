@@ -271,6 +271,11 @@ export interface LenderStats {
   maturedLoanCount?:   number;          // count of confirmed matured rows
   currencyLastChecked?: string | null;  // most recent currency_checked_at across portfolio
   hasActiveExposure?:  boolean;         // any plant has loan_status='active'
+  // Agentic pipeline portfolio metrics (populated by refresh-entity-stats)
+  totalCurtailedMwExposure?: number | null;
+  curtailedPlantCount?:      number | null;
+  highUrgencyCount?:         number | null;
+  topPitchAngle?:            string | null;
 }
 
 /** Nightly-computed aggregate for a tax equity investor from plant_lenders. */

@@ -34,8 +34,12 @@ function mapLenderRow(data: Record<string, unknown>): LenderStats {
     analysisAngleBullets: (data.analysis_angle_bullets as string[]) ?? [],
     analysisUpdatedAt:    (data.analysis_updated_at  as string | null) ?? null,
     portfolioSynopsis:    (data.portfolio_synopsis    as string | null) ?? null,
-    lastNewsDate:         (data.last_news_date        as string | null) ?? null,
-    computedAt:           data.computed_at            as string,
+    lastNewsDate:             (data.last_news_date              as string | null) ?? null,
+    computedAt:               data.computed_at                  as string,
+    totalCurtailedMwExposure: data.total_curtailed_mw_exposure != null ? Number(data.total_curtailed_mw_exposure) : null,
+    curtailedPlantCount:      data.curtailed_plant_count       != null ? Number(data.curtailed_plant_count) : null,
+    highUrgencyCount:         data.high_urgency_count          != null ? Number(data.high_urgency_count) : null,
+    topPitchAngle:            (data.top_pitch_angle             as string | null) ?? null,
   };
 }
 
