@@ -23,7 +23,14 @@ export interface PursuitPlant {
   pursuitScore:    number | null;
   ttmAvgFactor:    number | null;
   pursuitStatus:   string | null;
-  lenders:         { name: string; role: string; facilityType: string }[];
+  lenders:         {
+    name:              string;
+    role:              string;
+    facilityType:      string;
+    loanStatus:        string | null;
+    currencyConfidence: number | null;
+  }[];
+  activeLenderCount: number;
   searchedAt:      string | null;
 }
 
@@ -84,12 +91,13 @@ export async function fetchLenderRankings(): Promise<LenderRanking[]> {
 
   const plantCodes = Array.from(plantMap.keys());
 
-  // 3. Fetch lenders for these plants
+  // 3. Fetch lenders for these plants (active/unknown only — exclude confirmed matured)
   const { data: lendersData } = await supabase
     .from('plant_lenders')
     .select('eia_plant_code, lender_name')
     .in('eia_plant_code', plantCodes)
-    .in('confidence', ['high', 'medium']);
+    .in('confidence', ['high', 'medium'])
+    .in('loan_status', ['active', 'unknown']);
 
   // 4. Aggregate by lender
   const lenderMap = new Map<string, Set<string>>();
@@ -160,21 +168,24 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
   const plantCodes = (plantsData ?? []).map((p: { eia_plant_code: string }) => p.eia_plant_code);
   if (plantCodes.length === 0) return [];
 
-  // 3. Fetch lender names for these plants
+  // 3. Fetch lender names for these plants (active/unknown only — exclude confirmed matured)
   const { data: lendersData } = await supabase
     .from('plant_lenders')
-    .select('eia_plant_code, lender_name, role, facility_type')
+    .select('eia_plant_code, lender_name, role, facility_type, loan_status, currency_confidence')
     .in('eia_plant_code', plantCodes)
-    .in('confidence', ['high', 'medium']);
+    .in('confidence', ['high', 'medium'])
+    .in('loan_status', ['active', 'unknown']);
 
-  const lendersByCode = new Map<string, { name: string; role: string; facilityType: string }[]>();
+  const lendersByCode = new Map<string, { name: string; role: string; facilityType: string; loanStatus: string | null; currencyConfidence: number | null }[]>();
   for (const row of lendersData ?? []) {
-    const r = row as { eia_plant_code: string; lender_name: string; role: string; facility_type: string };
+    const r = row as { eia_plant_code: string; lender_name: string; role: string; facility_type: string; loan_status: string | null; currency_confidence: number | null };
     if (!lendersByCode.has(r.eia_plant_code)) lendersByCode.set(r.eia_plant_code, []);
     lendersByCode.get(r.eia_plant_code)!.push({
-      name:         r.lender_name,
-      role:         r.role,
-      facilityType: r.facility_type,
+      name:              r.lender_name,
+      role:              r.role,
+      facilityType:      r.facility_type,
+      loanStatus:        r.loan_status,
+      currencyConfidence: r.currency_confidence,
     });
   }
 
@@ -250,6 +261,8 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
       ? Math.sqrt(distressScore * opportunityScore)
       : null;
 
+    const lenders = lendersByCode.get(code) ?? [];
+    const activeLenderCount = lenders.filter(l => l.loanStatus === 'active').length;
     return {
       eiaPlantCode:    code,
       name:            (p.name as string) ?? code,
@@ -265,10 +278,45 @@ export async function fetchPursuitPlants(): Promise<PursuitPlant[]> {
       pursuitScore,
       ttmAvgFactor,
       pursuitStatus:   (p.pursuit_status as string | null) ?? null,
-      lenders:         lendersByCode.get(code) ?? [],
+      lenders,
+      activeLenderCount,
       searchedAt:      searchedAtMap.get(code) ?? null,
     };
   });
+}
+
+export interface LenderCurrencySummary {
+  totalRows:      number;
+  activeCount:    number;
+  maturedCount:   number;
+  refinancedCount: number;
+  unknownCount:   number;
+  avgConfidence:  number | null;
+  lastCheckedAt:  string | null;
+}
+
+export async function fetchLenderCurrencyStats(eiaPlantCode: string): Promise<LenderCurrencySummary> {
+  const { data, error } = await supabase
+    .from('plant_lenders')
+    .select('loan_status, currency_confidence, currency_checked_at')
+    .eq('eia_plant_code', eiaPlantCode)
+    .in('confidence', ['high', 'medium']);
+
+  if (error || !data) return { totalRows: 0, activeCount: 0, maturedCount: 0, refinancedCount: 0, unknownCount: 0, avgConfidence: null, lastCheckedAt: null };
+
+  const rows = data as { loan_status: string | null; currency_confidence: number | null; currency_checked_at: string | null }[];
+  const confidences = rows.map(r => r.currency_confidence).filter((c): c is number => c != null);
+  const checkedDates = rows.map(r => r.currency_checked_at).filter((d): d is string => d != null).sort().reverse();
+
+  return {
+    totalRows:      rows.length,
+    activeCount:    rows.filter(r => r.loan_status === 'active').length,
+    maturedCount:   rows.filter(r => r.loan_status === 'matured').length,
+    refinancedCount: rows.filter(r => r.loan_status === 'refinanced').length,
+    unknownCount:   rows.filter(r => !r.loan_status || r.loan_status === 'unknown').length,
+    avgConfidence:  confidences.length > 0 ? confidences.reduce((a, b) => a + b, 0) / confidences.length : null,
+    lastCheckedAt:  checkedDates[0] ?? null,
+  };
 }
 
 /**
@@ -289,15 +337,16 @@ export async function fetchWatchlistPursuitData(eiaPlantCodes: string[]): Promis
 
   const { data: lendersData } = await supabase
     .from('plant_lenders')
-    .select('eia_plant_code, lender_name, role, facility_type')
+    .select('eia_plant_code, lender_name, role, facility_type, loan_status, currency_confidence')
     .in('eia_plant_code', plantCodes)
-    .in('confidence', ['high', 'medium']);
+    .in('confidence', ['high', 'medium'])
+    .in('loan_status', ['active', 'unknown']);
 
-  const lendersByCode = new Map<string, { name: string; role: string; facilityType: string }[]>();
+  const lendersByCode = new Map<string, { name: string; role: string; facilityType: string; loanStatus: string | null; currencyConfidence: number | null }[]>();
   for (const row of lendersData ?? []) {
-    const r = row as { eia_plant_code: string; lender_name: string; role: string; facility_type: string };
+    const r = row as { eia_plant_code: string; lender_name: string; role: string; facility_type: string; loan_status: string | null; currency_confidence: number | null };
     if (!lendersByCode.has(r.eia_plant_code)) lendersByCode.set(r.eia_plant_code, []);
-    lendersByCode.get(r.eia_plant_code)!.push({ name: r.lender_name, role: r.role, facilityType: r.facility_type });
+    lendersByCode.get(r.eia_plant_code)!.push({ name: r.lender_name, role: r.role, facilityType: r.facility_type, loanStatus: r.loan_status, currencyConfidence: r.currency_confidence });
   }
 
   const { data: ratingsData } = await supabase
@@ -365,6 +414,8 @@ export async function fetchWatchlistPursuitData(eiaPlantCodes: string[]): Promis
       ? Math.sqrt(distressScore * opportunityScore)
       : null;
 
+    const lenders = lendersByCode.get(code) ?? [];
+    const activeLenderCount = lenders.filter(l => l.loanStatus === 'active').length;
     return {
       eiaPlantCode:    code,
       name:            (p.name as string) ?? code,
@@ -380,7 +431,8 @@ export async function fetchWatchlistPursuitData(eiaPlantCodes: string[]): Promis
       pursuitScore,
       ttmAvgFactor,
       pursuitStatus:   (p.pursuit_status as string | null) ?? null,
-      lenders:         lendersByCode.get(code) ?? [],
+      lenders,
+      activeLenderCount,
       searchedAt:      null,
     };
   });

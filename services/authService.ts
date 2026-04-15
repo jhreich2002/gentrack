@@ -60,6 +60,26 @@ export interface AdminIngestionFreshness {
   latestPlantUpdateAt: string | null;
 }
 
+export interface UnsearchedCurtailedPlant {
+  eiaPlantCode: string;
+  name: string;
+  state: string;
+  fuelSource: string;
+  nameplateMw: number;
+  curtailmentScore: number;
+}
+
+export interface CurtailedPlant {
+  eiaPlantCode: string;
+  name: string;
+  state: string;
+  fuelSource: string;
+  nameplateMw: number;
+  distressScore: number | null;
+  curtailmentScore: number;
+  lenderIngestCheckedAt: string | null;
+}
+
 // -------------------------------------------------------
 // Regular auth operations (anon key)
 // -------------------------------------------------------
@@ -285,4 +305,79 @@ export async function fetchAdminIngestionFreshness(): Promise<AdminIngestionFres
     latestGenerationMonth: (monthRows?.[0] as any)?.month ?? null,
     latestPlantUpdateAt: (plantRows?.[0] as any)?.last_updated ?? null,
   };
+}
+
+/**
+ * Returns ALL curtailed plants with their lender_ingest_checked_at status,
+ * sorted by distress_score DESC NULLS LAST, then nameplate_capacity_mw DESC.
+ * Used by the AdminPage to show full coverage and pick plants to process.
+ */
+export async function fetchAllCurtailedPlants(): Promise<CurtailedPlant[]> {
+  const [{ data: plants, error: plantsError }, { data: newsState, error: newsError }] = await Promise.all([
+    supabase
+      .from('plants')
+      .select('eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, curtailment_score, distress_score')
+      .eq('is_likely_curtailed', true)
+      .eq('is_maintenance_offline', false)
+      .gte('nameplate_capacity_mw', 20)
+      .in('fuel_source', ['Solar', 'Wind', 'Geothermal', 'Solar Thermal', 'Biomass', 'Hydro', 'Storage'])
+      .order('distress_score', { ascending: false, nullsFirst: false })
+      .order('nameplate_capacity_mw', { ascending: false }),
+    supabase
+      .from('plant_news_state')
+      .select('eia_plant_code, lender_ingest_checked_at'),
+  ]);
+
+  if (plantsError) throw plantsError;
+  if (newsError) throw newsError;
+
+  const stateMap = new Map<string, string | null>(
+    (newsState ?? []).map((r: any) => [r.eia_plant_code as string, r.lender_ingest_checked_at as string | null])
+  );
+
+  return (plants ?? []).map((p: any) => ({
+    eiaPlantCode:          p.eia_plant_code as string,
+    name:                  p.name as string,
+    state:                 p.state as string,
+    fuelSource:            p.fuel_source as string,
+    nameplateMw:           Number(p.nameplate_capacity_mw ?? 0),
+    distressScore:         p.distress_score != null ? Number(p.distress_score) : null,
+    curtailmentScore:      Number(p.curtailment_score ?? 0),
+    lenderIngestCheckedAt: stateMap.has(p.eia_plant_code) ? (stateMap.get(p.eia_plant_code) ?? null) : null,
+  }));
+}
+
+/**
+ * Returns curtailed plants that have never had lender-search run on them
+ * (lender_search_checked_at IS NULL in plant_news_state, or no row at all).
+ * Sorted by curtailment_score descending so the highest-priority plants appear first.
+ */
+export async function fetchUnsearchedCurtailedPlants(): Promise<UnsearchedCurtailedPlant[]> {
+  const [{ data: curtailed, error: curtailedError }, { data: searched, error: searchedError }] = await Promise.all([
+    supabase
+      .from('plants')
+      .select('eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, curtailment_score')
+      .eq('is_likely_curtailed', true)
+      .order('curtailment_score', { ascending: false }),
+    supabase
+      .from('plant_news_state')
+      .select('eia_plant_code')
+      .not('lender_search_checked_at', 'is', null),
+  ]);
+
+  if (curtailedError) throw curtailedError;
+  if (searchedError) throw searchedError;
+
+  const searchedCodes = new Set((searched ?? []).map((r: any) => r.eia_plant_code as string));
+
+  return (curtailed ?? [])
+    .filter((p: any) => !searchedCodes.has(p.eia_plant_code))
+    .map((p: any) => ({
+      eiaPlantCode:     p.eia_plant_code as string,
+      name:             p.name as string,
+      state:            p.state as string,
+      fuelSource:       p.fuel_source as string,
+      nameplateMw:      Number(p.nameplate_capacity_mw ?? 0),
+      curtailmentScore: Number(p.curtailment_score ?? 0),
+    }));
 }

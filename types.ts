@@ -227,6 +227,25 @@ export interface CompanyStats {
   portfolioSynopsis:     string | null;  // per-asset breakdown from company-analyze
 }
 
+// ── Lender Currency ──────────────────────────────────────────────────────────
+
+/** Loan currency status as determined by the lender-currency-agent pipeline. */
+export type LoanStatus = 'active' | 'matured' | 'refinanced' | 'unknown';
+
+/** Currency information attached to a plant_lenders row after agent scoring. */
+export interface LenderCurrencyInfo {
+  loanStatus:          LoanStatus | null;
+  currencyConfidence:  number | null;       // 0–100
+  currencyReasoning:   string | null;
+  currencyCheckedAt:   string | null;
+  currencySource:      'heuristic' | 'perplexity' | 'edgar' | 'gemini_synthesis' | 'manual' | null;
+  maturityDate:        string | null;
+  financialCloseDate:  string | null;
+  refinancedAt:        string | null;
+  supersededBy:        number | null;       // plant_lenders.id
+  supersedes:          number | null;       // plant_lenders.id
+}
+
 // ── Entity Stats (Lenders & Tax Equity Investors) ────────────────────────────
 
 /** Nightly-computed aggregate for a lender entity from plant_lenders. */
@@ -247,6 +266,11 @@ export interface LenderStats {
   portfolioSynopsis:   string | null;  // per-asset breakdown from lender-analyze
   lastNewsDate:        string | null;
   computedAt:          string;
+  // Currency tracking (populated by lender-currency-agent)
+  activeLoanCount?:    number;          // count of plant_lenders rows with loan_status='active'
+  maturedLoanCount?:   number;          // count of confirmed matured rows
+  currencyLastChecked?: string | null;  // most recent currency_checked_at across portfolio
+  hasActiveExposure?:  boolean;         // any plant has loan_status='active'
 }
 
 /** Nightly-computed aggregate for a tax equity investor from plant_lenders. */

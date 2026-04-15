@@ -132,6 +132,23 @@ Deno.serve(async (req: Request) => {
     );
     console.log(`Loaded ${lendersFoundSet.size} plants with confirmed lenders`);
 
+    // ── 3a-ii. Load plants with ACTIVE lenders (for lender bonus) ────────────
+    // After the currency backfill runs, the bonus is only awarded to plants that
+    // have at least one lender with loan_status = 'active' or 'unknown'.
+    // Rows with loan_status = 'matured' or 'refinanced' are excluded.
+    // The null inclusion (via .or()) ensures unscored rows (loan_status IS NULL
+    // or 'unknown') continue to qualify until the backfill is complete.
+    const activeLenderRows = await fetchAll<{ eia_plant_code: string }>(
+      sb, 'plant_lenders', 'eia_plant_code',
+      (q: any) => q
+        .in('confidence', ['high', 'medium'])
+        .or('loan_status.is.null,loan_status.eq.active,loan_status.eq.unknown')
+    );
+    const activeLendersFoundSet = new Set<string>(
+      activeLenderRows.map(r => r.eia_plant_code)
+    );
+    console.log(`Loaded ${activeLendersFoundSet.size} plants with active/unknown lender status`);
+
     // ── 3b. Load plant_news_state summaries (Perplexity prose) ───────────────
     const summaryRows = await fetchAll<{
       eia_plant_code: string;
@@ -175,7 +192,11 @@ Deno.serve(async (req: Request) => {
       const curtailment  = p.curtailment_score ?? 0;
       const newsRisk     = ratingByCode.get(p.eia_plant_code) ?? 0;
       const summaryRisk  = summaryRiskByCode.get(p.eia_plant_code);
-      const lendersFound = lendersFoundSet.has(p.eia_plant_code);
+      // Use activeLendersFoundSet (active/unknown loan_status) for the distress bonus
+      // so only plants with current lender exposure get the +15 actionability signal.
+      // Falls back to lendersFoundSet for plants not yet scored by currency agent.
+      const hasActiveLender = activeLendersFoundSet.has(p.eia_plant_code);
+      const lendersFound    = lendersFoundSet.has(p.eia_plant_code);
 
       // Base: curtailment × 0.6 + news_risk × 0.4
       // If a Perplexity summary exists, blend it in (replacing some of the news weight)
@@ -184,11 +205,12 @@ Deno.serve(async (req: Request) => {
         ? curtailment * 0.5 + newsRisk * 0.3 + summaryRisk * 0.2
         : curtailment * 0.6 + newsRisk * 0.4;
 
-      // Lender bonus: +15 if confirmed lenders (plant is actionable)
-      const bonus   = lendersFound ? 15 : 0;
+      // Lender bonus: +15 if plant has active/unknown lender (actionable for BD outreach)
+      const bonus   = hasActiveLender ? 15 : 0;
       const distress = parseFloat(Math.min(100, base + bonus).toFixed(2));
 
-      // pursuit_status assignment
+      // pursuit_status assignment — still uses lendersFoundSet for the has-lenders check
+      // (any historical lender confirms the plant is a project finance asset worth tracking)
       let pursuitStatus: string | null = null;
       if (p.is_likely_curtailed && lendersFound) {
         pursuitStatus = distress >= 70 ? 'active' : distress >= 40 ? 'watch' : 'skip';
@@ -210,7 +232,7 @@ Deno.serve(async (req: Request) => {
         .upsert(batch, { onConflict: 'id' });
       if (error) console.error(`plant distress upsert error: ${error.message}`);
     }
-    console.log(`Updated distress_score for ${plantDistressUpdates.length} plants (${lendersFoundSet.size} with lender bonus)`);
+    console.log(`Updated distress_score for ${plantDistressUpdates.length} plants (${activeLendersFoundSet.size} with active-lender bonus, ${lendersFoundSet.size} total with any lender)`);
 
     // ── 4. Compute regional benchmark CF (avg by region) ─────────────────────
     const regionCfSum   = new Map<string, number>();
@@ -259,38 +281,52 @@ Deno.serve(async (req: Request) => {
       return aliasMap.get(lower) ?? rawName;      // canonical or original
     }
 
-    // ── 5. Load plant_lenders (high/medium confidence) ────────────────────────
+    // ── 5. Load plant_lenders (high/medium confidence, active/unknown currency) ─
+    // Exclude confirmed matured/refinanced loans from aggregate stats so the
+    // lender rankings reflect current exposure only.
+    // Unscored rows (loan_status IS NULL or 'unknown') are included to preserve
+    // existing rankings until the currency backfill completes.
     const lenderRows = await fetchAll<{
-      eia_plant_code: string;
-      lender_name: string;
-      facility_type: string;
-      loan_amount_usd: number | null;
+      eia_plant_code:      string;
+      lender_name:         string;
+      facility_type:       string;
+      loan_amount_usd:     number | null;
+      loan_status:         string | null;
+      pitch_urgency_score: number | null;
+      pitch_angle:         string | null;
     }>(sb, 'plant_lenders',
-      'eia_plant_code, lender_name, facility_type, loan_amount_usd',
-      (q: any) => q.in('confidence', ['high', 'medium'])
+      'eia_plant_code, lender_name, facility_type, loan_amount_usd, loan_status, pitch_urgency_score, pitch_angle',
+      (q: any) => q
+        .in('confidence', ['high', 'medium'])
+        .or('loan_status.is.null,loan_status.eq.active,loan_status.eq.unknown')
     );
-    console.log(`Loaded ${lenderRows.length} plant_lenders rows (high/medium confidence)`);
+    console.log(`Loaded ${lenderRows.length} plant_lenders rows (high/medium confidence, active/unknown currency)`);
 
     // ── 6. Aggregate lender_stats and tax_equity_stats ────────────────────────
     interface EntityAgg {
-      plantCodes:    Set<string>;
-      facilityTypes: Set<string>;
-      totalAmount:   number;
-      cfSum:         number;
-      cfCount:       number;
-      curtailedCount: number;
-      distressSum:   number;
-      distressCount: number;
-      isoSet:        Set<string>;
+      plantCodes:         Set<string>;
+      facilityTypes:      Set<string>;
+      totalAmount:        number;
+      cfSum:              number;
+      cfCount:            number;
+      curtailedCount:     number;
+      distressSum:        number;
+      distressCount:      number;
+      isoSet:             Set<string>;
+      // Enhancement 5: Pitch/exposure aggregates
+      curtailedMwSum:     number;   // sum of nameplate_capacity_mw for curtailed plants
+      highUrgencyCount:   number;   // plants where pitch_urgency_score >= 60
+      pitchAngleCounts:   Record<string, number>;  // angle → count
     }
 
-    const lenderMap   = new Map<string, EntityAgg>();
+    const lenderMap    = new Map<string, EntityAgg>();
     const taxEquityMap = new Map<string, EntityAgg>();
 
     const initAgg = (): EntityAgg => ({
       plantCodes: new Set(), facilityTypes: new Set(),
       totalAmount: 0, cfSum: 0, cfCount: 0,
       curtailedCount: 0, distressSum: 0, distressCount: 0, isoSet: new Set(),
+      curtailedMwSum: 0, highUrgencyCount: 0, pitchAngleCounts: {},
     });
 
     let blockedCount = 0;
@@ -317,11 +353,23 @@ Deno.serve(async (req: Request) => {
       const plant = plantByCode.get(row.eia_plant_code);
       if (plant) {
         if (plant.ttm_avg_factor != null) { agg.cfSum += plant.ttm_avg_factor; agg.cfCount++; }
-        if (plant.is_likely_curtailed) agg.curtailedCount++;
+        if (plant.is_likely_curtailed) {
+          agg.curtailedCount++;
+          // Enhancement 5: track curtailed MW exposure
+          if (plant.nameplate_capacity_mw != null) agg.curtailedMwSum += plant.nameplate_capacity_mw;
+        }
         if (plant.region) agg.isoSet.add(plant.region);
       }
       const distress = plantDistress.get(row.eia_plant_code);
       if (distress != null) { agg.distressSum += distress; agg.distressCount++; }
+
+      // Enhancement 5: pitch intelligence aggregates (only from agentic pipeline rows)
+      if (row.pitch_urgency_score != null && row.pitch_urgency_score >= 60) {
+        agg.highUrgencyCount++;
+      }
+      if (row.pitch_angle) {
+        agg.pitchAngleCounts[row.pitch_angle] = (agg.pitchAngleCounts[row.pitch_angle] ?? 0) + 1;
+      }
     }
 
     // ── 7. Load recent news for entity matching ───────────────────────────────
@@ -395,23 +443,36 @@ Deno.serve(async (req: Request) => {
           ).toFixed(2))
         : null;
 
+      // Enhancement 5: derive pitch exposure columns
+      const topPitchAngle = Object.entries(agg.pitchAngleCounts).length > 0
+        ? Object.entries(agg.pitchAngleCounts).sort((a, b) => b[1] - a[1])[0][0]
+        : null;
+
       lenderUpserts.push({
-        lender_name:          name,
-        asset_count:          agg.plantCodes.size,
-        total_exposure_usd:   agg.totalAmount > 0 ? agg.totalAmount : null,
-        plant_codes:          [...agg.plantCodes],
-        facility_types:       [...agg.facilityTypes],
-        avg_plant_cf:         agg.cfCount > 0
+        lender_name:                 name,
+        asset_count:                 agg.plantCodes.size,
+        total_exposure_usd:          agg.totalAmount > 0 ? agg.totalAmount : null,
+        plant_codes:                 [...agg.plantCodes],
+        facility_types:              [...agg.facilityTypes],
+        avg_plant_cf:                agg.cfCount > 0
           ? parseFloat((agg.cfSum / agg.cfCount).toFixed(4))
           : null,
-        pct_curtailed:        agg.plantCodes.size > 0
+        pct_curtailed:               agg.plantCodes.size > 0
           ? parseFloat((agg.curtailedCount / agg.plantCodes.size * 100).toFixed(2))
           : 0,
-        news_sentiment_score: newsSentimentScore,
-        distress_score:       distressScore,
-        relevance_scores:     news.relevanceScores,
-        last_news_date:       news.lastNewsDate,
-        computed_at:          now,
+        news_sentiment_score:        newsSentimentScore,
+        distress_score:              distressScore,
+        relevance_scores:            news.relevanceScores,
+        last_news_date:              news.lastNewsDate,
+        computed_at:                 now,
+        // Enhancement 5: portfolio exposure columns
+        total_curtailed_mw_exposure: agg.curtailedMwSum > 0 ? parseFloat(agg.curtailedMwSum.toFixed(2)) : null,
+        curtailed_plant_count:       agg.curtailedCount,
+        avg_distress_score:          agg.distressCount > 0
+          ? parseFloat((agg.distressSum / agg.distressCount).toFixed(2))
+          : null,
+        high_urgency_count:          agg.highUrgencyCount > 0 ? agg.highUrgencyCount : null,
+        top_pitch_angle:             topPitchAngle,
       });
     }
 

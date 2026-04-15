@@ -18,11 +18,19 @@ export interface PlantFinancingSummary {
 }
 
 export interface PlantLenderRow {
-  lenderName:   string;
-  role:         string;
-  facilityType: string;
-  confidence:   string;
-  notes:        string | null;
+  lenderName:          string;
+  role:                string;
+  facilityType:        string;
+  confidence:          string;
+  notes:               string | null;
+  loanStatus:          'active' | 'matured' | 'refinanced' | 'unknown' | null;
+  currencyConfidence:  number | null;
+  currencyReasoning:   string | null;
+  currencyCheckedAt:   string | null;
+  currencySource:      string | null;
+  maturityDate:        string | null;
+  financialCloseDate:  string | null;
+  refinancedAt:        string | null;
 }
 
 export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<{
@@ -37,9 +45,15 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
       .maybeSingle(),
     supabase
       .from('plant_lenders')
-      .select('lender_name, role, facility_type, confidence, notes')
+      .select(`
+        lender_name, role, facility_type, confidence, notes,
+        loan_status, currency_confidence, currency_reasoning,
+        currency_checked_at, currency_source,
+        maturity_date, financial_close_date, refinanced_at
+      `)
       .eq('eia_plant_code', eiaPlantCode)
       .in('confidence', ['high', 'medium'])
+      .order('loan_status', { ascending: true, nullsFirst: false })
       .order('confidence', { ascending: true }),
   ]);
 
@@ -51,12 +65,20 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
     searchedAt:   row.searched_at ?? null,
   } : null;
 
-  const lenders: PlantLenderRow[] = (lendersRes.data ?? []).map((r: Record<string, string | null>) => ({
-    lenderName:   r.lender_name as string,
-    role:         r.role as string,
-    facilityType: r.facility_type as string,
-    confidence:   r.confidence as string,
-    notes:        r.notes ?? null,
+  const lenders: PlantLenderRow[] = (lendersRes.data ?? []).map((r: Record<string, unknown>) => ({
+    lenderName:         r.lender_name as string,
+    role:               r.role as string,
+    facilityType:       r.facility_type as string,
+    confidence:         r.confidence as string,
+    notes:              (r.notes as string | null) ?? null,
+    loanStatus:         (r.loan_status as PlantLenderRow['loanStatus']) ?? null,
+    currencyConfidence: r.currency_confidence != null ? Number(r.currency_confidence) : null,
+    currencyReasoning:  (r.currency_reasoning as string | null) ?? null,
+    currencyCheckedAt:  (r.currency_checked_at as string | null) ?? null,
+    currencySource:     (r.currency_source as string | null) ?? null,
+    maturityDate:       (r.maturity_date as string | null) ?? null,
+    financialCloseDate: (r.financial_close_date as string | null) ?? null,
+    refinancedAt:       (r.refinanced_at as string | null) ?? null,
   }));
 
   return { financing, lenders };
@@ -105,6 +127,37 @@ export async function fetchPlantFinancingArticles(eiaPlantCode: string): Promise
     entityCompanyNames:   (row.entity_company_names as string[]) ?? [],
     lenders:              (row.lenders as string[]) ?? [],
   }));
+}
+
+export async function fetchLenderCurrencyStatus(lenderName: string): Promise<{
+  activePlants:   string[];
+  maturedPlants:  string[];
+  refinancedPlants: string[];
+  unknownPlants:  string[];
+  lastChecked:    string | null;
+  avgConfidence:  number | null;
+}> {
+  const { data, error } = await supabase
+    .from('plant_lenders')
+    .select('eia_plant_code, loan_status, currency_confidence, currency_checked_at')
+    .eq('lender_name', lenderName)
+    .in('confidence', ['high', 'medium']);
+
+  const empty = { activePlants: [], maturedPlants: [], refinancedPlants: [], unknownPlants: [], lastChecked: null, avgConfidence: null };
+  if (error || !data) return empty;
+
+  const rows = data as { eia_plant_code: string; loan_status: string | null; currency_confidence: number | null; currency_checked_at: string | null }[];
+  const confidences = rows.map(r => r.currency_confidence).filter((c): c is number => c != null);
+  const checkedDates = rows.map(r => r.currency_checked_at).filter((d): d is string => d != null).sort().reverse();
+
+  return {
+    activePlants:    rows.filter(r => r.loan_status === 'active').map(r => r.eia_plant_code),
+    maturedPlants:   rows.filter(r => r.loan_status === 'matured').map(r => r.eia_plant_code),
+    refinancedPlants: rows.filter(r => r.loan_status === 'refinanced').map(r => r.eia_plant_code),
+    unknownPlants:   rows.filter(r => !r.loan_status || r.loan_status === 'unknown').map(r => r.eia_plant_code),
+    lastChecked:     checkedDates[0] ?? null,
+    avgConfidence:   confidences.length > 0 ? confidences.reduce((a, b) => a + b, 0) / confidences.length : null,
+  };
 }
 
 export async function callFinancingSummarize(

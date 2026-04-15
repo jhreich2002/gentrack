@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { LenderStats } from '../types';
+import { LenderStats, LoanStatus } from '../types';
 import { fetchAllLenderStats } from '../services/lenderStatsService';
 import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
 
@@ -16,6 +16,22 @@ const FACILITY_ABBR: Record<string, string> = {
   letter_of_credit: 'LC',
   other:            'OT',
 };
+
+function loanStatusBadge(status: LoanStatus | null | undefined): React.ReactNode {
+  if (!status || status === 'unknown') return (
+    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500 font-mono" title="Loan status unknown">?</span>
+  );
+  if (status === 'active') return (
+    <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/40 border border-emerald-700/50 text-emerald-400 font-mono font-bold" title="Active loan">LIVE</span>
+  );
+  if (status === 'matured') return (
+    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-500 font-mono line-through" title="Loan matured">MATURED</span>
+  );
+  if (status === 'refinanced') return (
+    <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-900/40 border border-amber-700/50 text-amber-400 font-mono" title="Refinanced">REFI</span>
+  );
+  return null;
+}
 
 function scoreColor(s: number) {
   if (s >= 70) return 'text-red-400';
@@ -35,7 +51,8 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState('all');
   const [fuelFilter, setFuelFilter] = useState('all');
-  const [sort, setSort] = useState<'distress' | 'plants' | 'name'>('plants');
+  const [sort, setSort] = useState<'distress' | 'plants' | 'name' | 'currency'>('plants');
+  const [loanStatusFilter, setLoanStatusFilter] = useState<'active' | 'all' | 'unknown'>('active');
 
   useEffect(() => {
     Promise.all([fetchAllLenderStats(), fetchPursuitPlants()]).then(([s, p]) => {
@@ -55,6 +72,22 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     () => Object.fromEntries(pursuitPlants.map(p => [p.eiaPlantCode, p.name])),
     [pursuitPlants],
   );
+
+  // lenderName → { activeLoanCount, hasActiveExposure } derived from pursuitPlants
+  const lenderCurrencyMap = useMemo(() => {
+    const map = new Map<string, { activeLoanCount: number; hasActiveExposure: boolean }>();
+    for (const plant of pursuitPlants) {
+      for (const l of plant.lenders) {
+        const prev = map.get(l.name) ?? { activeLoanCount: 0, hasActiveExposure: false };
+        const isActive = l.loanStatus === 'active';
+        map.set(l.name, {
+          activeLoanCount: prev.activeLoanCount + (isActive ? 1 : 0),
+          hasActiveExposure: prev.hasActiveExposure || isActive,
+        });
+      }
+    }
+    return map;
+  }, [pursuitPlants]);
 
   const states = useMemo(() => {
     const s = new Set<string>();
@@ -80,8 +113,19 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     if (fuelFilter !== 'all') {
       rows = rows.filter(l => l.plantCodes.some(c => plantDataMap[c]?.fuel === fuelFilter));
     }
+    // Currency filter: 'active' shows lenders with at least one active loan
+    if (loanStatusFilter === 'active') {
+      rows = rows.filter(l => lenderCurrencyMap.get(l.lenderName)?.hasActiveExposure !== false);
+    } else if (loanStatusFilter === 'unknown') {
+      rows = rows.filter(l => !lenderCurrencyMap.get(l.lenderName)?.hasActiveExposure);
+    }
     return [...rows].sort((a, b) => {
       if (sort === 'distress') return (b.distressScore ?? 0) - (a.distressScore ?? 0);
+      if (sort === 'currency') {
+        const ac = lenderCurrencyMap.get(a.lenderName)?.activeLoanCount ?? 0;
+        const bc = lenderCurrencyMap.get(b.lenderName)?.activeLoanCount ?? 0;
+        return bc - ac;
+      }
       if (sort === 'plants') {
         const ac = a.plantCodes.filter(c => plantNameMap[c]).length;
         const bc = b.plantCodes.filter(c => plantNameMap[c]).length;
@@ -89,7 +133,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
       }
       return a.lenderName.localeCompare(b.lenderName);
     });
-  }, [stats, search, stateFilter, fuelFilter, sort, plantDataMap, plantNameMap]);
+  }, [stats, search, stateFilter, fuelFilter, sort, loanStatusFilter, plantDataMap, plantNameMap, lenderCurrencyMap]);
 
   if (loading) {
     return (
@@ -134,14 +178,23 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
           >
             {fuels.map(f => <option key={f} value={f}>{f === 'all' ? 'All Fuels' : f}</option>)}
           </select>
+          <select
+            value={loanStatusFilter}
+            onChange={e => setLoanStatusFilter(e.target.value as typeof loanStatusFilter)}
+            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+          >
+            <option value="active">Active Loans Only</option>
+            <option value="all">All (incl. Matured)</option>
+            <option value="unknown">Unknown Status</option>
+          </select>
           <div className="flex rounded-lg overflow-hidden border border-slate-700 text-xs font-semibold">
-            {(['distress', 'plants', 'name'] as const).map(s => (
+            {(['distress', 'plants', 'currency', 'name'] as const).map(s => (
               <button
                 key={s}
                 onClick={() => setSort(s)}
                 className={`px-3 py-2 ${sort === s ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
               >
-                {s === 'distress' ? 'Distress' : s === 'plants' ? 'Plants' : 'A–Z'}
+                {s === 'distress' ? 'Distress' : s === 'plants' ? 'Plants' : s === 'currency' ? 'Active' : 'A–Z'}
               </button>
             ))}
           </div>
@@ -161,6 +214,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-10 text-center">#</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Lender</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-36">Distress</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-20 text-center">Currency</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-32">Facility Types</th>
               </tr>
             </thead>
@@ -169,71 +223,85 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                 const distress = lender.distressScore ?? 0;
                 const curtailedCodes = lender.plantCodes.filter(c => plantNameMap[c]);
                 const isMulti = curtailedCodes.length >= 2;
+                const currency = lenderCurrencyMap.get(lender.lenderName);
+                const overallStatus: LoanStatus | null = currency?.hasActiveExposure
+                  ? 'active'
+                  : currency?.activeLoanCount === 0 && curtailedCodes.length > 0
+                    ? 'unknown'
+                    : null;
                 return (
                   <tr
                     key={lender.lenderName}
                     onClick={() => onLenderClick(lender.lenderName)}
                     className="cursor-pointer hover:bg-slate-800/60 group transition-colors"
                   >
-                    {/* Rank */}
-                    <td className="px-4 py-4 text-center align-top">
-                      <span className="text-xs font-mono text-slate-600">{idx + 1}</span>
-                    </td>
+                        {/* Rank */}
+                        <td className="px-4 py-4 text-center align-top">
+                          <span className="text-xs font-mono text-slate-600">{idx + 1}</span>
+                        </td>
 
-                    {/* Name + plant chips */}
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-slate-200 group-hover:text-cyan-400 transition-colors">
-                          {lender.lenderName}
-                        </span>
-                        {isMulti && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/50 font-bold">
-                            {curtailedCodes.length} plants
-                          </span>
-                        )}
-                      </div>
-                      {curtailedCodes.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-2">
-                          {curtailedCodes.map(code => (
-                            <span
-                              key={code}
-                              className="text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400"
-                            >
-                              {plantNameMap[code]}
+                        {/* Name + plant chips */}
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-slate-200 group-hover:text-cyan-400 transition-colors">
+                              {lender.lenderName}
                             </span>
-                          ))}
-                        </div>
-                      )}
-                    </td>
+                            {isMulti && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/50 font-bold">
+                                {curtailedCodes.length} plants
+                              </span>
+                            )}
+                          </div>
+                          {curtailedCodes.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {curtailedCodes.map(code => (
+                                <span
+                                  key={code}
+                                  className="text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400"
+                                >
+                                  {plantNameMap[code]}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
 
-                    {/* Distress */}
-                    <td className="px-4 py-4 text-right align-top">
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${scoreBarColor(distress)}`}
-                            style={{ width: `${distress}%` }}
-                          />
-                        </div>
-                        <span className={`text-sm font-black w-7 text-right ${scoreColor(distress)}`}>
-                          {Math.round(distress)}
-                        </span>
-                      </div>
-                    </td>
+                        {/* Distress */}
+                        <td className="px-4 py-4 text-right align-top">
+                          <div className="flex items-center justify-end gap-2">
+                            <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${scoreBarColor(distress)}`}
+                                style={{ width: `${distress}%` }}
+                              />
+                            </div>
+                            <span className={`text-sm font-black w-7 text-right ${scoreColor(distress)}`}>
+                              {Math.round(distress)}
+                            </span>
+                          </div>
+                        </td>
 
-                    {/* Facility types */}
-                    <td className="px-4 py-4 align-top">
-                      <div className="flex flex-wrap gap-1">
-                        {lender.facilityTypes.map(ft => (
-                          <span
-                            key={ft}
-                            className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 font-mono font-bold"
-                          >
-                            {FACILITY_ABBR[ft] ?? ft.slice(0, 2).toUpperCase()}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
+                        {/* Currency status badge */}
+                        <td className="px-4 py-4 align-top text-center">
+                          {loanStatusBadge(overallStatus)}
+                          {currency?.activeLoanCount != null && currency.activeLoanCount > 0 && (
+                            <div className="text-[9px] text-slate-500 mt-1 font-mono">{currency.activeLoanCount} active</div>
+                          )}
+                        </td>
+
+                        {/* Facility types */}
+                        <td className="px-4 py-4 align-top">
+                          <div className="flex flex-wrap gap-1">
+                            {lender.facilityTypes.map(ft => (
+                              <span
+                                key={ft}
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 font-mono font-bold"
+                              >
+                                {FACILITY_ABBR[ft] ?? ft.slice(0, 2).toUpperCase()}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
 
                   </tr>
                 );

@@ -5,11 +5,15 @@ import {
   fetchAdminUserActivity,
   fetchAdminMonthlyCosts,
   fetchAdminIngestionFreshness,
+  fetchUnsearchedCurtailedPlants,
+  fetchAllCurtailedPlants,
   AdminDailyActivityRow,
   AdminUserDailyActivityRow,
   AdminMonthlyCostLine,
   AdminMonthlyCostTotal,
   AdminUserRow,
+  UnsearchedCurtailedPlant,
+  CurtailedPlant,
   UserRole,
 } from '../services/authService';
 
@@ -54,6 +58,17 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
   const [preRunLatestPlantUpdateAt, setPreRunLatestPlantUpdateAt] = useState<string | null>(null);
   const [roleLoading, setRoleLoading] = useState<string | null>(null);
 
+  const [unsearchedPlants, setUnsearchedPlants] = useState<UnsearchedCurtailedPlant[]>([]);
+  const [unsearchedLoading, setUnsearchedLoading] = useState(true);
+  const [unsearchedError, setUnsearchedError] = useState<string | null>(null);
+  const [lenderSearchTriggering, setLenderSearchTriggering] = useState(false);
+  const [lenderIngestMaxPlants, setLenderIngestMaxPlants] = useState<number | null>(25);
+
+  const [curtailedPlants, setCurtailedPlants] = useState<CurtailedPlant[]>([]);
+  const [curtailedLoading, setCurtailedLoading] = useState(true);
+  const [curtailedError, setCurtailedError] = useState<string | null>(null);
+  const [showIngestConfirm, setShowIngestConfirm] = useState(false);
+
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
     setUsersError(null);
@@ -95,6 +110,32 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
     }
   }, []);
 
+  const loadUnsearchedPlants = useCallback(async () => {
+    setUnsearchedLoading(true);
+    setUnsearchedError(null);
+    try {
+      const data = await fetchUnsearchedCurtailedPlants();
+      setUnsearchedPlants(data);
+    } catch (err: any) {
+      setUnsearchedError(err.message ?? 'Failed to load unsearched plants');
+    } finally {
+      setUnsearchedLoading(false);
+    }
+  }, []);
+
+  const loadCurtailedPlants = useCallback(async () => {
+    setCurtailedLoading(true);
+    setCurtailedError(null);
+    try {
+      const data = await fetchAllCurtailedPlants();
+      setCurtailedPlants(data);
+    } catch (err: any) {
+      setCurtailedError(err.message ?? 'Failed to load curtailed plants');
+    } finally {
+      setCurtailedLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
@@ -109,6 +150,22 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
     const id = setInterval(loadCosts, 24 * 60 * 60 * 1000);
     return () => clearInterval(id);
   }, [loadCosts]);
+
+  useEffect(() => {
+    loadUnsearchedPlants();
+  }, [loadUnsearchedPlants]);
+
+  useEffect(() => {
+    loadCurtailedPlants();
+  }, [loadCurtailedPlants]);
+
+  // Re-fetch after a successful EIA workflow run
+  useEffect(() => {
+    if (workflowStatus === 'success') {
+      loadUnsearchedPlants();
+      loadCurtailedPlants();
+    }
+  }, [workflowStatus, loadUnsearchedPlants, loadCurtailedPlants]);
 
   const monthOptions = useMemo(() => {
     const options = new Set<string>();
@@ -325,6 +382,41 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
       alert(`Failed to update role: ${err.message}`);
     } finally {
       setRoleLoading(null);
+    }
+  };
+
+  const triggerLenderSearch = async () => {
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    if (!sbUrl || !sbKey) { alert('Supabase credentials not configured.'); return; }
+    setLenderSearchTriggering(true);
+    try {
+      const res = await fetch(`${sbUrl}/functions/v1/lender-ingest-coordinator`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sbKey}` },
+        body: JSON.stringify({
+          mode:        'full',
+          budgetLimit: 30.0,
+          maxPlants:   lenderIngestMaxPlants,
+          batchOffset: 0,
+          recheck:     false,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as any;
+        if (body?.reason === 'already_running') {
+          alert('A lender identification run is already in progress. Check back in a few minutes.');
+          return;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+      setShowIngestConfirm(false);
+      // Coordinator processes plants asynchronously via self-chaining — refresh after a delay
+      setTimeout(() => { loadUnsearchedPlants(); loadCurtailedPlants(); }, 20_000);
+    } catch (err: any) {
+      alert(`Failed to trigger lender identification: ${err.message}`);
+    } finally {
+      setLenderSearchTriggering(false);
     }
   };
 
@@ -618,6 +710,194 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
             </p>
           )}
         </section>
+
+        {/* ── Lender Search Coverage ────────────────────── */}
+        {(() => {
+          const cutoff = new Date();
+          cutoff.setDate(cutoff.getDate() - 90);
+          const neverSearched = curtailedPlants.filter(p => !p.lenderIngestCheckedAt).length;
+          const stale = curtailedPlants.filter(p => p.lenderIngestCheckedAt && new Date(p.lenderIngestCheckedAt) < cutoff).length;
+          const topN = lenderIngestMaxPlants === null ? curtailedPlants.length : Math.min(lenderIngestMaxPlants, curtailedPlants.length);
+          const eligibleInTopN = curtailedPlants.slice(0, lenderIngestMaxPlants ?? undefined).filter(
+            p => !p.lenderIngestCheckedAt || new Date(p.lenderIngestCheckedAt) < cutoff
+          ).length;
+          const estimatedCost = (eligibleInTopN * 0.065).toFixed(2);
+
+          return (
+            <section className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-lg">
+              {/* Header */}
+              <div className="flex items-center justify-between px-8 py-6 border-b border-slate-800">
+                <div>
+                  <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Lender Identification Coverage</h2>
+                  <p className="text-xs text-slate-600">
+                    Multi-source agentic pipeline — identifies lenders, classifies loan status, and generates pitch intelligence. Ranked by distress score.
+                    {!curtailedLoading && curtailedPlants.length > 0 && (
+                      <>
+                        <span className="mx-1 text-slate-700">·</span>
+                        <span className="text-slate-500">{curtailedPlants.length} curtailed plants</span>
+                        {neverSearched > 0 && (
+                          <><span className="mx-1 text-slate-700">·</span><span className="text-amber-400 font-semibold">{neverSearched} never searched</span></>
+                        )}
+                        {stale > 0 && (
+                          <><span className="mx-1 text-slate-700">·</span><span className="text-slate-500">{stale} stale (&gt;90 days)</span></>
+                        )}
+                        {neverSearched === 0 && stale === 0 && (
+                          <><span className="mx-1 text-slate-700">·</span><span className="text-emerald-500 font-semibold">All plants recently searched</span></>
+                        )}
+                      </>
+                    )}
+                  </p>
+                </div>
+                <button
+                  onClick={loadCurtailedPlants}
+                  className="p-2 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors"
+                  title="Refresh list"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Plant table */}
+              {curtailedLoading ? (
+                <div className="py-12 text-center text-slate-600 text-sm">Loading...</div>
+              ) : curtailedError ? (
+                <div className="py-12 text-center text-red-400 text-sm">{curtailedError}</div>
+              ) : curtailedPlants.length === 0 ? (
+                <div className="py-12 text-center text-slate-600 text-sm">No curtailed plants found.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="bg-slate-800/50 text-slate-500 text-[10px] font-black uppercase tracking-[0.15em]">
+                        <th className="px-8 py-3">#</th>
+                        <th className="px-6 py-3">Plant</th>
+                        <th className="px-6 py-3">State</th>
+                        <th className="px-6 py-3">Fuel</th>
+                        <th className="px-6 py-3 text-right">MW</th>
+                        <th className="px-6 py-3 text-right">Distress</th>
+                        <th className="px-6 py-3 text-right">Last Searched</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {curtailedPlants.map((plant, idx) => {
+                        const isStale = plant.lenderIngestCheckedAt && new Date(plant.lenderIngestCheckedAt) < cutoff;
+                        const isInRun = lenderIngestMaxPlants === null || idx < lenderIngestMaxPlants;
+                        return (
+                          <tr
+                            key={plant.eiaPlantCode}
+                            className={`transition-colors ${isInRun ? 'hover:bg-slate-800/40' : 'opacity-40 hover:bg-slate-800/20'}`}
+                          >
+                            <td className={`px-8 py-3 text-xs font-mono ${isInRun ? 'text-cyan-600' : 'text-slate-700'}`}>{idx + 1}</td>
+                            <td className="px-6 py-3">
+                              <div className="text-sm font-semibold text-slate-200">{plant.name}</div>
+                              <div className="text-[10px] text-slate-600 font-mono mt-0.5">{plant.eiaPlantCode}</div>
+                            </td>
+                            <td className="px-6 py-3 text-xs text-slate-400">{plant.state}</td>
+                            <td className="px-6 py-3 text-xs text-slate-400">{plant.fuelSource}</td>
+                            <td className="px-6 py-3 text-xs text-slate-400 text-right font-mono">
+                              {plant.nameplateMw.toLocaleString()}
+                            </td>
+                            <td className="px-6 py-3 text-right">
+                              {plant.distressScore != null ? (
+                                <div className="flex items-center justify-end gap-2">
+                                  <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${plant.distressScore >= 70 ? 'bg-red-500' : plant.distressScore >= 40 ? 'bg-amber-500' : 'bg-slate-500'}`}
+                                      style={{ width: `${Math.min(plant.distressScore, 100)}%` }}
+                                    />
+                                  </div>
+                                  <span className={`text-sm font-black w-7 text-right font-mono ${plant.distressScore >= 70 ? 'text-red-400' : plant.distressScore >= 40 ? 'text-amber-400' : 'text-slate-400'}`}>
+                                    {Math.round(plant.distressScore)}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-slate-700 font-mono">—</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-3 text-right">
+                              {plant.lenderIngestCheckedAt ? (
+                                <span className={`text-[10px] font-mono ${isStale ? 'text-slate-500' : 'text-emerald-500'}`}>
+                                  {new Date(plant.lenderIngestCheckedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-900/30 text-amber-400 border border-amber-500/20 font-bold">
+                                  Never
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Footer: count selector + cost + confirm */}
+              {!curtailedLoading && curtailedPlants.length > 0 && (
+                <div className="px-8 py-5 border-t border-slate-800 bg-slate-800/20 flex items-center justify-between gap-4 flex-wrap">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="text-xs text-slate-400">Process top</span>
+                    <select
+                      value={lenderIngestMaxPlants === null ? 'all' : String(lenderIngestMaxPlants)}
+                      onChange={e => { setLenderIngestMaxPlants(e.target.value === 'all' ? null : Number(e.target.value)); setShowIngestConfirm(false); }}
+                      disabled={lenderSearchTriggering}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-cyan-600"
+                    >
+                      <option value="10">10</option>
+                      <option value="25">25</option>
+                      <option value="50">50</option>
+                      <option value="100">100</option>
+                      <option value="all">All ({curtailedPlants.length})</option>
+                    </select>
+                    <span className="text-xs text-slate-400">plants</span>
+                    <span className="text-xs text-slate-700">·</span>
+                    <span className="text-xs text-slate-500">
+                      {eligibleInTopN} eligible
+                      <span className="mx-1 text-slate-700">·</span>
+                      estimated cost: <span className="text-cyan-400 font-mono font-semibold">~${estimatedCost}</span>
+                    </span>
+                  </div>
+
+                  {showIngestConfirm ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-amber-300 font-semibold">
+                        Run for top {topN} plants ({eligibleInTopN} eligible)?
+                      </span>
+                      <button
+                        onClick={() => setShowIngestConfirm(false)}
+                        disabled={lenderSearchTriggering}
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 font-semibold text-xs transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={triggerLenderSearch}
+                        disabled={lenderSearchTriggering}
+                        className="px-4 py-1.5 rounded-lg bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-xs tracking-wide transition-all flex items-center gap-2"
+                      >
+                        {lenderSearchTriggering && (
+                          <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        )}
+                        Confirm &amp; Run
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setShowIngestConfirm(true)}
+                      disabled={lenderSearchTriggering || eligibleInTopN === 0}
+                      className="px-4 py-2 rounded-xl bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs tracking-wide transition-all"
+                    >
+                      Run Lender Identification
+                    </button>
+                  )}
+                </div>
+              )}
+            </section>
+          );
+        })()}
 
         {/* ── User Management ───────────────────────────── */}
         <section className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-lg">

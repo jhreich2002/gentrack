@@ -417,6 +417,18 @@ Deno.serve(async (req: Request) => {
       // are excluded by lender_search_checked_at filter), so cumulative offsets cause gaps.
       console.log(`Self-batching: next call (offset=0, ${totalEligible - limit} remaining)`);
       fireAndForget(`${supabaseUrl}/functions/v1/lender-search`, { plantCount, offset: 0, limit });
+    } else {
+      // Last batch — chain to lender-currency-agent to classify all newly discovered lender rows.
+      // The agent applies heuristics + Perplexity + EDGAR + Gemini to determine whether each
+      // loan is active, matured, or refinanced, then chains to refresh-entity-stats on completion.
+      console.log(`Last batch complete — triggering lender-currency-agent for currency classification`);
+      fireAndForget(`${supabaseUrl}/functions/v1/lender-currency-agent`, {
+        mode:          'backfill',
+        offset:        0,
+        limit:         8,
+        budget_limit:  20.0,
+        force_recheck: false,
+      });
     }
 
     return new Response(JSON.stringify({

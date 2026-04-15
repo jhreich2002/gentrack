@@ -51,7 +51,7 @@ function trendIndicator(cfTrend: number | null): React.ReactNode {
   return null;
 }
 
-type SortKey = 'pursuit' | 'distress' | 'opportunity' | 'mw' | 'lenders' | 'factor';
+type SortKey = 'pursuit' | 'distress' | 'opportunity' | 'mw' | 'lenders' | 'factor' | 'currency';
 type FuelFilter = 'all' | string;
 
 const PAGE_SIZE = 50;
@@ -112,6 +112,7 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
     if (sortKey === 'mw')          sorted.sort((a, b) => dir * (a.nameplateMw - b.nameplateMw));
     if (sortKey === 'lenders')     sorted.sort((a, b) => dir * (a.lenders.length - b.lenders.length));
     if (sortKey === 'factor')      sorted.sort((a, b) => dir * ((a.ttmAvgFactor ?? 0) - (b.ttmAvgFactor ?? 0)));
+    if (sortKey === 'currency')    sorted.sort((a, b) => dir * (a.activeLenderCount - b.activeLenderCount));
 
     return sorted;
   }, [plants, search, stateFilter, fuelFilter, sortKey, sortDesc]);
@@ -197,16 +198,22 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
                 <th className="px-6 py-5 cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('lenders')}>
                   Financing Parties {sortKey === 'lenders' && (sortDesc ? '↓' : '↑')}
                 </th>
+                <th className="px-6 py-5 text-center cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('currency')}>
+                  Active {sortKey === 'currency' && (sortDesc ? '↓' : '↑')}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
               {paginated.map((plant) => {
                 const color = fuelColor(plant.fuelSource);
+                // De-emphasize rows where every scored lender is confirmed matured
+                const scoredLenders = plant.lenders.filter(l => l.loanStatus && l.loanStatus !== 'unknown');
+                const allMatured = scoredLenders.length > 0 && scoredLenders.every(l => l.loanStatus === 'matured');
                 return (
                   <tr
                     key={plant.eiaPlantCode}
                     onClick={() => onPlantClick(plant.eiaPlantCode)}
-                    className="cursor-pointer transition-all hover:bg-slate-800/60 group"
+                    className={`cursor-pointer transition-all hover:bg-slate-800/60 group ${allMatured ? 'opacity-40' : ''}`}
                   >
                     {/* Plant Name */}
                     <td className="px-6 py-5">
@@ -294,16 +301,32 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
                       {plant.lenders.length > 0
                         ? (
                           <div className="flex flex-wrap gap-1 max-w-sm">
-                            {plant.lenders.slice(0, 4).map((l, i) => (
-                              <span
-                                key={i}
-                                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-medium"
-                                title={`${l.role} — ${l.facilityType}`}
-                              >
-                                <span className="text-emerald-500 font-bold text-[8px]">{facilityTypeShort(l.facilityType)}</span>
-                                {l.name}
-                              </span>
-                            ))}
+                            {plant.lenders.slice(0, 4).map((l, i) => {
+                              // Currency status dot color
+                              const dotColor = l.loanStatus === 'active'
+                                ? 'bg-emerald-400'
+                                : l.loanStatus === 'matured'
+                                  ? 'bg-slate-600'
+                                  : 'bg-amber-500';
+                              const dotTitle = l.loanStatus === 'active'
+                                ? 'Active loan'
+                                : l.loanStatus === 'matured'
+                                  ? 'Loan matured'
+                                  : l.loanStatus === 'refinanced'
+                                    ? 'Refinanced'
+                                    : 'Status unknown';
+                              return (
+                                <span
+                                  key={i}
+                                  className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-medium"
+                                  title={`${l.role} — ${l.facilityType} | ${dotTitle}${l.currencyConfidence != null ? ` (${l.currencyConfidence}% conf)` : ''}`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`} title={dotTitle} />
+                                  <span className="text-emerald-500 font-bold text-[8px]">{facilityTypeShort(l.facilityType)}</span>
+                                  {l.name}
+                                </span>
+                              );
+                            })}
                             {plant.lenders.length > 4 && (
                               <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">
                                 +{plant.lenders.length - 4} more
@@ -312,6 +335,16 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
                           </div>
                         )
                         : <span className="text-slate-600 text-xs">Lender names not parsed</span>
+                      }
+                    </td>
+
+                    {/* Active lender count */}
+                    <td className="px-6 py-5 text-center">
+                      {plant.activeLenderCount > 0
+                        ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-900/40 border border-emerald-700/50 text-emerald-400 font-mono font-bold">{plant.activeLenderCount}</span>
+                        : allMatured
+                          ? <span className="text-[10px] text-slate-600 font-mono">none</span>
+                          : <span className="text-[10px] text-slate-600 font-mono">?</span>
                       }
                     </td>
                   </tr>
