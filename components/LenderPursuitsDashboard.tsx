@@ -1,62 +1,33 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { LenderStats, LoanStatus } from '../types';
+import { LenderStats } from '../types';
 import { fetchAllLenderStats } from '../services/lenderStatsService';
 import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
+import {
+  PITCH_ANGLE_LABEL, PITCH_ANGLE_COLOR, FACILITY_ABBR,
+  scoreColor, scoreBarColor,
+} from '../utils/lenderUtils';
+
+type Tier = 'HOT' | 'WARM' | 'WATCH' | null;
 
 interface Props {
   onLenderClick: (name: string) => void;
 }
 
-const PITCH_ANGLE_LABEL: Record<string, string> = {
-  interconnection_advisory: 'Interconnection Advisory',
-  asset_management:         'Asset Management',
-  merchant_risk:            'Merchant Risk',
-  refinancing_advisory:     'Refinancing Advisory',
-  general_exposure:         'General Exposure',
-};
-const PITCH_ANGLE_COLOR: Record<string, string> = {
-  interconnection_advisory: 'bg-blue-900/30 border-blue-700/50 text-blue-400',
-  asset_management:         'bg-purple-900/30 border-purple-700/50 text-purple-400',
-  merchant_risk:            'bg-red-900/30 border-red-700/50 text-red-400',
-  refinancing_advisory:     'bg-amber-900/30 border-amber-700/50 text-amber-400',
-  general_exposure:         'bg-slate-800 border-slate-700 text-slate-400',
+const TIER_STYLES: Record<NonNullable<Tier>, { badge: string; border: string }> = {
+  HOT:   { badge: 'bg-red-900/50 border-red-700/50 text-red-300',    border: 'bg-red-500' },
+  WARM:  { badge: 'bg-amber-900/50 border-amber-700/50 text-amber-300', border: 'bg-amber-500' },
+  WATCH: { badge: 'bg-slate-800 border-slate-700 text-slate-400',     border: 'bg-slate-600' },
 };
 
-const FACILITY_ABBR: Record<string, string> = {
-  term_loan:        'TL',
-  construction_loan:'CL',
-  tax_equity:       'TE',
-  revolving_credit: 'RC',
-  bridge_loan:      'BL',
-  letter_of_credit: 'LC',
-  other:            'OT',
-};
-
-function loanStatusBadge(status: LoanStatus | null | undefined): React.ReactNode {
-  if (!status || status === 'unknown') return (
-    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500 font-mono" title="Loan status unknown">?</span>
-  );
-  if (status === 'active') return (
-    <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/40 border border-emerald-700/50 text-emerald-400 font-mono font-bold" title="Active loan">LIVE</span>
-  );
-  if (status === 'matured') return (
-    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-500 font-mono line-through" title="Loan matured">MATURED</span>
-  );
-  if (status === 'refinanced') return (
-    <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-900/40 border border-amber-700/50 text-amber-400 font-mono" title="Refinanced">REFI</span>
-  );
-  return null;
+function fmtMw(mw: number): string {
+  if (mw >= 1000) return `${(mw / 1000).toFixed(1)} GW`;
+  return `${Math.round(mw).toLocaleString()} MW`;
 }
 
-function scoreColor(s: number) {
-  if (s >= 70) return 'text-red-400';
-  if (s >= 40) return 'text-amber-400';
-  return 'text-slate-400';
-}
-function scoreBarColor(s: number) {
-  if (s >= 70) return 'bg-red-500';
-  if (s >= 40) return 'bg-amber-500';
-  return 'bg-slate-500';
+function fmtUsdCompact(v: number): string {
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
+  return `$${Math.round(v).toLocaleString()}`;
 }
 
 export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
@@ -66,7 +37,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState('all');
   const [fuelFilter, setFuelFilter] = useState('all');
-  const [sort, setSort] = useState<'exposure' | 'distress' | 'plants' | 'name' | 'currency'>('exposure');
+  const [sort, setSort] = useState<'exposure' | 'distress' | 'plants' | 'name' | 'currency' | 'tier'>('exposure');
   const [loanStatusFilter, setLoanStatusFilter] = useState<'active' | 'all' | 'unknown'>('active');
 
   useEffect(() => {
@@ -77,18 +48,17 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     });
   }, []);
 
-  // eiaPlantCode → { name, state, fuelSource } lookup (curtailed plants only)
+  // eiaPlantCode → { name, state, fuelSource } lookup
   const plantDataMap = useMemo(
     () => Object.fromEntries(pursuitPlants.map(p => [p.eiaPlantCode, { name: p.name, state: p.state, fuel: p.fuelSource }])),
     [pursuitPlants],
   );
-  // simple name map kept for chip display
   const plantNameMap = useMemo(
     () => Object.fromEntries(pursuitPlants.map(p => [p.eiaPlantCode, p.name])),
     [pursuitPlants],
   );
 
-  // lenderName → { totalCurtailedMw, curtailedCount } — for ratio column + exposure sort
+  // lenderName → { totalCurtailedMw, curtailedCount }
   const lenderExposureMap = useMemo(() => {
     const map = new Map<string, { totalCurtailedMw: number; curtailedCount: number }>();
     for (const plant of pursuitPlants) {
@@ -103,7 +73,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     return map;
   }, [pursuitPlants]);
 
-  // lenderName → { activeLoanCount, hasActiveExposure } derived from pursuitPlants
+  // lenderName → { activeLoanCount, hasActiveExposure }
   const lenderCurrencyMap = useMemo(() => {
     const map = new Map<string, { activeLoanCount: number; hasActiveExposure: boolean }>();
     for (const plant of pursuitPlants) {
@@ -119,6 +89,23 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     return map;
   }, [pursuitPlants]);
 
+  // lenderName → priority tier
+  const lenderTierMap = useMemo(() => {
+    const map = new Map<string, Tier>();
+    for (const lender of stats) {
+      const currency = lenderCurrencyMap.get(lender.lenderName);
+      const hasActive = currency?.hasActiveExposure ?? false;
+      const distress = lender.distressScore ?? 0;
+      const urgent = lender.highUrgencyCount ?? 0;
+      let tier: Tier = null;
+      if (hasActive && distress >= 60 && urgent > 0)      tier = 'HOT';
+      else if (hasActive && (distress >= 40 || urgent > 0)) tier = 'WARM';
+      else if (hasActive)                                   tier = 'WATCH';
+      map.set(lender.lenderName, tier);
+    }
+    return map;
+  }, [stats, lenderCurrencyMap]);
+
   const states = useMemo(() => {
     const s = new Set<string>();
     stats.forEach(l => l.plantCodes.forEach(c => { if (plantDataMap[c]?.state) s.add(plantDataMap[c].state); }));
@@ -130,6 +117,8 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     stats.forEach(l => l.plantCodes.forEach(c => { if (plantDataMap[c]?.fuel) s.add(plantDataMap[c].fuel); }));
     return ['all', ...Array.from(s).sort()];
   }, [stats, plantDataMap]);
+
+  const TIER_ORDER: Record<string, number> = { HOT: 0, WARM: 1, WATCH: 2 };
 
   const filtered = useMemo(() => {
     let rows = stats;
@@ -143,21 +132,27 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     if (fuelFilter !== 'all') {
       rows = rows.filter(l => l.plantCodes.some(c => plantDataMap[c]?.fuel === fuelFilter));
     }
-    // Currency filter: 'active' shows lenders with at least one active loan
     if (loanStatusFilter === 'active') {
       rows = rows.filter(l => lenderCurrencyMap.get(l.lenderName)?.hasActiveExposure !== false);
     } else if (loanStatusFilter === 'unknown') {
       rows = rows.filter(l => !lenderCurrencyMap.get(l.lenderName)?.hasActiveExposure);
     }
     return [...rows].sort((a, b) => {
-      if (sort === 'exposure') {
-        // Primary: active-loan lenders first
+      if (sort === 'tier') {
+        const at = lenderTierMap.get(a.lenderName);
+        const bt = lenderTierMap.get(b.lenderName);
+        const ao = at != null ? (TIER_ORDER[at] ?? 3) : 3;
+        const bo = bt != null ? (TIER_ORDER[bt] ?? 3) : 3;
+        if (ao !== bo) return ao - bo;
+      }
+      if (sort === 'exposure' || sort === 'tier') {
         const aActive = lenderCurrencyMap.get(a.lenderName)?.hasActiveExposure ? 1 : 0;
         const bActive = lenderCurrencyMap.get(b.lenderName)?.hasActiveExposure ? 1 : 0;
         if (bActive !== aActive) return bActive - aActive;
-        // Secondary: curtailed exposure — $ amount (pro-rated) preferred, MW fallback
         const aExp = lenderExposureMap.get(a.lenderName);
         const bExp = lenderExposureMap.get(b.lenderName);
+        const curtailedCodes_a = a.plantCodes.filter(c => plantNameMap[c]).length;
+        const curtailedCodes_b = b.plantCodes.filter(c => plantNameMap[c]).length;
         const aVal = a.totalExposureUsd != null && a.assetCount > 0
           ? a.totalExposureUsd * ((aExp?.curtailedCount ?? 0) / a.assetCount)
           : (aExp?.totalCurtailedMw ?? 0);
@@ -179,7 +174,25 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
       }
       return a.lenderName.localeCompare(b.lenderName);
     });
-  }, [stats, search, stateFilter, fuelFilter, sort, loanStatusFilter, plantDataMap, plantNameMap, lenderCurrencyMap, lenderExposureMap]);
+  }, [stats, search, stateFilter, fuelFilter, sort, loanStatusFilter, plantDataMap, plantNameMap, lenderCurrencyMap, lenderExposureMap, lenderTierMap]);
+
+  // Summary stats for the header bar
+  const summaryStats = useMemo(() => {
+    const withActive = filtered.filter(l => lenderCurrencyMap.get(l.lenderName)?.hasActiveExposure).length;
+    const totalMw = filtered.reduce((acc, l) => acc + (lenderExposureMap.get(l.lenderName)?.totalCurtailedMw ?? 0), 0);
+    const highUrgency = filtered.filter(l => (l.highUrgencyCount ?? 0) > 0).length;
+    // Modal pitch angle
+    const pitchCounts = new Map<string, number>();
+    filtered.forEach(l => {
+      if (l.topPitchAngle) pitchCounts.set(l.topPitchAngle, (pitchCounts.get(l.topPitchAngle) ?? 0) + 1);
+    });
+    let topPitch: string | null = null;
+    let topPitchCount = 0;
+    pitchCounts.forEach((count, angle) => {
+      if (count > topPitchCount) { topPitch = angle; topPitchCount = count; }
+    });
+    return { totalLenders: filtered.length, withActive, totalMw, highUrgency, topPitch };
+  }, [filtered, lenderCurrencyMap, lenderExposureMap]);
 
   if (loading) {
     return (
@@ -193,17 +206,46 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     <div className="flex flex-col h-full overflow-hidden bg-slate-900">
       {/* Header */}
       <div className="px-6 pt-6 pb-4 border-b border-slate-800 flex-shrink-0">
-        <div className="flex items-center gap-3 mb-2">
+        <div className="flex items-center gap-3 mb-1">
           <div className="w-2 h-8 rounded-full bg-cyan-500" />
           <h1 className="text-4xl font-black text-white tracking-tight">Lender Pursuits</h1>
         </div>
-        <p className="text-slate-400 font-medium max-w-2xl leading-relaxed">
+        <p className="text-slate-400 font-medium max-w-2xl leading-relaxed text-sm mb-4">
           Lenders with exposure to curtailed plants — ranked by active loan exposure.
-          {stats.length > 0 && ` ${stats.length} lenders identified.`}
         </p>
 
+        {/* Summary Stats Bar */}
+        <div className="flex flex-wrap gap-3 mb-4">
+          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl px-4 py-2.5 flex items-center gap-3">
+            <div className="text-[9px] font-black text-cyan-500 uppercase tracking-widest">Lenders</div>
+            <div className="text-xl font-black text-white">{summaryStats.totalLenders}</div>
+          </div>
+          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl px-4 py-2.5 flex items-center gap-3">
+            <div className="text-[9px] font-black text-emerald-500 uppercase tracking-widest">Active Exposure</div>
+            <div className="text-xl font-black text-white">{summaryStats.withActive}</div>
+            <div className="text-[10px] text-slate-500">lenders</div>
+          </div>
+          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl px-4 py-2.5 flex items-center gap-3">
+            <div className="text-[9px] font-black text-amber-500 uppercase tracking-widest">Curtailed MW</div>
+            <div className="text-xl font-black text-white">{fmtMw(summaryStats.totalMw)}</div>
+          </div>
+          <div className={`bg-slate-800/50 border border-slate-700/50 rounded-xl px-4 py-2.5 flex items-center gap-3 ${summaryStats.highUrgency === 0 ? 'opacity-40' : ''}`}>
+            <div className="text-[9px] font-black text-red-500 uppercase tracking-widest">High Urgency</div>
+            <div className="text-xl font-black text-white">{summaryStats.highUrgency}</div>
+            <div className="text-[10px] text-slate-500">lenders</div>
+          </div>
+          {summaryStats.topPitch && (
+            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl px-4 py-2.5 flex items-center gap-3">
+              <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Top Signal</div>
+              <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${PITCH_ANGLE_COLOR[summaryStats.topPitch] ?? 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                {PITCH_ANGLE_LABEL[summaryStats.topPitch] ?? summaryStats.topPitch}
+              </span>
+            </div>
+          )}
+        </div>
+
         {/* Filters */}
-        <div className="flex flex-wrap gap-3 mt-4">
+        <div className="flex flex-wrap gap-3">
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
@@ -234,13 +276,13 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
             <option value="unknown">Unknown Status</option>
           </select>
           <div className="flex rounded-lg overflow-hidden border border-slate-700 text-xs font-semibold">
-            {(['exposure', 'distress', 'plants', 'currency', 'name'] as const).map(s => (
+            {(['tier', 'exposure', 'distress', 'plants', 'name'] as const).map(s => (
               <button
                 key={s}
                 onClick={() => setSort(s)}
                 className={`px-3 py-2 ${sort === s ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
               >
-                {s === 'exposure' ? 'Exposure' : s === 'distress' ? 'Distress' : s === 'plants' ? 'Plants' : s === 'currency' ? 'Active' : 'A–Z'}
+                {s === 'tier' ? 'Priority' : s === 'exposure' ? 'Exposure' : s === 'distress' ? 'Distress' : s === 'plants' ? 'Plants' : 'A–Z'}
               </button>
             ))}
           </div>
@@ -254,165 +296,177 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
             No lenders match your search.
           </div>
         ) : (
-          <table className="w-full text-left">
+          <table className="w-full text-left table-fixed">
             <thead className="sticky top-0 bg-slate-900/95 backdrop-blur z-10">
               <tr className="border-b border-slate-800">
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-10 text-center">#</th>
+                {/* Tier border cell */}
+                <th className="w-1 p-0" />
+                <th className="px-3 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-16 text-center">#</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Lender</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-36">Distress</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-20 text-center">Currency</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-32 text-right">Curt. Exposure</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-32">Facility Types</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-40" title="Primary pitch angle across portfolio">Pitch Angle</th>
-                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-16 text-center" title="Plants with urgency ≥ 60">Urgent</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-52" title="Primary advisory angle for this lender's portfolio">Opportunity</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-44 text-right">Exposure</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-48">Health</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-56">Assets</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
               {filtered.map((lender, idx) => {
                 const distress = lender.distressScore ?? 0;
                 const curtailedCodes = lender.plantCodes.filter(c => plantNameMap[c]);
-                const isMulti = curtailedCodes.length >= 2;
                 const currency = lenderCurrencyMap.get(lender.lenderName);
-                const overallStatus: LoanStatus | null = currency?.hasActiveExposure
-                  ? 'active'
-                  : currency?.activeLoanCount === 0 && curtailedCodes.length > 0
-                    ? 'unknown'
-                    : null;
+                const exposure = lenderExposureMap.get(lender.lenderName);
+                const tier = lenderTierMap.get(lender.lenderName) ?? null;
+
+                const curtailed = curtailedCodes.length;
+                const total = lender.assetCount || 1;
+                const ratio = curtailed / total;
+                const proRatedUsd = lender.totalExposureUsd != null
+                  ? lender.totalExposureUsd * (curtailed / total)
+                  : null;
+                const mw = exposure?.totalCurtailedMw ?? 0;
+                const activeLoanCount = currency?.activeLoanCount ?? 0;
+
+                const visibleChips = curtailedCodes.slice(0, 5);
+                const extraCount = curtailedCodes.length - visibleChips.length;
+
                 return (
                   <tr
                     key={lender.lenderName}
                     onClick={() => onLenderClick(lender.lenderName)}
                     className="cursor-pointer hover:bg-slate-800/60 group transition-colors"
                   >
-                        {/* Rank */}
-                        <td className="px-4 py-4 text-center align-top">
-                          <span className="text-xs font-mono text-slate-600">{idx + 1}</span>
-                        </td>
+                    {/* Tier left border */}
+                    <td className="w-1 p-0">
+                      <div
+                        className={`h-full min-h-[3.5rem] w-1 ${tier ? TIER_STYLES[tier].border : 'bg-transparent'}`}
+                      />
+                    </td>
 
-                        {/* Name + plant chips */}
-                        <td className="px-4 py-4">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-slate-200 group-hover:text-cyan-400 transition-colors">
-                              {lender.lenderName}
+                    {/* Rank + tier badge */}
+                    <td className="px-3 py-4 text-center align-top">
+                      <div className="flex flex-col items-center gap-1.5">
+                        <span className="text-xs font-mono text-slate-600">{idx + 1}</span>
+                        {tier && (
+                          <span className={`text-[8px] px-1.5 py-px rounded border font-black tracking-widest ${TIER_STYLES[tier].badge}`}>
+                            {tier}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Lender name + facility type chips */}
+                    <td className="px-4 py-4 align-top min-w-0">
+                      <div className="font-bold text-sm text-slate-200 group-hover:text-cyan-400 transition-colors truncate">
+                        {lender.lenderName}
+                      </div>
+                      {lender.facilityTypes.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {lender.facilityTypes.map(ft => (
+                            <span
+                              key={ft}
+                              className="text-[9px] px-1 py-px rounded bg-slate-800 border border-slate-700 text-slate-500 font-mono font-bold"
+                            >
+                              {FACILITY_ABBR[ft] ?? ft.slice(0, 2).toUpperCase()}
                             </span>
-                            {isMulti && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/50 font-bold">
-                                {curtailedCodes.length} plants
-                              </span>
-                            )}
-                          </div>
-                          {curtailedCodes.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mt-2">
-                              {curtailedCodes.map(code => (
-                                <span
-                                  key={code}
-                                  className="text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400"
-                                >
-                                  {plantNameMap[code]}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </td>
+                          ))}
+                        </div>
+                      )}
+                    </td>
 
-                        {/* Distress */}
-                        <td className="px-4 py-4 text-right align-top">
-                          <div className="flex items-center justify-end gap-2">
-                            <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    {/* Opportunity signal */}
+                    <td className="px-4 py-4 align-top">
+                      {lender.topPitchAngle ? (
+                        <span
+                          className={`inline-block text-xs px-2.5 py-1 rounded border font-semibold ${PITCH_ANGLE_COLOR[lender.topPitchAngle] ?? 'bg-slate-800 border-slate-700 text-slate-400'}`}
+                          title={PITCH_ANGLE_LABEL[lender.topPitchAngle]}
+                        >
+                          {PITCH_ANGLE_LABEL[lender.topPitchAngle] ?? lender.topPitchAngle}
+                        </span>
+                      ) : (
+                        <span className="text-slate-700 text-xs">—</span>
+                      )}
+                      {(lender.highUrgencyCount ?? 0) > 0 && (
+                        <div className="mt-1.5">
+                          <span className="text-[9px] px-2 py-0.5 rounded bg-red-900/50 border border-red-700/50 text-red-300 font-mono font-bold">
+                            {lender.highUrgencyCount} urgent
+                          </span>
+                        </div>
+                      )}
+                    </td>
+
+                    {/* Exposure */}
+                    <td className="px-4 py-4 align-top text-right">
+                      <div className="text-sm font-black text-slate-200">
+                        {proRatedUsd != null ? fmtUsdCompact(proRatedUsd) : mw > 0 ? fmtMw(mw) : '—'}
+                      </div>
+                      {activeLoanCount > 0 ? (
+                        <div className="text-[10px] text-emerald-500 font-mono mt-0.5">
+                          {activeLoanCount} active loan{activeLoanCount !== 1 ? 's' : ''}
+                        </div>
+                      ) : (
+                        <div className="text-[10px] text-slate-600 font-mono mt-0.5">no active loans</div>
+                      )}
+                      <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden mt-1.5 ml-auto" style={{ maxWidth: '80px' }}>
+                        <div
+                          className={`h-full rounded-full ${ratio >= 0.7 ? 'bg-red-500' : ratio >= 0.4 ? 'bg-amber-500' : 'bg-cyan-600'}`}
+                          style={{ width: `${Math.round(ratio * 100)}%` }}
+                        />
+                      </div>
+                      <div className="text-[9px] text-slate-600 mt-0.5">
+                        {curtailed}/{lender.assetCount} plants curtailed
+                      </div>
+                    </td>
+
+                    {/* Portfolio health */}
+                    <td className="px-4 py-4 align-top">
+                      <div className="space-y-2">
+                        <div>
+                          <div className="text-[9px] text-slate-600 uppercase tracking-wider mb-1">Distress</div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden">
                               <div
                                 className={`h-full rounded-full ${scoreBarColor(distress)}`}
                                 style={{ width: `${distress}%` }}
                               />
                             </div>
-                            <span className={`text-sm font-black w-7 text-right ${scoreColor(distress)}`}>
+                            <span className={`text-sm font-black w-7 ${scoreColor(distress)}`}>
                               {Math.round(distress)}
                             </span>
                           </div>
-                        </td>
-
-                        {/* Currency status badge */}
-                        <td className="px-4 py-4 align-top text-center">
-                          {loanStatusBadge(overallStatus)}
-                          {currency?.activeLoanCount != null && currency.activeLoanCount > 0 && (
-                            <div className="text-[9px] text-slate-500 mt-1 font-mono">{currency.activeLoanCount} active</div>
-                          )}
-                        </td>
-
-                        {/* Curtailment exposure ratio */}
-                        {(() => {
-                          const exposure   = lenderExposureMap.get(lender.lenderName);
-                          const curtailed  = curtailedCodes.length;
-                          const total      = lender.assetCount || 1;
-                          const ratio      = curtailed / total;
-                          const proRatedUsd = lender.totalExposureUsd != null
-                            ? lender.totalExposureUsd * (curtailed / total)
-                            : null;
-                          const mw         = exposure?.totalCurtailedMw ?? 0;
-                          const fmtUsd = (v: number) =>
-                            v >= 1e9 ? `$${(v / 1e9).toFixed(1)}B`
-                            : v >= 1e6 ? `$${(v / 1e6).toFixed(0)}M`
-                            : `$${Math.round(v).toLocaleString()}`;
-                          return (
-                            <td className="px-4 py-4 align-top text-right">
-                              <div className="text-xs font-bold text-slate-200">
-                                {curtailed}
-                                <span className="text-slate-500 font-normal"> / {lender.assetCount}</span>
-                              </div>
-                              <div className="w-16 h-1 bg-slate-800 rounded-full overflow-hidden mt-1 ml-auto">
-                                <div
-                                  className={`h-full rounded-full ${ratio >= 0.7 ? 'bg-red-500' : ratio >= 0.4 ? 'bg-amber-500' : 'bg-cyan-600'}`}
-                                  style={{ width: `${Math.round(ratio * 100)}%` }}
-                                />
-                              </div>
-                              <div className="text-[10px] text-slate-500 mt-0.5">
-                                {proRatedUsd != null ? fmtUsd(proRatedUsd) : mw > 0 ? `${Math.round(mw)} MW` : '—'}
-                              </div>
-                            </td>
-                          );
-                        })()}
-
-                        {/* Facility types */}
-                        <td className="px-4 py-4 align-top">
-                          <div className="flex flex-wrap gap-1">
-                            {lender.facilityTypes.map(ft => (
-                              <span
-                                key={ft}
-                                className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 font-mono font-bold"
-                              >
-                                {FACILITY_ABBR[ft] ?? ft.slice(0, 2).toUpperCase()}
-                              </span>
-                            ))}
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-slate-600 uppercase tracking-wider mb-1">Avg CF</div>
+                          <div className="text-xs font-mono text-slate-400">
+                            {lender.avgPlantCf != null ? `${(lender.avgPlantCf * 100).toFixed(1)}%` : '—'}
                           </div>
-                        </td>
+                        </div>
+                      </div>
+                    </td>
 
-                        {/* Top pitch angle */}
-                        <td className="px-4 py-4 align-top">
-                          {lender.topPitchAngle ? (
-                            <span
-                              className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${PITCH_ANGLE_COLOR[lender.topPitchAngle] ?? 'bg-slate-800 border-slate-700 text-slate-400'}`}
-                              title={PITCH_ANGLE_LABEL[lender.topPitchAngle]}
-                            >
-                              {PITCH_ANGLE_LABEL[lender.topPitchAngle] ?? lender.topPitchAngle}
-                            </span>
-                          ) : (
-                            <span className="text-slate-700 text-[10px]">—</span>
-                          )}
-                          {lender.highUrgencyCount != null && lender.highUrgencyCount > 0 && (
-                            <div className="text-[9px] text-red-400 font-mono mt-0.5">{lender.highUrgencyCount} high urgency</div>
-                          )}
-                        </td>
-
-                        {/* Urgency count */}
-                        <td className="px-4 py-4 align-top text-center">
-                          {lender.highUrgencyCount != null && lender.highUrgencyCount > 0 ? (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/40 border border-red-700/50 text-red-400 font-mono font-bold">
-                              {lender.highUrgencyCount}
-                            </span>
-                          ) : (
-                            <span className="text-slate-700 text-[10px]">—</span>
-                          )}
-                        </td>
-
+                    {/* Assets */}
+                    <td className="px-4 py-4 align-top">
+                      <div className="flex flex-wrap gap-1">
+                        {visibleChips.map(code => (
+                          <span
+                            key={code}
+                            className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/70 border border-slate-700/50 text-slate-500 font-mono"
+                            title={plantNameMap[code]}
+                          >
+                            {plantDataMap[code]?.state ?? '??'}
+                          </span>
+                        ))}
+                        {extraCount > 0 && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/50 border border-slate-700/30 text-slate-600 font-mono">
+                            +{extraCount}
+                          </span>
+                        )}
+                      </div>
+                      {curtailedCodes.length > 0 && (
+                        <div className="text-[9px] text-slate-600 mt-1 font-mono">
+                          {curtailedCodes.length} curtailed plant{curtailedCodes.length !== 1 ? 's' : ''}
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

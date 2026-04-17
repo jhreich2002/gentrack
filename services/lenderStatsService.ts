@@ -83,12 +83,13 @@ export interface LenderPlant extends CompanyPlant {
   loanAmountUsd:   number | null;
   interestRateText: string | null;
   maturityText:    string | null;
+  loanStatus?:     import('../types').LoanStatus | null;
 }
 
 export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant[]> {
   const { data: lenderRows, error: lenderErr } = await supabase
     .from('plant_lenders')
-    .select('eia_plant_code, facility_type, loan_amount_usd, interest_rate_text, maturity_text')
+    .select('eia_plant_code, facility_type, loan_amount_usd, interest_rate_text, maturity_text, loan_status')
     .eq('lender_name', lenderName)
     .in('confidence', ['high', 'medium']);
 
@@ -134,6 +135,7 @@ export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant
       loanAmountUsd:     r.loan_amount_usd != null ? Number(r.loan_amount_usd) : null,
       interestRateText:  r.interest_rate_text ?? null,
       maturityText:      r.maturity_text ?? null,
+      loanStatus:        (r.loan_status as import('../types').LoanStatus | null) ?? null,
     };
   }).sort((a, b) => b.nameplateMw - a.nameplateMw);
 }
