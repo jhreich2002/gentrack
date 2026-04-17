@@ -86,3 +86,80 @@ export function fmtUsd(v: number | null): string {
   if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
   return `$${v.toLocaleString()}`;
 }
+
+// ── FTI service line labels & colors ─────────────────────────────────────────
+
+export const FTI_SERVICE_LINE_LABEL: Record<string, string> = {
+  restructuring:  'Restructuring',
+  transactions:   'Transactions',
+  disputes:       'Disputes',
+  market_strategy:'Policy',
+};
+
+export const FTI_SERVICE_LINE_COLOR: Record<string, string> = {
+  restructuring:  'bg-rose-900/30 border-rose-700/50 text-rose-400',
+  transactions:   'bg-emerald-900/30 border-emerald-700/50 text-emerald-400',
+  disputes:       'bg-orange-900/30 border-orange-700/50 text-orange-400',
+  market_strategy:'bg-sky-900/30 border-sky-700/50 text-sky-400',
+};
+
+/** Returns service lines with score >= threshold, sorted descending. */
+export function topServiceLines(
+  scores: Record<string, number>,
+  threshold = 40,
+  limit = 4,
+): { key: string; score: number }[] {
+  return Object.entries(scores)
+    .filter(([, v]) => v >= threshold)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, limit)
+    .map(([k, score]) => ({ key: k, score }));
+}
+
+// ── Typical capacity factor benchmarks (fuel-source defaults) ─────────────────
+
+export const TYPICAL_CF: Record<string, number> = {
+  Wind:    0.35,
+  Solar:   0.22,
+  Nuclear: 0.92,
+  // lower-case variants
+  wind:    0.35,
+  solar:   0.22,
+  nuclear: 0.92,
+};
+
+// ── CF trend label ────────────────────────────────────────────────────────────
+
+export function cfTrendLabel(trend: number | null | undefined): { arrow: string; label: string; color: string } {
+  if (trend == null) return { arrow: '—', label: 'No data', color: 'text-slate-700' };
+  if (trend > 0.05)  return { arrow: '↓', label: 'Declining', color: 'text-red-400' };
+  if (trend < -0.05) return { arrow: '↑', label: 'Improving', color: 'text-emerald-400' };
+  return { arrow: '→', label: 'Stable', color: 'text-slate-500' };
+}
+
+// ── Syndicate role label ──────────────────────────────────────────────────────
+
+export const SYNDICATE_ROLE_LABEL: Record<string, string> = {
+  lead_arranger: 'Lead Arranger',
+  agent_bank:    'Agent Bank',
+  participant:   'Participant',
+  unknown:       'Unknown',
+};
+
+// ── Date helpers ──────────────────────────────────────────────────────────────
+
+/** Returns months between now and a YYYY-MM-DD date string. Negative = already past. */
+export function monthsUntil(dateStr: string | null | undefined): number | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  return (d.getFullYear() - now.getFullYear()) * 12 + (d.getMonth() - now.getMonth());
+}
+
+export function fmtMaturityDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+}

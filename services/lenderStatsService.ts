@@ -79,17 +79,22 @@ export async function fetchLenderStats(lenderName: string): Promise<LenderStats 
  * Returns plants financed by the given lender, with facility type and loan amount.
  */
 export interface LenderPlant extends CompanyPlant {
-  facilityType:    string;
-  loanAmountUsd:   number | null;
+  facilityType:     string;
+  loanAmountUsd:    number | null;
   interestRateText: string | null;
-  maturityText:    string | null;
-  loanStatus?:     import('../types').LoanStatus | null;
+  maturityText:     string | null;
+  loanStatus?:      import('../types').LoanStatus | null;
+  // Feature additions
+  maturityDate?:    string | null;  // YYYY-MM-DD from plant_lenders.maturity_date
+  ownerName?:       string | null;  // plants.owner (majority owner)
+  fuelSource?:      string | null;  // plants.fuel_source
+  cfTrend?:         number | null;  // (ttmAvgFactor - recentCf) / ttmAvgFactor; >0 = degrading
 }
 
 export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant[]> {
   const { data: lenderRows, error: lenderErr } = await supabase
     .from('plant_lenders')
-    .select('eia_plant_code, facility_type, loan_amount_usd, interest_rate_text, maturity_text, loan_status')
+    .select('eia_plant_code, facility_type, loan_amount_usd, interest_rate_text, maturity_text, maturity_date, loan_status')
     .eq('lender_name', lenderName)
     .in('confidence', ['high', 'medium']);
 
@@ -100,22 +105,54 @@ export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant
 
   const plantCodes = [...new Set(lenderRows.map(r => r.eia_plant_code))];
 
-  const { data: plants, error: plantsErr } = await supabase
-    .from('plants')
-    .select('eia_plant_code, name, state, region, nameplate_capacity_mw, ttm_avg_factor, curtailment_score, is_likely_curtailed')
-    .in('eia_plant_code', plantCodes);
+  const [plantsResult, genResult] = await Promise.all([
+    supabase
+      .from('plants')
+      .select('eia_plant_code, name, state, region, nameplate_capacity_mw, ttm_avg_factor, curtailment_score, is_likely_curtailed, owner, fuel_source')
+      .in('eia_plant_code', plantCodes),
+    supabase
+      .from('monthly_generation')
+      .select('plant_id, month, mwh')
+      .in('plant_id', plantCodes)
+      .gte('month', (() => {
+        const d = new Date();
+        d.setMonth(d.getMonth() - 3);
+        return d.toISOString().slice(0, 7); // YYYY-MM
+      })()),
+  ]);
 
-  if (plantsErr) {
-    console.error('fetchLenderPlants plants error:', plantsErr.message);
+  if (plantsResult.error) {
+    console.error('fetchLenderPlants plants error:', plantsResult.error.message);
     return [];
   }
 
   const plantMap = new Map<string, Record<string, unknown>>();
-  for (const p of plants ?? []) plantMap.set(p.eia_plant_code, p);
+  for (const p of plantsResult.data ?? []) plantMap.set(p.eia_plant_code, p);
+
+  // Build recent-generation map for cfTrend computation
+  const genByPlant = new Map<string, { totalMwh: number; months: number }>();
+  for (const row of genResult.data ?? []) {
+    const r = row as { plant_id: string; month: string; mwh: number };
+    const entry = genByPlant.get(r.plant_id) ?? { totalMwh: 0, months: 0 };
+    entry.totalMwh += Number(r.mwh) || 0;
+    entry.months += 1;
+    genByPlant.set(r.plant_id, entry);
+  }
 
   // One row per lender-plant relationship (may have multiple facilities per plant)
   return lenderRows.map(r => {
     const p = plantMap.get(r.eia_plant_code);
+    const nameplateMw   = Number(p?.nameplate_capacity_mw) || 0;
+    const ttmAvgFactor  = Number(p?.ttm_avg_factor) || 0;
+
+    // Compute cfTrend: positive = recent CF below TTM avg (degrading)
+    let cfTrend: number | null = null;
+    const gen = genByPlant.get(r.eia_plant_code);
+    if (gen && gen.months > 0 && nameplateMw > 0 && ttmAvgFactor > 0) {
+      const recentCf = (gen.totalMwh / gen.months) / (nameplateMw * 730);
+      cfTrend = (ttmAvgFactor - recentCf) / ttmAvgFactor;
+    }
+
     return {
       eiaPlantCode:      r.eia_plant_code,
       plantName:         (p?.name as string) ?? r.eia_plant_code,
@@ -123,8 +160,8 @@ export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant
       techType:          null,
       state:             (p?.state as string) ?? null,
       region:            (p?.region as string) ?? null,
-      nameplateMw:       Number(p?.nameplate_capacity_mw) || 0,
-      ttmAvgFactor:      Number(p?.ttm_avg_factor) || 0,
+      nameplateMw,
+      ttmAvgFactor,
       curtailmentScore:  Number(p?.curtailment_score) || 0,
       isLikelyCurtailed: Boolean(p?.is_likely_curtailed),
       ownershipPct:      null,
@@ -136,8 +173,61 @@ export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant
       interestRateText:  r.interest_rate_text ?? null,
       maturityText:      r.maturity_text ?? null,
       loanStatus:        (r.loan_status as import('../types').LoanStatus | null) ?? null,
+      maturityDate:      r.maturity_date ?? null,
+      ownerName:         (p?.owner as string) ?? null,
+      fuelSource:        (p?.fuel_source as string) ?? null,
+      cfTrend,
     };
   }).sort((a, b) => b.nameplateMw - a.nameplateMw);
+}
+
+// ── fetchCoLenders ────────────────────────────────────────────────────────────
+
+/**
+ * Returns other lenders who share plant exposure with the given lender.
+ * Used to build the syndicate partner map in EntityDetailView.
+ */
+export interface CoLender {
+  lenderName:       string;
+  sharedPlantCount: number;
+  syndicateRoles:   string[];  // distinct roles this lender plays across shared plants
+}
+
+export async function fetchCoLenders(
+  lenderName: string,
+  plantCodes: string[],
+): Promise<CoLender[]> {
+  if (plantCodes.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('plant_lenders')
+    .select('lender_name, eia_plant_code, syndicate_role')
+    .in('eia_plant_code', plantCodes)
+    .neq('lender_name', lenderName)
+    .in('confidence', ['high', 'medium']);
+
+  if (error || !data) {
+    console.error('fetchCoLenders error:', error?.message);
+    return [];
+  }
+
+  // Aggregate by lender_name
+  const map = new Map<string, { plants: Set<string>; roles: Set<string> }>();
+  for (const row of data) {
+    const entry = map.get(row.lender_name) ?? { plants: new Set(), roles: new Set() };
+    entry.plants.add(row.eia_plant_code);
+    if (row.syndicate_role) entry.roles.add(row.syndicate_role);
+    map.set(row.lender_name, entry);
+  }
+
+  return Array.from(map.entries())
+    .map(([name, { plants, roles }]) => ({
+      lenderName:       name,
+      sharedPlantCount: plants.size,
+      syndicateRoles:   Array.from(roles),
+    }))
+    .sort((a, b) => b.sharedPlantCount - a.sharedPlantCount)
+    .slice(0, 10);
 }
 
 // ── fetchEntityNews ───────────────────────────────────────────────────────────

@@ -4,7 +4,8 @@ import { fetchAllLenderStats } from '../services/lenderStatsService';
 import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
 import {
   PITCH_ANGLE_LABEL, PITCH_ANGLE_COLOR, FACILITY_ABBR,
-  scoreColor, scoreBarColor,
+  FTI_SERVICE_LINE_LABEL, FTI_SERVICE_LINE_COLOR,
+  scoreColor, scoreBarColor, cfTrendLabel, topServiceLines,
 } from '../utils/lenderUtils';
 
 type Tier = 'HOT' | 'WARM' | 'WATCH' | null;
@@ -102,6 +103,59 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
       else if (hasActive && (distress >= 40 || urgent > 0)) tier = 'WARM';
       else if (hasActive)                                   tier = 'WATCH';
       map.set(lender.lenderName, tier);
+    }
+    return map;
+  }, [stats, lenderCurrencyMap]);
+
+  // lenderName → avg cfTrend across its curtailed plants (from pursuitPlants)
+  const lenderTrendMap = useMemo(() => {
+    const map = new Map<string, { sum: number; count: number }>();
+    for (const plant of pursuitPlants) {
+      if (plant.cfTrend == null) continue;
+      for (const l of plant.lenders) {
+        const prev = map.get(l.name) ?? { sum: 0, count: 0 };
+        map.set(l.name, { sum: prev.sum + plant.cfTrend, count: prev.count + 1 });
+      }
+    }
+    const result = new Map<string, number>();
+    map.forEach((v, k) => result.set(k, v.count > 0 ? v.sum / v.count : 0));
+    return result;
+  }, [pursuitPlants]);
+
+  // lenderName → synthesized "why now" trigger line
+  const lenderTriggerMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const now = Date.now();
+    for (const lender of stats) {
+      const currency = lenderCurrencyMap.get(lender.lenderName);
+      const distress = lender.distressScore ?? 0;
+      const urgent = lender.highUrgencyCount ?? 0;
+      const activeLoanCount = currency?.activeLoanCount ?? 0;
+
+      let trigger = '';
+      if (urgent > 0 && lender.lastNewsDate) {
+        const daysAgo = Math.round((now - new Date(lender.lastNewsDate).getTime()) / 86_400_000);
+        if (daysAgo <= 14) {
+          trigger = `${urgent} urgent plant${urgent !== 1 ? 's' : ''} · Intelligence ${daysAgo}d ago`;
+        }
+      }
+      if (!trigger && urgent > 0) {
+        trigger = `${urgent} plant${urgent !== 1 ? 's' : ''} with high-urgency advisory signals`;
+      }
+      if (!trigger && (lender.newsSentimentScore ?? 100) < 30) {
+        trigger = 'Negative news sentiment across portfolio';
+      }
+      if (!trigger && lender.lastNewsDate) {
+        const daysAgo = Math.round((now - new Date(lender.lastNewsDate).getTime()) / 86_400_000);
+        if (daysAgo <= 14) trigger = `New portfolio intelligence ${daysAgo}d ago`;
+      }
+      if (!trigger && activeLoanCount > 2 && distress >= 60) {
+        trigger = `${activeLoanCount} active loans on distressed portfolio (${Math.round(distress)})`;
+      }
+      if (!trigger && lender.analysisAngleBullets?.[0]) {
+        trigger = lender.analysisAngleBullets[0].slice(0, 90);
+      }
+      if (trigger) map.set(lender.lenderName, trigger);
     }
     return map;
   }, [stats, lenderCurrencyMap]);
@@ -328,6 +382,10 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
 
                 const visibleChips = curtailedCodes.slice(0, 5);
                 const extraCount = curtailedCodes.length - visibleChips.length;
+                const trigger = lenderTriggerMap.get(lender.lenderName);
+                const ftiLines = topServiceLines(lender.relevanceScores ?? {}, 40, 2);
+                const avgTrend = lenderTrendMap.get(lender.lenderName) ?? null;
+                const trendInfo = cfTrendLabel(avgTrend);
 
                 return (
                   <tr
@@ -354,11 +412,16 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                       </div>
                     </td>
 
-                    {/* Lender name + facility type chips */}
+                    {/* Lender name + trigger line + facility chips + FTI pills */}
                     <td className="px-4 py-4 align-top min-w-0">
                       <div className="font-bold text-sm text-slate-200 group-hover:text-cyan-400 transition-colors truncate">
                         {lender.lenderName}
                       </div>
+                      {trigger && (
+                        <div className="text-[10px] text-slate-500 italic mt-0.5 truncate" title={trigger}>
+                          {trigger}
+                        </div>
+                      )}
                       {lender.facilityTypes.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
                           {lender.facilityTypes.map(ft => (
@@ -367,6 +430,19 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                               className="text-[9px] px-1 py-px rounded bg-slate-800 border border-slate-700 text-slate-500 font-mono font-bold"
                             >
                               {FACILITY_ABBR[ft] ?? ft.slice(0, 2).toUpperCase()}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {ftiLines.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {ftiLines.map(({ key }) => (
+                            <span
+                              key={key}
+                              className={`text-[9px] px-1.5 py-px rounded border font-semibold ${FTI_SERVICE_LINE_COLOR[key] ?? 'bg-slate-800 border-slate-700 text-slate-400'}`}
+                              title={`FTI ${FTI_SERVICE_LINE_LABEL[key] ?? key}`}
+                            >
+                              {FTI_SERVICE_LINE_LABEL[key] ?? key}
                             </span>
                           ))}
                         </div>
@@ -440,6 +516,11 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                             {lender.avgPlantCf != null ? `${(lender.avgPlantCf * 100).toFixed(1)}%` : '—'}
                           </div>
                         </div>
+                        {avgTrend != null && (
+                          <div className={`text-[9px] font-mono font-bold ${trendInfo.color}`}>
+                            {trendInfo.arrow} {trendInfo.label}
+                          </div>
+                        )}
                       </div>
                     </td>
 
