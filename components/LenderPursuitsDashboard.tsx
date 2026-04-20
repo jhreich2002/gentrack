@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { LenderStats } from '../types';
 import { fetchAllLenderStats } from '../services/lenderStatsService';
 import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
+import { fetchArchivedPursuits, archivePursuit, unarchivePursuit } from '../services/archiveService';
 import {
   PITCH_ANGLE_LABEL, PITCH_ANGLE_COLOR, FACILITY_ABBR,
   FTI_SERVICE_LINE_LABEL, FTI_SERVICE_LINE_COLOR,
@@ -31,10 +32,18 @@ function fmtUsdCompact(v: number): string {
   return `$${Math.round(v).toLocaleString()}`;
 }
 
+interface Toast {
+  message: string;
+  onUndo: () => void;
+}
+
 export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
   const [stats, setStats] = useState<LenderStats[]>([]);
   const [pursuitPlants, setPursuitPlants] = useState<PursuitPlant[]>([]);
   const [loading, setLoading] = useState(true);
+  const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<Toast | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState('all');
   const [fuelFilter, setFuelFilter] = useState('all');
@@ -42,12 +51,30 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
   const [loanStatusFilter, setLoanStatusFilter] = useState<'active' | 'all' | 'unknown'>('active');
 
   useEffect(() => {
-    Promise.all([fetchAllLenderStats(), fetchPursuitPlants()]).then(([s, p]) => {
+    Promise.all([fetchAllLenderStats(), fetchPursuitPlants(), fetchArchivedPursuits()]).then(([s, p, archived]) => {
       setStats(s.filter(l => l.pctCurtailed > 0));
       setPursuitPlants(p);
+      setArchivedIds(archived.lenders);
       setLoading(false);
     });
   }, []);
+
+  const showToast = (msg: string, onUndo: () => void) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ message: msg, onUndo });
+    toastTimer.current = setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleArchive = async (e: React.MouseEvent, lenderName: string) => {
+    e.stopPropagation();
+    setArchivedIds(prev => new Set([...prev, lenderName]));
+    await archivePursuit('lender', lenderName);
+    showToast(`Archived "${lenderName}"`, async () => {
+      setArchivedIds(prev => { const s = new Set(prev); s.delete(lenderName); return s; });
+      await unarchivePursuit('lender', lenderName);
+      setToast(null);
+    });
+  };
 
   // eiaPlantCode → { name, state, fuelSource } lookup
   const plantDataMap = useMemo(
@@ -175,7 +202,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
   const TIER_ORDER: Record<string, number> = { HOT: 0, WARM: 1, WATCH: 2 };
 
   const filtered = useMemo(() => {
-    let rows = stats;
+    let rows = stats.filter(l => !archivedIds.has(l.lenderName));
     if (search.trim()) {
       const q = search.toLowerCase();
       rows = rows.filter(l => l.lenderName.toLowerCase().includes(q));
@@ -191,7 +218,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     } else if (loanStatusFilter === 'unknown') {
       rows = rows.filter(l => !lenderCurrencyMap.get(l.lenderName)?.hasActiveExposure);
     }
-    return [...rows].sort((a, b) => {
+    return [...rows].sort((a: LenderStats, b: LenderStats) => {
       if (sort === 'tier') {
         const at = lenderTierMap.get(a.lenderName);
         const bt = lenderTierMap.get(b.lenderName);
@@ -228,7 +255,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
       }
       return a.lenderName.localeCompare(b.lenderName);
     });
-  }, [stats, search, stateFilter, fuelFilter, sort, loanStatusFilter, plantDataMap, plantNameMap, lenderCurrencyMap, lenderExposureMap, lenderTierMap]);
+  }, [stats, archivedIds, search, stateFilter, fuelFilter, sort, loanStatusFilter, plantDataMap, plantNameMap, lenderCurrencyMap, lenderExposureMap, lenderTierMap]);
 
   // Summary stats for the header bar
   const summaryStats = useMemo(() => {
@@ -361,6 +388,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-44 text-right">Exposure</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-48">Health</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-56">Assets</th>
+                <th className="px-3 py-3 w-10" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -391,7 +419,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                   <tr
                     key={lender.lenderName}
                     onClick={() => onLenderClick(lender.lenderName)}
-                    className="cursor-pointer hover:bg-slate-800/60 group transition-colors"
+                    className="cursor-pointer hover:bg-slate-800/60 group/row transition-colors"
                   >
                     {/* Tier left border */}
                     <td className="w-1 p-0">
@@ -414,7 +442,7 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
 
                     {/* Lender name + trigger line + facility chips + FTI pills */}
                     <td className="px-4 py-4 align-top min-w-0">
-                      <div className="font-bold text-sm text-slate-200 group-hover:text-cyan-400 transition-colors truncate">
+                      <div className="font-bold text-sm text-slate-200 group-hover/row:text-cyan-400 transition-colors truncate">
                         {lender.lenderName}
                       </div>
                       {trigger && (
@@ -548,6 +576,19 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                         </div>
                       )}
                     </td>
+
+                    {/* Archive button */}
+                    <td className="px-3 py-4 align-top text-center">
+                      <button
+                        onClick={e => handleArchive(e, lender.lenderName)}
+                        title="Archive this pursuit"
+                        className="opacity-0 group-hover/row:opacity-100 transition-opacity p-1.5 rounded hover:bg-slate-700 text-slate-500 hover:text-amber-400"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-.375c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v.375c0 .621.504 1.125 1.125 1.125z" />
+                        </svg>
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -555,6 +596,22 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
           </table>
         )}
       </div>
+
+      {/* Archive toast */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 shadow-2xl text-sm text-slate-200 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-.375c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v.375c0 .621.504 1.125 1.125 1.125z" />
+          </svg>
+          <span>{toast.message}</span>
+          <button
+            onClick={toast.onUndo}
+            className="ml-1 text-xs font-bold text-amber-400 hover:text-amber-300 transition-colors underline underline-offset-2"
+          >
+            Undo
+          </button>
+        </div>
+      )}
     </div>
   );
 }

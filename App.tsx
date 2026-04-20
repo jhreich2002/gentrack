@@ -16,6 +16,7 @@ import EntityDetailView from './components/EntityDetailView';
 import PlantPursuitsDashboard from './components/PlantPursuitsDashboard';
 import LenderPursuitsDashboard from './components/LenderPursuitsDashboard';
 import TaxEquityPursuitsDashboard from './components/TaxEquityPursuitsDashboard';
+import ArchivedPursuitsDashboard from './components/ArchivedPursuitsDashboard';
 import PipelineTourModal from './components/PipelineTourModal';
 import WatchlistDashboard from './components/WatchlistDashboard';
 import DeveloperListView from './components/DeveloperListView';
@@ -24,7 +25,7 @@ import AssetRegistryDetailView from './components/AssetRegistryDetailView';
 import type { DeveloperMapViewport } from './components/DeveloperAssetMap';
 import { fetchDevelopers, DeveloperRow } from './services/developerService';
 
-type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail';
+type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail' | 'archived';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor' | 'data';
 
@@ -560,6 +561,21 @@ const App: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setView('archived')}
+            title={sidebarCollapsed ? 'Archived Pursuits' : undefined}
+            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
+              view === 'archived'
+                ? 'bg-slate-600 text-white shadow-lg shadow-slate-900/20'
+                : 'text-slate-500 hover:bg-slate-800 hover:text-slate-300'
+            }`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-.375c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v.375c0 .621.504 1.125 1.125 1.125z" />
+            </svg>
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Archived Pursuits</span>}
+          </button>
+
+          <button
             onClick={() => setView('developers')}
             title={sidebarCollapsed ? 'Developer Registry' : undefined}
             className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
@@ -884,6 +900,8 @@ const App: React.FC = () => {
             ? <TaxEquityPursuitsDashboard onInvestorClick={handleTaxEquityClick} />
             : view === 'pursuits'
             ? <PlantPursuitsDashboard onPlantClick={handlePlantClickFromPursuits} />
+            : view === 'archived'
+            ? <ArchivedPursuitsDashboard />
             : view === 'entity' && selectedEntity
             ? <EntityDetailView entityName={selectedEntity.name} entityType={selectedEntity.type} onBack={() => setView(selectedEntity.type === 'lender' ? 'lenders' : 'taxequity')} onPlantClick={handlePlantClickFromEntity} />
             : view === 'developers'

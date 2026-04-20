@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { TaxEquityStats } from '../types';
 import { fetchAllTaxEquityStats } from '../services/taxEquityService';
 import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
+import { fetchArchivedPursuits, archivePursuit, unarchivePursuit } from '../services/archiveService';
 
 interface Props {
   onInvestorClick: (name: string) => void;
@@ -18,22 +19,48 @@ function scoreBarColor(s: number) {
   return 'bg-slate-500';
 }
 
+interface Toast {
+  message: string;
+  onUndo: () => void;
+}
+
 export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
   const [stats, setStats] = useState<TaxEquityStats[]>([]);
   const [pursuitPlants, setPursuitPlants] = useState<PursuitPlant[]>([]);
   const [loading, setLoading] = useState(true);
+  const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<Toast | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState('all');
   const [fuelFilter, setFuelFilter] = useState('all');
   const [sort, setSort] = useState<'distress' | 'plants' | 'name'>('plants');
 
   useEffect(() => {
-    Promise.all([fetchAllTaxEquityStats(), fetchPursuitPlants()]).then(([s, p]) => {
+    Promise.all([fetchAllTaxEquityStats(), fetchPursuitPlants(), fetchArchivedPursuits()]).then(([s, p, archived]) => {
       setStats(s.filter(inv => inv.pctCurtailed > 0));
       setPursuitPlants(p);
+      setArchivedIds(archived.taxEquity);
       setLoading(false);
     });
   }, []);
+
+  const showToast = (msg: string, onUndo: () => void) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ message: msg, onUndo });
+    toastTimer.current = setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleArchive = async (e: React.MouseEvent, investorName: string) => {
+    e.stopPropagation();
+    setArchivedIds(prev => new Set([...prev, investorName]));
+    await archivePursuit('tax_equity', investorName);
+    showToast(`Archived "${investorName}"`, async () => {
+      setArchivedIds(prev => { const s = new Set(prev); s.delete(investorName); return s; });
+      await unarchivePursuit('tax_equity', investorName);
+      setToast(null);
+    });
+  };
 
   const plantDataMap = useMemo(
     () => Object.fromEntries(pursuitPlants.map(p => [p.eiaPlantCode, { name: p.name, state: p.state, fuel: p.fuelSource }])),
@@ -57,7 +84,7 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
   }, [stats, plantDataMap]);
 
   const filtered = useMemo(() => {
-    let rows = stats;
+    let rows = stats.filter(inv => !archivedIds.has(inv.investorName));
     if (search.trim()) {
       const q = search.toLowerCase();
       rows = rows.filter(inv => inv.investorName.toLowerCase().includes(q));
@@ -77,7 +104,7 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
       }
       return a.investorName.localeCompare(b.investorName);
     });
-  }, [stats, search, stateFilter, fuelFilter, sort, plantDataMap, plantNameMap]);
+  }, [stats, archivedIds, search, stateFilter, fuelFilter, sort, plantDataMap, plantNameMap]);
 
   if (loading) {
     return (
@@ -149,6 +176,7 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-10 text-center">#</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Investor</th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-36">Distress</th>
+                <th className="px-3 py-3 w-10" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -160,7 +188,7 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
                   <tr
                     key={inv.investorName}
                     onClick={() => onInvestorClick(inv.investorName)}
-                    className="cursor-pointer hover:bg-slate-800/60 group transition-colors"
+                    className="cursor-pointer hover:bg-slate-800/60 group/row transition-colors"
                   >
                     {/* Rank */}
                     <td className="px-4 py-4 text-center align-top">
@@ -170,7 +198,7 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
                     {/* Name + plant chips */}
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-slate-200 group-hover:text-violet-400 transition-colors">
+                        <span className="text-sm font-bold text-slate-200 group-hover/row:text-violet-400 transition-colors">
                           {inv.investorName}
                         </span>
                         {isMulti && (
@@ -208,6 +236,18 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
                       </div>
                     </td>
 
+                    {/* Archive button */}
+                    <td className="px-3 py-4 align-top text-center">
+                      <button
+                        onClick={e => handleArchive(e, inv.investorName)}
+                        title="Archive this pursuit"
+                        className="opacity-0 group-hover/row:opacity-100 transition-opacity p-1.5 rounded hover:bg-slate-700 text-slate-500 hover:text-amber-400"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-.375c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v.375c0 .621.504 1.125 1.125 1.125z" />
+                        </svg>
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -215,6 +255,22 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
           </table>
         )}
       </div>
+
+      {/* Archive toast */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 shadow-2xl text-sm text-slate-200 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-.375c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v.375c0 .621.504 1.125 1.125 1.125z" />
+          </svg>
+          <span>{toast.message}</span>
+          <button
+            onClick={toast.onUndo}
+            className="ml-1 text-xs font-bold text-amber-400 hover:text-amber-300 transition-colors underline underline-offset-2"
+          >
+            Undo
+          </button>
+        </div>
+      )}
     </div>
   );
 }

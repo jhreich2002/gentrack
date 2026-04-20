@@ -5,8 +5,9 @@
  * Sorted by pursuit score.
  */
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
+import { fetchArchivedPursuits, archivePursuit, unarchivePursuit } from '../services/archiveService';
 import { COLORS } from '../constants';
 
 interface Props {
@@ -77,9 +78,17 @@ type FuelFilter = 'all' | string;
 
 const PAGE_SIZE = 50;
 
+interface Toast {
+  message: string;
+  onUndo: () => void;
+}
+
 const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
-  const [plants, setPlants] = useState<PursuitPlant[]>([]);
-  const [loading, setLoading]   = useState(true);
+  const [plants, setPlants]         = useState<PursuitPlant[]>([]);
+  const [loading, setLoading]       = useState(true);
+  const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set());
+  const [toast, setToast]           = useState<Toast | null>(null);
+  const toastTimer                  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [search, setSearch]           = useState('');
   const [stateFilter, setStateFilter] = useState('all');
@@ -89,11 +98,29 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
   const [page, setPage]               = useState(1);
 
   useEffect(() => {
-    fetchPursuitPlants().then(rows => {
+    Promise.all([fetchPursuitPlants(), fetchArchivedPursuits()]).then(([rows, archived]) => {
       setPlants(rows);
+      setArchivedIds(archived.plants);
       setLoading(false);
     });
   }, []);
+
+  const showToast = (msg: string, onUndo: () => void) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ message: msg, onUndo });
+    toastTimer.current = setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleArchive = async (e: React.MouseEvent, eiaCode: string, plantName: string) => {
+    e.stopPropagation();
+    setArchivedIds(prev => new Set([...prev, eiaCode]));
+    await archivePursuit('plant', eiaCode);
+    showToast(`Archived "${plantName}"`, async () => {
+      setArchivedIds(prev => { const s = new Set(prev); s.delete(eiaCode); return s; });
+      await unarchivePursuit('plant', eiaCode);
+      setToast(null);
+    });
+  };
 
   const states = useMemo(() => {
     const s = new Set(plants.map(p => p.state).filter(Boolean));
@@ -116,7 +143,7 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
   };
 
   const filtered = useMemo(() => {
-    let result = plants;
+    let result = plants.filter(p => !archivedIds.has(p.eiaPlantCode));
 
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -137,7 +164,7 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
     if (sortKey === 'urgency')     sorted.sort((a, b) => dir * ((a.maxUrgencyScore ?? 0) - (b.maxUrgencyScore ?? 0)));
 
     return sorted;
-  }, [plants, search, stateFilter, fuelFilter, sortKey, sortDesc]);
+  }, [plants, archivedIds, search, stateFilter, fuelFilter, sortKey, sortDesc]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -226,6 +253,7 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
                 <th className="px-6 py-5 text-center cursor-pointer hover:text-white transition-colors" onClick={() => toggleSort('urgency')} title="Highest pitch urgency score across lenders (0–100)">
                   Urgency {sortKey === 'urgency' && (sortDesc ? '↓' : '↑')}
                 </th>
+                <th className="px-4 py-5 w-10" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -238,12 +266,12 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
                   <tr
                     key={plant.eiaPlantCode}
                     onClick={() => onPlantClick(plant.eiaPlantCode)}
-                    className={`cursor-pointer transition-all hover:bg-slate-800/60 group ${allMatured ? 'opacity-40' : ''}`}
+                    className={`cursor-pointer transition-all hover:bg-slate-800/60 group/row ${allMatured ? 'opacity-40' : ''}`}
                   >
                     {/* Plant Name */}
                     <td className="px-6 py-5">
                       <div>
-                        <div className="font-bold text-slate-200 group-hover:text-blue-400 transition-colors text-sm">
+                        <div className="font-bold text-slate-200 group-hover/row:text-blue-400 transition-colors text-sm">
                           {plant.name}
                         </div>
                         <div className="text-[10px] text-slate-600 font-mono tracking-tighter">
@@ -386,6 +414,19 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
                         <div className="text-[9px] text-amber-500 mt-0.5 font-mono">{PITCH_ANGLE_ABBR[plant.topPitchAngle] ?? ''}</div>
                       )}
                     </td>
+
+                    {/* Archive button */}
+                    <td className="px-4 py-5 text-center">
+                      <button
+                        onClick={e => handleArchive(e, plant.eiaPlantCode, plant.name)}
+                        title="Archive this pursuit"
+                        className="opacity-0 group-hover/row:opacity-100 transition-opacity p-1.5 rounded hover:bg-slate-700 text-slate-500 hover:text-amber-400"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-.375c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v.375c0 .621.504 1.125 1.125 1.125z" />
+                        </svg>
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -469,6 +510,22 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
           </div>
         )}
       </div>
+
+      {/* Archive toast */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 shadow-2xl text-sm text-slate-200 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-.375c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v.375c0 .621.504 1.125 1.125 1.125z" />
+          </svg>
+          <span>{toast.message}</span>
+          <button
+            onClick={toast.onUndo}
+            className="ml-1 text-xs font-bold text-amber-400 hover:text-amber-300 transition-colors underline underline-offset-2"
+          >
+            Undo
+          </button>
+        </div>
+      )}
     </div>
   );
 };
