@@ -12,12 +12,14 @@ import { COLORS } from '../constants';
 import { fetchWatchlistPursuitData, PursuitPlant } from '../services/pursuitService';
 import { supabase } from '../services/supabaseClient';
 
+import { WatchlistEntry } from '../services/authService';
+
 interface Props {
   plants: PowerPlant[];
   statsMap: Record<string, CapacityFactorStats>;
-  watchlist: string[];
+  watchlist: WatchlistEntry[];
   onPlantClick: (eiaPlantCode: string) => void;
-  onToggleWatch: (e: React.MouseEvent, plantId: string) => void;
+  onToggleWatch: (e: React.MouseEvent, entityType: 'plant', entityId: string) => void;
 }
 
 interface WatchlistOverview {
@@ -171,7 +173,7 @@ Be direct and specific. Distress scores are 0–100 (higher = more distressed). 
 
 const WatchlistDashboard: React.FC<Props> = ({ plants, statsMap, watchlist, onPlantClick, onToggleWatch }) => {
   const watchedPlants = useMemo(() =>
-    plants.filter(p => watchlist.includes(p.id)),
+    plants.filter(p => watchlist.some(w => w.entity_type === 'plant' && w.entity_id === p.id)),
     [plants, watchlist]
   );
 
@@ -418,7 +420,7 @@ const WatchlistDashboard: React.FC<Props> = ({ plants, statsMap, watchlist, onPl
                       <td className="px-6 py-5">
                         <div className="flex items-start gap-3">
                           <button
-                            onClick={e => { e.stopPropagation(); onToggleWatch(e, plant.id); }}
+                            onClick={e => { e.stopPropagation(); onToggleWatch(e, 'plant', plant.id); }}
                             className="mt-0.5 transition-colors text-amber-400 hover:text-slate-500"
                             title="Remove from watchlist"
                           >

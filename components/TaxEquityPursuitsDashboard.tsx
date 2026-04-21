@@ -6,6 +6,8 @@ import { fetchArchivedPursuits, archivePursuit, unarchivePursuit } from '../serv
 
 interface Props {
   onInvestorClick: (name: string) => void;
+  watchlist: import('../services/authService').WatchlistEntry[];
+  onToggleWatch: (e: React.MouseEvent, entityType: 'tax_equity', entityId: string) => void;
 }
 
 function scoreColor(s: number) {
@@ -24,7 +26,7 @@ interface Toast {
   onUndo: () => void;
 }
 
-export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
+export default function TaxEquityPursuitsDashboard(props: Props) {
   const [stats, setStats] = useState<TaxEquityStats[]>([]);
   const [pursuitPlants, setPursuitPlants] = useState<PursuitPlant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -181,13 +183,14 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
             </thead>
             <tbody className="divide-y divide-slate-800">
               {filtered.map((inv, idx) => {
+                const isWatched = props.watchlist.some(w => w.entity_type === 'tax_equity' && w.entity_id === inv.investorName);
                 const distress = inv.distressScore ?? 0;
                 const curtailedCodes = inv.plantCodes.filter(c => plantNameMap[c]);
                 const isMulti = curtailedCodes.length >= 2;
                 return (
                   <tr
                     key={inv.investorName}
-                    onClick={() => onInvestorClick(inv.investorName)}
+                    onClick={() => props.onInvestorClick(inv.investorName)}
                     className="cursor-pointer hover:bg-slate-800/60 group/row transition-colors"
                   >
                     {/* Rank */}
@@ -195,9 +198,19 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
                       <span className="text-xs font-mono text-slate-600">{idx + 1}</span>
                     </td>
 
-                    {/* Name + plant chips */}
+                    {/* Name + watchlist star + plant chips */}
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-2">
+                        <button
+                          onClick={e => { e.stopPropagation(); props.onToggleWatch(e, 'tax_equity', inv.investorName); }}
+                          className={`transition-colors ${isWatched ? 'text-amber-400' : 'text-slate-700 hover:text-slate-500'}`}
+                          title={isWatched ? 'Remove from watchlist' : 'Add to watchlist'}
+                          aria-label={isWatched ? 'Remove from watchlist' : 'Add to watchlist'}
+                        >
+                          <svg className="w-4 h-4" fill={isWatched ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.382-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                          </svg>
+                        </button>
                         <span className="text-sm font-bold text-slate-200 group-hover/row:text-violet-400 transition-colors">
                           {inv.investorName}
                         </span>
@@ -205,7 +218,7 @@ export default function TaxEquityPursuitsDashboard({ onInvestorClick }: Props) {
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/50 font-bold">
                             {curtailedCodes.length} plants
                           </span>
-                          )}
+                        )}
                       </div>
                       {curtailedCodes.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-2">

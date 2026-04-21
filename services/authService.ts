@@ -142,28 +142,41 @@ export async function getProfile(userId: string): Promise<UserProfile | null> {
 // Watchlist operations (anon key, RLS-protected)
 // -------------------------------------------------------
 
-export async function fetchWatchlist(userId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('watchlist')
-    .select('plant_id')
-    .eq('user_id', userId);
-  if (error) throw error;
-  return (data ?? []).map((r: any) => r.plant_id as string);
+
+export type WatchlistEntityType = 'plant' | 'lender' | 'tax_equity';
+export interface WatchlistEntry {
+  entity_type: WatchlistEntityType;
+  entity_id: string;
+  created_at: string;
 }
 
-export async function addToWatchlist(userId: string, plantId: string): Promise<void> {
+export async function fetchWatchlist(userId: string, entityType?: WatchlistEntityType): Promise<WatchlistEntry[]> {
+  let query = supabase
+    .from('watchlist')
+    .select('entity_type, entity_id, created_at')
+    .eq('user_id', userId);
+  if (entityType) query = query.eq('entity_type', entityType);
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []) as WatchlistEntry[];
+}
+
+
+export async function addToWatchlist(userId: string, entityType: WatchlistEntityType, entityId: string): Promise<void> {
   const { error } = await supabase
     .from('watchlist')
-    .upsert({ user_id: userId, plant_id: plantId }, { onConflict: 'user_id,plant_id' });
+    .upsert({ user_id: userId, entity_type: entityType, entity_id: entityId }, { onConflict: 'user_id,entity_type,entity_id' });
   if (error) throw error;
 }
 
-export async function removeFromWatchlist(userId: string, plantId: string): Promise<void> {
+
+export async function removeFromWatchlist(userId: string, entityType: WatchlistEntityType, entityId: string): Promise<void> {
   const { error } = await supabase
     .from('watchlist')
     .delete()
     .eq('user_id', userId)
-    .eq('plant_id', plantId);
+    .eq('entity_type', entityType)
+    .eq('entity_id', entityId);
   if (error) throw error;
 }
 
