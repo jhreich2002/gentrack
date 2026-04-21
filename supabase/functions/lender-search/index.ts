@@ -64,6 +64,7 @@ interface PerplexityLender {
   facility_type: 'term_loan' | 'revolving_credit' | 'construction_loan' | 'tax_equity' | 'bridge_loan' | 'letter_of_credit' | 'other';
   confidence:    'high' | 'medium' | 'low';
   notes:         string;
+  source_url:    string | null;
 }
 
 interface PerplexityResult {
@@ -86,7 +87,13 @@ NAMING RULES:
 - Use the full, commonly recognized institutional name (e.g. "JPMorgan Chase" not "JPMC" or "JP Morgan Chase & Co.").
 - Do NOT include generic descriptions like "consortium of banks", "a group of lenders", "undisclosed investor", "various banks", or "multiple lenders".
 - If the specific institution cannot be identified by name, omit the entry entirely.
-- Do NOT include legal suffixes like "N.A.", "LLC", "Inc." unless they disambiguate between different entities.`;
+- Do NOT include legal suffixes like "N.A.", "LLC", "Inc." unless they disambiguate between different entities.
+
+SOURCE URL RULES:
+- For each lender, include the single best URL from your search citations that directly supports that lender's involvement with this plant.
+- Prefer press releases or news articles that explicitly name the lender AND the plant/project.
+- If no citation directly supports a specific lender, use the most relevant citation available.
+- Set source_url to null only if you have absolutely no supporting URL.`;
 
 function buildUserPrompt(plant: PlantInfo): string {
   const capacity = Math.round(plant.nameplate_capacity_mw);
@@ -106,7 +113,8 @@ Return valid JSON only (no markdown):
       "role": "lender",
       "facility_type": "construction_loan",
       "confidence": "high",
-      "notes": "$150M construction loan, financial close April 2019"
+      "notes": "$150M construction loan, financial close April 2019",
+      "source_url": "https://www.businesswire.com/news/home/..."
     }
   ]
 }
@@ -281,6 +289,11 @@ async function saveResults(
     const validTypes = ['term_loan', 'revolving_credit', 'construction_loan', 'tax_equity', 'bridge_loan', 'letter_of_credit', 'other'];
     const validConf  = ['high', 'medium', 'low'];
 
+    // Use lender-specific URL from Perplexity; fall back to first citation URL
+    const sourceUrl = (lender.source_url?.startsWith('http') ? lender.source_url : null)
+      ?? citations[0]?.url
+      ?? null;
+
     const row = {
       eia_plant_code:     plant.eia_plant_code,
       lender_name:        lender.name.trim().slice(0, 200),
@@ -293,6 +306,7 @@ async function saveResults(
       notes:              lender.notes?.trim().slice(0, 500) ?? null,
       source_article_id:  null,
       source:             'perplexity_search',
+      source_url:         sourceUrl,
     };
 
     const { error } = await sb

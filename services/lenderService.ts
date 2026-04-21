@@ -37,6 +37,7 @@ export interface PlantLenderRow {
   pitchAngleReasoning: string | null;
   pitchUrgencyScore:   number | null;
   sourceCount:         number | null;
+  sourceUrl:           string | null;
 }
 
 export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<{
@@ -57,7 +58,7 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
         currency_checked_at, currency_source,
         maturity_date, financial_close_date, refinanced_at,
         syndicate_role, pitch_angle, pitch_angle_reasoning,
-        pitch_urgency_score, source_count
+        pitch_urgency_score, source_count, source_url
       `)
       .eq('eia_plant_code', eiaPlantCode)
       .in('confidence', ['high', 'medium'])
@@ -92,6 +93,7 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
     pitchAngleReasoning: (r.pitch_angle_reasoning as string | null) ?? null,
     pitchUrgencyScore:   r.pitch_urgency_score != null ? Number(r.pitch_urgency_score) : null,
     sourceCount:         r.source_count != null ? Number(r.source_count) : null,
+    sourceUrl:           (r.source_url as string | null) ?? null,
   }));
 
   return { financing, lenders };

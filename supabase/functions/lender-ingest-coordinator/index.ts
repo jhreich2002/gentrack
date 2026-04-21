@@ -32,7 +32,7 @@ import type { PlantInfo, CandidateLender } from '../lender-identification-agent/
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const BATCH_SIZE            = 2;    // plants per coordinator call (safe for 150s timeout)
+const BATCH_SIZE            = 1;    // 1 plant per coordinator call — keeps total well under 150s timeout
 const DEFAULT_BUDGET_USD    = 30.0;
 const RECHECK_INTERVAL_DAYS = 90;
 
@@ -403,42 +403,55 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Self-chain or finish ───────────────────────────────────────────────────
-    const nextOffset  = batchOffset + plants.length;
-    const cappedTotal = maxPlants !== null ? Math.min(totalEligible, maxPlants) : totalEligible;
-    const isLastBatch = nextOffset >= cappedTotal;
+    // IMPORTANT: always pass batchOffset=0 on the next call.
+    // The eligible plant list is recomputed fresh each call, and plants we just
+    // processed are now excluded by the staleness filter — so offset=0 naturally
+    // points to the next unprocessed plant. Passing a non-zero offset would skip
+    // plants because the list has shrunk by the number we just processed.
+    //
+    // For maxPlants: decrement by the number processed this batch so the cap
+    // is honoured across calls without relying on a shifting offset.
+    const plantsProcessed  = plants.length;
+    const remainingEligible = totalEligible - plantsProcessed;
+    const remainingMaxPlants = maxPlants !== null ? maxPlants - plantsProcessed : null;
+    const isLastBatch = remainingEligible <= 0 ||
+                        (remainingMaxPlants !== null && remainingMaxPlants <= 0);
+
+    // For logging and run_log tracking use cumulative offset (batchOffset + processed)
+    const cumulativeProcessed = batchOffset + plantsProcessed;
 
     if (!isLastBatch) {
-      log('CHAIN', `More plants remain (${cappedTotal - nextOffset}). Firing next batch at offset=${nextOffset}.`);
+      log('CHAIN', `${remainingEligible} eligible plants remain. Firing next batch (maxPlants=${remainingMaxPlants ?? 'all'}).`);
       fireAndForget(`${supabaseUrl}/functions/v1/lender-ingest-coordinator`, {
         mode,
         budgetLimit: budgetLimit - batchCostUsd,
-        maxPlants,
-        batchOffset: nextOffset,
+        maxPlants:   remainingMaxPlants,
+        batchOffset: 0,                    // always 0 — staleness filter handles skipping
         runLogId:    runLogId ?? undefined,
         recheck,
       });
 
       if (runLogId) {
         await updateRunLog(sb, runLogId, {
-          status:          'running',
-          total_cost_usd:  batchCostUsd,
-          plants_attempted: nextOffset,
-          lenders_updated: totalUpserted,
+          status:           'running',
+          total_cost_usd:   batchCostUsd,
+          plants_attempted: cumulativeProcessed,
+          lenders_updated:  totalUpserted,
         });
       }
     } else {
-      log('DONE', `All ${cappedTotal} plants processed — triggering refresh-entity-stats`);
+      log('DONE', `All eligible plants processed — triggering refresh-entity-stats`);
       fireAndForget(`${supabaseUrl}/functions/v1/refresh-entity-stats`, {});
 
       if (runLogId) {
         await updateRunLog(sb, runLogId, {
-          status:          'completed',
-          completed_at:    now,
-          total_cost_usd:  batchCostUsd,
-          plants_attempted: nextOffset,
-          lenders_updated: totalUpserted,
+          status:           'completed',
+          completed_at:     now,
+          total_cost_usd:   batchCostUsd,
+          plants_attempted: cumulativeProcessed,
+          lenders_updated:  totalUpserted,
           completion_report: {
-            total_plants_processed: nextOffset,
+            total_plants_processed: cumulativeProcessed,
             total_cost_usd:         batchCostUsd,
             total_lenders_upserted: totalUpserted,
           },
@@ -447,14 +460,15 @@ Deno.serve(async (req: Request) => {
     }
 
     return new Response(JSON.stringify({
-      ok:            true,
-      plantsInBatch: plants.length,
-      totalEligible: cappedTotal,
-      nextOffset,
+      ok:               true,
+      plantsInBatch:    plants.length,
+      totalEligible,
+      remainingEligible,
+      cumulativeProcessed,
       isLastBatch,
-      upserted:      totalUpserted,
-      costUsd:       batchCostUsd,
-      plants:        plantResults,
+      upserted:         totalUpserted,
+      costUsd:          batchCostUsd,
+      plants:           plantResults,
     }), { headers: CORS_HEADERS });
 
   } catch (err) {

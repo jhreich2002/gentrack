@@ -3,6 +3,7 @@ import { LenderStats } from '../types';
 import { fetchAllLenderStats } from '../services/lenderStatsService';
 import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
 import { fetchArchivedPursuits, archivePursuit, unarchivePursuit } from '../services/archiveService';
+import { getSession, getProfile, UserRole } from '../services/authService';
 import {
   PITCH_ANGLE_LABEL, PITCH_ANGLE_COLOR, FACILITY_ABBR,
   FTI_SERVICE_LINE_LABEL, FTI_SERVICE_LINE_COLOR,
@@ -37,7 +38,6 @@ interface Toast {
   onUndo: () => void;
 }
 
-export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
   const [stats, setStats] = useState<LenderStats[]>([]);
   const [pursuitPlants, setPursuitPlants] = useState<PursuitPlant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,14 +49,28 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
   const [fuelFilter, setFuelFilter] = useState('all');
   const [sort, setSort] = useState<'exposure' | 'distress' | 'plants' | 'name' | 'currency' | 'tier'>('exposure');
   const [loanStatusFilter, setLoanStatusFilter] = useState<'active' | 'all' | 'unknown'>('active');
+  const [userRole, setUserRole] = useState<UserRole>('user');
 
   useEffect(() => {
-    Promise.all([fetchAllLenderStats(), fetchPursuitPlants(), fetchArchivedPursuits()]).then(([s, p, archived]) => {
+    async function load() {
+      const session = await getSession();
+      let role: UserRole = 'user';
+      if (session?.user?.id) {
+        const profile = await getProfile(session.user.id);
+        if (profile?.role) role = profile.role;
+      }
+      setUserRole(role);
+      const [s, p, archived] = await Promise.all([
+        fetchAllLenderStats(),
+        fetchPursuitPlants(),
+        fetchArchivedPursuits(role === 'admin'),
+      ]);
       setStats(s.filter(l => l.pctCurtailed > 0));
       setPursuitPlants(p);
       setArchivedIds(archived.lenders);
       setLoading(false);
-    });
+    }
+    load();
   }, []);
 
   const showToast = (msg: string, onUndo: () => void) => {
@@ -65,15 +79,19 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   };
 
-  const handleArchive = async (e: React.MouseEvent, lenderName: string) => {
+  const handleArchive = async (e: React.MouseEvent, lenderName: string, permanent = false) => {
     e.stopPropagation();
     setArchivedIds(prev => new Set([...prev, lenderName]));
-    await archivePursuit('lender', lenderName);
-    showToast(`Archived "${lenderName}"`, async () => {
-      setArchivedIds(prev => { const s = new Set(prev); s.delete(lenderName); return s; });
-      await unarchivePursuit('lender', lenderName);
-      setToast(null);
-    });
+    await archivePursuit('lender', lenderName, permanent);
+    if (permanent) {
+      showToast(`Permanently archived "${lenderName}"`, undefined);
+    } else {
+      showToast(`Archived "${lenderName}"`, async () => {
+        setArchivedIds(prev => { const s = new Set(prev); s.delete(lenderName); return s; });
+        await unarchivePursuit('lender', lenderName);
+        setToast(null);
+      });
+    }
   };
 
   // eiaPlantCode → { name, state, fuelSource } lookup
@@ -588,6 +606,17 @@ export default function LenderPursuitsDashboard({ onLenderClick }: Props) {
                           <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-.375c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v.375c0 .621.504 1.125 1.125 1.125z" />
                         </svg>
                       </button>
+                      {userRole === 'admin' && (
+                        <button
+                          onClick={e => handleArchive(e, lender.lenderName, true)}
+                          title="Permanently archive (admin only)"
+                          className="ml-2 opacity-0 group-hover/row:opacity-100 transition-opacity p-1.5 rounded hover:bg-red-700 text-slate-500 hover:text-red-400 border border-red-700"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

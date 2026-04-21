@@ -24,10 +24,11 @@ export interface ArchivedPursuitSets {
   taxEquity: Set<string>;
 }
 
-export async function fetchArchivedPursuits(): Promise<ArchivedPursuitSets> {
+export async function fetchArchivedPursuits(includePermanent = false): Promise<ArchivedPursuitSets> {
   const { data, error } = await supabase
     .from('archived_pursuits')
-    .select('entity_type, entity_id');
+    .select('entity_type, entity_id, permanently_archived')
+    .or(includePermanent ? '' : 'permanently_archived.is.false');
 
   if (error) {
     console.error('fetchArchivedPursuits error:', error);
@@ -49,10 +50,11 @@ export async function fetchArchivedPursuits(): Promise<ArchivedPursuitSets> {
   return result;
 }
 
-export async function fetchArchivedPursuitsList(): Promise<ArchivedPursuit[]> {
+export async function fetchArchivedPursuitsList(includePermanent = false): Promise<ArchivedPursuit[]> {
   const { data, error } = await supabase
     .from('archived_pursuits')
-    .select('entity_type, entity_id, archived_at, notes')
+    .select('entity_type, entity_id, archived_at, notes, permanently_archived')
+    .or(includePermanent ? '' : 'permanently_archived.is.false')
     .order('archived_at', { ascending: false });
 
   if (error) {
@@ -65,17 +67,19 @@ export async function fetchArchivedPursuitsList(): Promise<ArchivedPursuit[]> {
     entityId:   row.entity_id,
     archivedAt: row.archived_at,
     notes:      row.notes ?? null,
+    permanentlyArchived: row.permanently_archived ?? false,
   }));
 }
+
 
 export async function archivePursuit(
   entityType: ArchiveEntityType,
   entityId:   string,
+  permanent: boolean = false,
 ): Promise<void> {
   const { error } = await supabase
     .from('archived_pursuits')
-    .upsert({ entity_type: entityType, entity_id: entityId }, { onConflict: 'entity_type,entity_id' });
-
+    .upsert({ entity_type: entityType, entity_id: entityId, permanently_archived: permanent }, { onConflict: 'entity_type,entity_id' });
   if (error) {
     console.error('archivePursuit error:', error);
     throw error;

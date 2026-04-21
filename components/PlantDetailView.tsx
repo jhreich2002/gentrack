@@ -1085,7 +1085,7 @@ const PlantDetailView: React.FC<Props> = ({
                   <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
                     <div className="px-5 py-3 border-b border-slate-800">
                       <h4 className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Financing Parties</h4>
-                      {financing.citations.length > 0 && (
+                      {financingLenders.some(l => l.sourceUrl ?? financing.citations[0]?.url) && (
                         <p className="text-[10px] text-slate-600 mt-0.5">Click a party name to view the supporting source</p>
                       )}
                     </div>
@@ -1100,14 +1100,9 @@ const PlantDetailView: React.FC<Props> = ({
                       </thead>
                       <tbody>
                         {financingLenders.map((l, i) => {
-                          const citations = financing.citations;
-                          // Find the citation best matching this lender's name
-                          const lowerName = l.lenderName.toLowerCase();
-                          const matched = citations.find((c: { url: string; title: string; snippet: string }) =>
-                            c.title?.toLowerCase().includes(lowerName) ||
-                            c.snippet?.toLowerCase().includes(lowerName)
-                          ) ?? citations[0];
-                          const citationUrl = matched?.url ?? null;
+                          // Use the per-lender source URL stored at ingest time;
+                          // fall back to the first summary citation if absent (older rows).
+                          const citationUrl = l.sourceUrl ?? financing.citations[0]?.url ?? null;
 
                           return (
                             <tr key={i} className="border-b border-slate-800/30 last:border-b-0 hover:bg-slate-800/30 transition-colors">

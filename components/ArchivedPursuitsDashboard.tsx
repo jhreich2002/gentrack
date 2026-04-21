@@ -11,6 +11,7 @@ import {
   unarchivePursuit,
   ArchivedPursuit,
 } from '../services/archiveService';
+import { getSession, getProfile, UserRole } from '../services/authService';
 import { fetchPursuitPlants, PursuitPlant } from '../services/pursuitService';
 import { fetchAllLenderStats } from '../services/lenderStatsService';
 import { fetchAllTaxEquityStats } from '../services/taxEquityService';
@@ -41,7 +42,6 @@ function scoreLabel(val: number | null): { text: string; color: string; bg: stri
   return { text: 'LOW', color: 'text-slate-400', bg: 'bg-slate-500/10 border-slate-500/30' };
 }
 
-export default function ArchivedPursuitsDashboard() {
   const [archived, setArchived] = useState<ArchivedPursuit[]>([]);
   const [plants, setPlants] = useState<PursuitPlant[]>([]);
   const [lenders, setLenders] = useState<LenderStats[]>([]);
@@ -49,11 +49,19 @@ export default function ArchivedPursuitsDashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<SubTab>('plants');
   const [unarchiving, setUnarchiving] = useState<Set<string>>(new Set());
+  const [userRole, setUserRole] = useState<UserRole>('user');
 
   const load = useCallback(async () => {
     setLoading(true);
+    const session = await getSession();
+    let role: UserRole = 'user';
+    if (session?.user?.id) {
+      const profile = await getProfile(session.user.id);
+      if (profile?.role) role = profile.role;
+    }
+    setUserRole(role);
     const [archivedList, plantData, lenderData, teData] = await Promise.all([
-      fetchArchivedPursuitsList(),
+      fetchArchivedPursuitsList(role === 'admin'),
       fetchPursuitPlants(),
       fetchAllLenderStats(),
       fetchAllTaxEquityStats(),
