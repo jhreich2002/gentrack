@@ -39,8 +39,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
 const MAX_RETRIES    = 2;
-const BATCH_MAX      = 50;   // max plants per batch invocation
-const DEFAULT_BUDGET = 5.00; // USD per batch if not specified
+const BATCH_MAX      = 50;    // max plants per batch invocation
+const DEFAULT_BUDGET = 0.25;  // USD per-plant ceiling (revisit after first cohort)
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -210,12 +210,19 @@ async function runPlant(
 
   // ── Step 2: Parallel workers ──────────────────────────────────────────
   if (totalCost > budgetLeft) {
-    log(plant_code, `Budget exhausted ($${totalCost.toFixed(4)} >= $${budgetLeft.toFixed(4)})`);
+    const budgetMsg = `budget_exceeded_before_parallel_workers (spent $${totalCost.toFixed(4)} / $${budgetLeft.toFixed(4)})`;
+    log(plant_code, budgetMsg);
     await supabase.from('ucc_research_plants').update({
-      workflow_status: 'unresolved',
+      workflow_status: 'budget_exceeded',
       last_run_at:     new Date().toISOString(),
       total_cost_usd:  totalCost,
     }).eq('plant_code', plant_code);
+    await supabase.from('ucc_agent_runs').update({
+      supervisor_status: 'budget_exceeded',
+      completed_at:      new Date().toISOString(),
+      final_outcome:     budgetMsg,
+      total_cost_usd:    totalCost,
+    }).eq('id', runId);
     return { outcome: 'budget_exceeded', cost: totalCost, escalated: false };
   }
 
@@ -307,14 +314,24 @@ async function runPlant(
   const escalated      = !!(reviewerResult as WorkerResponse & { escalate_to_review?: boolean }).escalate_to_review;
 
   let workflowStatus: string;
+  let finalOutcome: string;
+
   if (escalated) {
     workflowStatus = 'needs_review';
+    finalOutcome   = `needs_review: ${(reviewerResult as WorkerResponse & { escalation_reason?: string }).escalation_reason ?? 'reviewer escalated'}`;
   } else if (allCriteriaMet) {
     workflowStatus = 'complete';
+    const sourceList = [
+      uccResult.evidence_found    ? 'UCC SoS' : null,
+      countyResult.evidence_found ? 'county records' : null,
+      edgarResult.evidence_found  ? 'EDGAR' : null,
+    ].filter(Boolean).join(' + ') || 'unknown source';
+    finalOutcome = `complete via ${sourceList} (cost $${totalCost.toFixed(4)})`;
   } else {
     const unmet = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);
     log(plant_code, `Criteria not met: ${unmet.join(', ')}`);
     workflowStatus = 'unresolved';
+    finalOutcome   = `no_evidence: tried ${spvAliases.length} aliases across UCC, county, EDGAR; unmet: ${unmet.join(', ')} (cost $${totalCost.toFixed(4)})`;
   }
 
   await supabase.from('ucc_research_plants').update({
@@ -328,7 +345,7 @@ async function runPlant(
   await supabase.from('ucc_agent_runs').update({
     supervisor_status: workflowStatus,
     completed_at:      new Date().toISOString(),
-    final_outcome:     workflowStatus,
+    final_outcome:     finalOutcome,
     total_cost_usd:    totalCost,
   }).eq('id', runId);
 
@@ -455,36 +472,40 @@ Deno.serve(async (req: Request): Promise<Response> => {
       try {
         const plantResult = await runPlant(supabase, plant, runId, remainingBudget) as { outcome: string; cost: number; escalated: boolean; debug?: string };
         results.push({ plant_code: plant.plant_code, outcome: plantResult.outcome, cost: plantResult.cost, debug: plantResult.debug });
-        remainingBudget -= cost;
+        remainingBudget -= plantResult.cost; // ← was `cost` (undefined) — caused every run to throw
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log(plant.plant_code, `Unexpected error: ${msg}`);
         results.push({ plant_code: plant.plant_code, outcome: 'error', cost: 0 });
 
+        // Only overwrite status if the plant is still marked 'running'.
+        // runPlant may have already written a real outcome before the error was thrown.
         await supabase.from('ucc_research_plants').update({
           workflow_status: 'unresolved',
-        }).eq('plant_code', plant.plant_code);
+        }).eq('plant_code', plant.plant_code).eq('workflow_status', 'running');
 
         await supabase.from('ucc_agent_runs').update({
           supervisor_status: 'failed',
           completed_at:      new Date().toISOString(),
-          final_outcome:     'error',
-        }).eq('id', runId);
+          final_outcome:     `unexpected_error: ${msg.slice(0, 300)}`,
+        }).eq('id', runId).eq('supervisor_status', 'running');
       }
     }
 
-    const totalSpent  = results.reduce((s, r) => s + r.cost, 0);
-    const completed   = results.filter(r => r.outcome === 'complete').length;
-    const needsReview = results.filter(r => r.outcome === 'needs_review').length;
-    const unresolved  = results.filter(r => r.outcome === 'unresolved' || r.outcome === 'error').length;
+    const totalSpent    = results.reduce((s, r) => s + r.cost, 0);
+    const completed     = results.filter(r => r.outcome === 'complete').length;
+    const needsReview   = results.filter(r => r.outcome === 'needs_review').length;
+    const budgetHalted  = results.filter(r => r.outcome === 'budget_exceeded').length;
+    const unresolved    = results.filter(r => r.outcome === 'unresolved' || r.outcome === 'error').length;
 
-    log('BATCH', `Done — ${completed} complete, ${needsReview} needs review, ${unresolved} unresolved, $${totalSpent.toFixed(4)} spent, ${Date.now() - startMs}ms`);
+    log('BATCH', `Done — ${completed} complete, ${needsReview} needs_review, ${budgetHalted} budget_exceeded, ${unresolved} unresolved, $${totalSpent.toFixed(4)} spent, ${Date.now() - startMs}ms`);
 
     return new Response(JSON.stringify({
       status:           'done',
       plants_processed: results.length,
       completed,
       needs_review:     needsReview,
+      budget_exceeded:  budgetHalted,
       unresolved,
       total_cost_usd:   totalSpent,
       budget_remaining: remainingBudget,

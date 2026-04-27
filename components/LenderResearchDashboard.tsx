@@ -60,19 +60,23 @@ function timeAgo(iso: string | null): string {
 // ── Status badge ──────────────────────────────────────────────────────────────
 
 const STATUS_STYLES: Record<WorkflowStatus, string> = {
-  pending:      'bg-slate-800 text-slate-400',
-  running:      'bg-blue-900/40 text-blue-300 animate-pulse',
-  complete:     'bg-emerald-900/40 text-emerald-300',
-  unresolved:   'bg-red-900/40 text-red-400',
-  needs_review: 'bg-amber-900/40 text-amber-300',
+  pending:        'bg-slate-800 text-slate-400',
+  running:        'bg-blue-900/40 text-blue-300 animate-pulse',
+  complete:       'bg-emerald-900/40 text-emerald-300',
+  unresolved:     'bg-red-900/40 text-red-400',
+  needs_review:   'bg-amber-900/40 text-amber-300',
+  partial:        'bg-cyan-900/40 text-cyan-300',
+  budget_exceeded:'bg-yellow-900/40 text-yellow-300',
 };
 
 const STATUS_LABELS: Record<WorkflowStatus, string> = {
-  pending:      'Pending',
-  running:      'Running',
-  complete:     'Complete',
-  unresolved:   'Unresolved',
-  needs_review: 'Needs Review',
+  pending:        'Pending',
+  running:        'Running',
+  complete:       'Complete',
+  unresolved:     'Unresolved',
+  needs_review:   'Needs Review',
+  partial:        'Partial (News Only)',
+  budget_exceeded:'Budget Exceeded',
 };
 
 function StatusBadge({ status }: { status: WorkflowStatus }) {
@@ -171,7 +175,7 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
 
   // ── Run single plant ──────────────────────────────────────────────────────
 
-  const handleRunPlant = async (plant: UCCResearchPlant) => {
+  const handleRunPlant = async (plant: UCCResearchPlant, budgetUsd?: number) => {
     if (running.has(plant.plant_code)) return;
 
     setRunning(prev => new Set([...prev, plant.plant_code]));
@@ -181,7 +185,7 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
 
     try {
       await ensurePlantResearchRecord(plant.plant_code);
-      await runSinglePlantResearch(plant.plant_code);
+      await runSinglePlantResearch(plant.plant_code, budgetUsd);
       await load();
     } finally {
       setRunning(prev => { const s = new Set(prev); s.delete(plant.plant_code); return s; });
@@ -273,6 +277,7 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
         plant={selectedPlant}
         onBack={() => setSelectedPlant(null)}
         onRun={() => handleRunPlant(selectedPlant)}
+        onRunWithBudget={(budget) => handleRunPlant(selectedPlant, budget)}
         running={running.has(selectedPlant.plant_code)}
       />
     );
@@ -372,6 +377,8 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
                 <option value="running">Running</option>
                 <option value="complete">Complete</option>
                 <option value="needs_review">Needs Review</option>
+                <option value="partial">Partial (News Only)</option>
+                <option value="budget_exceeded">Budget Exceeded</option>
                 <option value="unresolved">Unresolved</option>
               </select>
             </div>

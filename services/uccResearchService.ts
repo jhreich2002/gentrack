@@ -9,7 +9,7 @@ import { supabase } from './supabaseClient';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type WorkflowStatus = 'pending' | 'running' | 'complete' | 'unresolved' | 'needs_review';
+export type WorkflowStatus = 'pending' | 'running' | 'complete' | 'unresolved' | 'needs_review' | 'partial' | 'budget_exceeded';
 export type ConfidenceClass = 'confirmed' | 'highly_likely' | 'possible';
 
 export interface UCCResearchPlant {
@@ -184,11 +184,12 @@ export interface SupervisorResult {
   plants_processed:  number;
   completed:         number;
   needs_review:      number;
+  budget_exceeded:   number;
   unresolved:        number;
   total_cost_usd:    number;
   budget_remaining:  number;
   duration_ms:       number;
-  results:           Array<{ plant_code: string; outcome: string; cost: number }>;
+  results:           Array<{ plant_code: string; outcome: string; cost: number; debug?: string }>;
 }
 
 // ── Plants ────────────────────────────────────────────────────────────────────
@@ -610,7 +611,7 @@ export async function submitReviewAction(
 
 // ── Supervisor invocation ─────────────────────────────────────────────────────
 
-export async function runSinglePlantResearch(plantCode: string): Promise<SupervisorResult> {
+export async function runSinglePlantResearch(plantCode: string, budgetUsd?: number): Promise<SupervisorResult> {
   const { data: { session } } = await supabase.auth.getSession();
 
   const resp = await fetch(
@@ -621,7 +622,11 @@ export async function runSinglePlantResearch(plantCode: string): Promise<Supervi
         'Content-Type':  'application/json',
         'Authorization': `Bearer ${session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
       },
-      body: JSON.stringify({ mode: 'single', plant_code: plantCode }),
+      body: JSON.stringify({
+        mode:       'single',
+        plant_code: plantCode,
+        ...(budgetUsd != null ? { budget_usd: budgetUsd } : {}),
+      }),
     },
   );
 

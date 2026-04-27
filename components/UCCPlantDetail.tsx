@@ -3,17 +3,20 @@ import {
   fetchLenderLinks,
   fetchPlantAliases,
   fetchEvidenceRecords,
+  fetchAgentRuns,
   UCCResearchPlant,
   UCCLenderLink,
   UCCEvidenceRecord,
+  UCCAgentRun,
 } from '../services/uccResearchService';
 import UCCEvidenceDrawer from './UCCEvidenceDrawer';
 
 interface Props {
-  plant:   UCCResearchPlant;
-  onBack:  () => void;
-  onRun:   () => void;
-  running: boolean;
+  plant:             UCCResearchPlant;
+  onBack:            () => void;
+  onRun:             () => void;
+  onRunWithBudget:   (budget: number) => void;
+  running:           boolean;
 }
 
 type ConfidenceClass = 'confirmed' | 'highly_likely' | 'possible';
@@ -45,24 +48,27 @@ function fmtMw(mw: number | null): string {
   return `${Math.round(mw).toLocaleString()} MW`;
 }
 
-const UCCPlantDetail: React.FC<Props> = ({ plant, onBack, onRun, running }) => {
-  const [links, setLinks]     = useState<UCCLenderLink[]>([]);
-  const [aliases, setAliases] = useState<Awaited<ReturnType<typeof fetchPlantAliases>>>([]);
-  const [loading, setLoading] = useState(true);
+const UCCPlantDetail: React.FC<Props> = ({ plant, onBack, onRun, onRunWithBudget, running }) => {
+  const [links, setLinks]         = useState<UCCLenderLink[]>([]);
+  const [aliases, setAliases]     = useState<Awaited<ReturnType<typeof fetchPlantAliases>>>([]);
+  const [lastRun, setLastRun]     = useState<UCCAgentRun | null>(null);
+  const [loading, setLoading]     = useState(true);
 
   // Drawer state
-  const [drawerOpen, setDrawerOpen]       = useState(false);
+  const [drawerOpen, setDrawerOpen]         = useState(false);
   const [drawerEvidence, setDrawerEvidence] = useState<UCCEvidenceRecord[]>([]);
-  const [drawerLender, setDrawerLender]   = useState<string>('');
+  const [drawerLender, setDrawerLender]     = useState<string>('');
 
   useEffect(() => {
     async function load() {
-      const [l, a] = await Promise.all([
+      const [l, a, runs] = await Promise.all([
         fetchLenderLinks(plant.plant_code),
         fetchPlantAliases(plant.plant_code),
+        fetchAgentRuns(plant.plant_code),
       ]);
       setLinks(l);
       setAliases(a);
+      setLastRun(runs[0] ?? null);
       setLoading(false);
     }
     load();
@@ -106,6 +112,29 @@ const UCCPlantDetail: React.FC<Props> = ({ plant, onBack, onRun, running }) => {
           </button>
         </div>
       </div>
+
+      {/* Budget / unresolved reason banner */}
+      {!loading && !running && (plant.workflow_status === 'budget_exceeded' || plant.workflow_status === 'unresolved') && lastRun?.final_outcome && (
+        <div className={`px-6 py-3 border-b flex items-center justify-between gap-4 text-sm ${
+          plant.workflow_status === 'budget_exceeded'
+            ? 'bg-yellow-900/20 border-yellow-800/40 text-yellow-300'
+            : 'bg-red-900/20 border-red-800/40 text-red-400'
+        }`}>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-semibold shrink-0">
+              {plant.workflow_status === 'budget_exceeded' ? '$ Budget halted:' : '⚠ Unresolved:'}
+            </span>
+            <span className="truncate text-xs opacity-80">{lastRun.final_outcome}</span>
+          </div>
+          <button
+            onClick={() => onRunWithBudget(0.50)}
+            disabled={running}
+            className="shrink-0 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap"
+          >
+            Re-run with $0.50 budget
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">Loading…</div>
