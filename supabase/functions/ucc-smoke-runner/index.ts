@@ -43,19 +43,21 @@ interface TestResult {
   failure_reason?: string;
 }
 
+// ── Test corpus — all plant_codes validated against the `plants` table ────────
+// Validation query run 2026-04-27; codes confirmed present. Substitutions noted.
 const TEST_CORPUS: TestCase[] = [
   {
     label:             'Solana Solar (DOE LPO)',
-    plant_code:        '57031',   // EIA plant code for Solana Solar Generating Station, AZ
+    plant_code:        '56812',   // Solana Solar Generating Station, Maricopa County AZ (Abengoa; $1.45B DOE LPO)
     min_confirmed:     1,
     min_highly_likely: 0,
     expect_doe_lpo:    true,
     expect_edgar:      false,
-    notes:             'Received $1.45B DOE LPO loan guarantee; Abengoa as sponsor',
+    notes:             '$1.45B DOE LPO loan guarantee to Abengoa Solar; classic confirmed case',
   },
   {
-    label:             'NextEra Energy TX (EDGAR)',
-    plant_code:        '57328',   // Example NextEra TX wind plant
+    label:             'Wolf Ridge Wind — NextEra TX (EDGAR)',
+    plant_code:        '58080',   // Wolf Ridge Wind, TX — NextEra Energy Resources
     min_confirmed:     0,
     min_highly_likely: 1,
     expect_doe_lpo:    false,
@@ -63,31 +65,31 @@ const TEST_CORPUS: TestCase[] = [
     notes:             'NextEra 10-K/8-K disclosures typically name project finance lenders',
   },
   {
-    label:             'Clearway CA Solar (UCC)',
-    plant_code:        '56976',   // Example Clearway CA plant
+    label:             'California Valley Solar Ranch — Clearway CA (UCC)',
+    plant_code:        '57439',   // California Valley Solar Ranch, San Luis Obispo Co CA (SunPower→Clearway)
     min_confirmed:     0,
     min_highly_likely: 1,
     expect_doe_lpo:    false,
     expect_edgar:      false,
-    notes:             'CA SoS UCC filings should be searchable for Clearway (SunEdison legacy)',
+    notes:             'CA SoS UCC filings should be searchable; SunPower legacy financing',
   },
   {
-    label:             'AES NY Wind (FERC)',
-    plant_code:        '56020',   // AES NY wind plant
+    label:             'Marble River Wind — NY (FERC)',
+    plant_code:        '56857',   // Marble River Wind Farm, Clinton County NY
     min_confirmed:     0,
     min_highly_likely: 0,
     expect_doe_lpo:    false,
     expect_edgar:      false,
-    notes:             'FERC dockets may name lenders in interconnection agreements; low confidence target',
+    notes:             'FERC interconnection dockets may name construction lenders; low-confidence target',
   },
   {
     label:             'Crescent Dunes (DOE + EDGAR adversarial)',
-    plant_code:        '57061',   // Crescent Dunes Solar Energy Project, NV
+    plant_code:        '57275',   // Crescent Dunes Solar Energy Project, Nye County NV (SolarReserve)
     min_confirmed:     1,
     min_highly_likely: 0,
     expect_doe_lpo:    true,
     expect_edgar:      true,
-    notes:             'Adversarial case — SolarReserve bankruptcy; DOE partial loan + EDGAR disclosures',
+    notes:             'Adversarial: SolarReserve bankruptcy; $737M DOE LPO + EDGAR disclosures still public',
   },
 ];
 
@@ -124,7 +126,7 @@ async function runOnePlant(
   const { data: plant } = await supabase
     .from('ucc_research_plants')
     .select('workflow_status')
-    .eq('eia_plant_code', plantCode)
+    .eq('plant_code', plantCode)   // column renamed from eia_plant_code in migration 20260424_ucc_lender_research_fixes
     .order('updated_at', { ascending: false })
     .limit(1)
     .single();
@@ -160,6 +162,36 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
+  // ── Startup self-check: every test case must exist in `plants` ───────────
+  const testCodes = TEST_CORPUS.map(tc => tc.plant_code);
+  const { data: foundPlants, error: checkErr } = await supabase
+    .from('plants')
+    .select('eia_plant_code')
+    .in('eia_plant_code', testCodes);
+
+  if (checkErr) {
+    return new Response(
+      JSON.stringify({ error: 'Self-check DB query failed', detail: checkErr.message }),
+      { status: 500, headers: CORS },
+    );
+  }
+
+  const foundCodes = new Set((foundPlants ?? []).map((r: Record<string, unknown>) => String(r.eia_plant_code)));
+  const missingCodes = testCodes.filter(c => !foundCodes.has(c));
+  if (missingCodes.length > 0) {
+    return new Response(
+      JSON.stringify({
+        error: 'Startup self-check failed — plant codes not found in `plants` table',
+        missing: missingCodes,
+        hint: 'Update TEST_CORPUS with valid EIA plant codes before running smoke tests',
+      }),
+      { status: 422, headers: CORS },
+    );
+  }
+
+  log('self-check', `All ${testCodes.length} test case plant codes verified in DB ✓`);
 
   const results: TestResult[] = [];
   let passCount = 0;

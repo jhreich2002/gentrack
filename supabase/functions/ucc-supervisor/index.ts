@@ -39,7 +39,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
 const MAX_RETRIES    = 2;
-const BATCH_MAX      = 50;    // max plants per batch invocation
+const BATCH_MAX      = 10;    // max plants per batch invocation (realistic for ~150s edge timeout)
 const DEFAULT_BUDGET = 0.25;  // USD per-plant ceiling (revisit after first cohort)
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -505,10 +505,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       filters,
       budget_usd = DEFAULT_BUDGET,
     }: {
-      mode?:       'single' | 'batch';
-      plant_code?: string;
-      filters?:    { state?: string; min_mw?: number; max_plants?: number };
-      budget_usd?: number;
+      mode?:             'single' | 'batch';
+      plant_code?:       string;
+      filters?:          { state?: string; min_mw?: number; max_plants?: number; prioritize_curtailed?: boolean };
+      budget_usd?:       number;
     } = await req.json();
 
     const supabase = createClient(
@@ -537,28 +537,51 @@ Deno.serve(async (req: Request): Promise<Response> => {
       plants = [rowToPlant(data as Record<string, unknown>)];
 
     } else {
-      // Batch mode — pull from plants table with optional filters
-      let query = supabase
-        .from('plants')
-        .select('eia_plant_code, name, state, county, owner, cod, nameplate_capacity_mw');
-
-      if (filters?.state)  query = query.eq('state', filters.state);
-      if (filters?.min_mw) query = query.gte('nameplate_capacity_mw', filters.min_mw);
-
-      // Exclude plants already complete or currently running
-      const { data: skipPlants } = await supabase
-        .from('ucc_research_plants')
-        .select('plant_code')
-        .in('workflow_status', ['complete', 'running']);
-
-      const skipCodes = (skipPlants ?? []).map((r: Record<string, unknown>) => r.plant_code as string);
-      if (skipCodes.length) query = query.not('eia_plant_code', 'in', `(${skipCodes.join(',')})`);
-
       const limit = Math.min(filters?.max_plants ?? BATCH_MAX, BATCH_MAX);
-      query = query.limit(limit);
 
-      const { data } = await query;
-      plants = (data ?? []).map(r => rowToPlant(r as Record<string, unknown>));
+      if (filters?.prioritize_curtailed) {
+        // ── Prioritized curtailed-plant queue (capacity DESC, distress DESC) ──
+        // Reads from ucc_research_queue view which already excludes complete/running.
+        const { data: queueRows } = await supabase
+          .from('ucc_research_queue')
+          .select('plant_code, plant_name, state, county, sponsor_name, capacity_mw')
+          .limit(limit);
+
+        // ucc_research_queue already has the right column names — map directly
+        plants = (queueRows ?? []).map((r: Record<string, unknown>) => ({
+          plant_code:   String(r.plant_code   ?? ''),
+          plant_name:   String(r.plant_name   ?? ''),
+          state:        String(r.state         ?? ''),
+          county:       r.county ? String(r.county) : null,
+          sponsor_name: r.sponsor_name ? String(r.sponsor_name) : null,
+          cod_year:     null,
+          capacity_mw:  r.capacity_mw != null ? Number(r.capacity_mw) : null,
+          operator:     null,
+        }));
+
+      } else {
+        // ── General batch mode — pull from plants with optional filters ────
+        let query = supabase
+          .from('plants')
+          .select('eia_plant_code, name, state, county, owner, cod, nameplate_capacity_mw');
+
+        if (filters?.state)  query = query.eq('state', filters.state);
+        if (filters?.min_mw) query = query.gte('nameplate_capacity_mw', filters.min_mw);
+
+        // Exclude plants already complete or currently running
+        const { data: skipPlants } = await supabase
+          .from('ucc_research_plants')
+          .select('plant_code')
+          .in('workflow_status', ['complete', 'running']);
+
+        const skipCodes = (skipPlants ?? []).map((r: Record<string, unknown>) => r.plant_code as string);
+        if (skipCodes.length) query = query.not('eia_plant_code', 'in', `(${skipCodes.join(',')})`);
+
+        query = query.limit(limit);
+
+        const { data } = await query;
+        plants = (data ?? []).map(r => rowToPlant(r as Record<string, unknown>));
+      }
     }
 
     if (!plants.length) {
