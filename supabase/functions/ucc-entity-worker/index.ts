@@ -260,6 +260,80 @@ async function searchOpenCorporates(
   }
 }
 
+// ── Perplexity alias expansion (retry path) ───────────────────────────────────
+
+/**
+ * Targeted alias expansion: given known candidate names and a retry context,
+ * ask Perplexity to identify alternate LLC spellings, numbering variants,
+ * and historical names used in UCC/county filings.
+ */
+async function perplexityAliasExpansion(
+  plantName:       string,
+  sponsorName:     string | null,
+  state:           string,
+  existingNames:   string[],
+  perplexityKey:   string,
+): Promise<{ candidates: SpvCandidate[]; costUsd: number }> {
+  const knownList = existingNames.slice(0, 5).map(n => `- ${n}`).join('\n');
+  const sponsorHint = sponsorName ? ` The project is developed or owned by ${sponsorName}.` : '';
+
+  const prompt = `I am searching for UCC financing statement filings related to the ${plantName} renewable energy project in ${state}.${sponsorHint}
+
+Known entity name candidates found so far:
+${knownList || '(none)'}
+
+I need alternate LLC name variants that might appear in state UCC filings or county deed-of-trust records — things like Roman numeral suffixes (I, II, III), different abbreviations, parent-company prefixes, or alternate suffixes (Holdings, Owner, Finance, Tax Equity).
+
+Return ONLY a compact JSON array of alternate names NOT in the known list above:
+[{"name": "Exact LLC Name", "confidence": 70}]
+
+Return [] if no reasonable alternates exist. Focus on names likely to appear in actual public filings.`;
+
+  const body = {
+    model: PERPLEXITY_MODEL,
+    messages: [
+      { role: 'system', content: 'You are a US renewable energy finance specialist. Return only valid JSON — no markdown, no explanation.' },
+      { role: 'user', content: prompt },
+    ],
+    max_tokens: 500,
+    temperature: 0,
+  };
+
+  try {
+    const resp = await fetch(PERPLEXITY_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${perplexityKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(PERPLEXITY_TIMEOUT_MS),
+    });
+
+    if (!resp.ok) throw new Error(`Perplexity HTTP ${resp.status}`);
+
+    const data  = await resp.json();
+    const usage = data.usage ?? {};
+    const cost  = estimateCost(usage.prompt_tokens ?? 400, usage.completion_tokens ?? 250);
+    const raw   = data.choices?.[0]?.message?.content ?? '[]';
+
+    let parsed: Array<{ name: string; confidence?: number }> = [];
+    try { parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, '').trim()); } catch { /* ignore */ }
+
+    const candidates: SpvCandidate[] = parsed
+      .filter(p => p.name && typeof p.name === 'string')
+      .map(p => ({
+        name:       p.name.trim(),
+        normalized: normalizeName(p.name),
+        confidence: Math.min(Math.max(p.confidence ?? 55, 0), 100),
+        source:     'perplexity' as const,
+        jurisdiction: state,
+      }));
+
+    return { candidates, costUsd: cost };
+  } catch (err) {
+    log('PERP_EXPAND', `Error: ${err instanceof Error ? err.message : String(err)}`);
+    return { candidates: [], costUsd: 0 };
+  }
+}
+
 // ── Perplexity fallback ───────────────────────────────────────────────────────
 
 async function perplexityEntitySearch(
@@ -354,7 +428,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const startMs = Date.now();
 
   try {
-    const { plant_code, run_id, allow_llm_fallback = true } = await req.json();
+    const { plant_code, run_id, allow_llm_fallback = true, broader_sos_search = false } = await req.json();
 
     if (!plant_code) {
       return new Response(JSON.stringify({ error: 'plant_code required' }), { status: 400, headers: CORS });
@@ -480,6 +554,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
       log(plant_code, `Perplexity fallback: ${perpCandidates.length} candidates, cost $${perpCost.toFixed(4)}`);
     } else if (structuredHits.length === 0 && !allow_llm_fallback) {
       log(plant_code, 'Step 4 — no structured hits, LLM fallback disabled');
+    }
+
+    // ── Step 4b: Alias expansion (retry path, or when few candidates) ─────────
+    if (broader_sos_search && allow_llm_fallback && perplexityKey && allCandidates.length < 8) {
+      log(plant_code, 'Step 4b — alias expansion (retry path)');
+      const existingNames = allCandidates.map(c => c.name);
+      const { candidates: expCandidates, costUsd: expCost } =
+        await perplexityAliasExpansion(plantName, sponsorName ?? operatorName, state, existingNames, perplexityKey);
+
+      queriesAttempted.push({ source: 'perplexity_expand', query: `${plantName} alias variants ${state}`, hit_count: expCandidates.length, url: null });
+      costUsd += expCost;
+
+      for (const c of expCandidates) {
+        if (!seen.has(c.normalized)) {
+          seen.add(c.normalized);
+          allCandidates.push(c);
+        }
+      }
+      if (!llmFallback && expCandidates.length > 0) llmFallback = true;
+      log(plant_code, `Alias expansion: ${expCandidates.length} new variants, cost $${expCost.toFixed(4)}`);
     }
 
     // ── Upsert entity records and plant_entities ──────────────────────────────
