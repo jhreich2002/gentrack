@@ -40,6 +40,7 @@ interface Toast {
   onUndo: () => void;
 }
 
+export default function LenderPursuitsDashboard(props: Props) {
   const [stats, setStats] = useState<LenderStats[]>([]);
   const [pursuitPlants, setPursuitPlants] = useState<PursuitPlant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -75,7 +76,7 @@ interface Toast {
     load();
   }, []);
 
-  const showToast = (msg: string, onUndo: () => void) => {
+  const showToast = (msg: string, onUndo: (() => void) | undefined) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast({ message: msg, onUndo });
     toastTimer.current = setTimeout(() => setToast(null), 3500);
@@ -439,7 +440,7 @@ interface Toast {
                 return (
                   <tr
                     key={lender.lenderName}
-                    onClick={() => onLenderClick(lender.lenderName)}
+                    onClick={() => props.onLenderClick(lender.lenderName)}
                     className="cursor-pointer hover:bg-slate-800/60 group/row transition-colors"
                   >
                     {/* Tier left border */}
@@ -461,27 +462,22 @@ interface Toast {
                       </div>
                     </td>
 
-                    {/* Lender name + trigger line + facility chips + FTI pills */}
-                                        {/* Lender name + watchlist star + trigger line + facility chips + FTI pills */}
-                                        <td className="px-4 py-4 align-top min-w-0">
-                                          <div className="flex items-center gap-2">
-                                            <button
-                                              onClick={e => { e.stopPropagation(); props.onToggleWatch(e, 'lender', lender.lenderName); }}
-                                              className={`transition-colors ${isWatched ? 'text-amber-400' : 'text-slate-700 hover:text-slate-500'}`}
-                                              title={isWatched ? 'Remove from watchlist' : 'Add to watchlist'}
-                                              aria-label={isWatched ? 'Remove from watchlist' : 'Add to watchlist'}
-                                            >
-                                              <svg className="w-4 h-4" fill={isWatched ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.382-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                                              </svg>
-                                            </button>
-                                            <span className="font-bold text-sm text-slate-200 group-hover/row:text-cyan-400 transition-colors truncate">
-                                              {lender.lenderName}
-                                            </span>
-                                          </div>
+                    {/* Lender name + watchlist star + trigger line + facility chips + FTI pills */}
                     <td className="px-4 py-4 align-top min-w-0">
-                      <div className="font-bold text-sm text-slate-200 group-hover/row:text-cyan-400 transition-colors truncate">
-                        {lender.lenderName}
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={e => { e.stopPropagation(); props.onToggleWatch(e, 'lender', lender.lenderName); }}
+                          className={`transition-colors ${isWatched ? 'text-amber-400' : 'text-slate-700 hover:text-slate-500'}`}
+                          title={isWatched ? 'Remove from watchlist' : 'Add to watchlist'}
+                          aria-label={isWatched ? 'Remove from watchlist' : 'Add to watchlist'}
+                        >
+                          <svg className="w-4 h-4" fill={isWatched ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.382-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                          </svg>
+                        </button>
+                        <span className="font-bold text-sm text-slate-200 group-hover/row:text-cyan-400 transition-colors truncate">
+                          {lender.lenderName}
+                        </span>
                       </div>
                       {trigger && (
                         <div className="text-[10px] text-slate-500 italic mt-0.5 truncate" title={trigger}>

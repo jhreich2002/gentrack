@@ -42,6 +42,7 @@ function scoreLabel(val: number | null): { text: string; color: string; bg: stri
   return { text: 'LOW', color: 'text-slate-400', bg: 'bg-slate-500/10 border-slate-500/30' };
 }
 
+export default function ArchivedPursuitsDashboard() {
   const [archived, setArchived] = useState<ArchivedPursuit[]>([]);
   const [plants, setPlants] = useState<PursuitPlant[]>([]);
   const [lenders, setLenders] = useState<LenderStats[]>([]);
