@@ -45,17 +45,20 @@ type EvidenceType    = 'direct' | 'inferred';
 // Source types whose evidence is allowed to land in ucc_lender_links
 // (the citation-backed table). Everything else routes to
 // ucc_lender_leads_unverified.
-const CITATION_SOURCE_TYPES = new Set(['ucc_scrape', 'county_scrape', 'edgar']);
+const CITATION_SOURCE_TYPES = new Set(['ucc_scrape', 'county_scrape', 'edgar', 'doe_lpo', 'ferc']);
 
 // Source type → evidence weight (higher = stronger)
 const SOURCE_WEIGHT: Record<string, number> = {
   ucc_scrape:     100,
   county_scrape:  100,
+  doe_lpo:         95,  // federal public record — highest confidence
+  ferc:            85,
   edgar:           80,
   sponsor_history: 60,
   web_scrape:      40,
   perplexity:      30,
   gemini:          20,
+  news_article:    20,
 };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -132,11 +135,27 @@ function assignConfidence(
   const hasDirectFiling = sourceTypes.some(s => s === 'ucc_scrape' || s === 'county_scrape');
   const hasEdgar        = sourceTypes.some(s => s === 'edgar');
   const hasSponsorHist  = sourceTypes.some(s => s === 'sponsor_history');
+  const hasDoeLpo       = sourceTypes.some(s => s === 'doe_lpo');
+  const hasFerc         = sourceTypes.some(s => s === 'ferc');
 
-  // `confirmed` requires a direct filing AND a source URL on the trusted whitelist.
+  // ── Corroboration rule ──────────────────────────────────────────────────
+  // DOE LPO = confirmed standalone (federal public record)
+  if (hasDoeLpo) return 'confirmed';
+
+  // Two independent citation-grade sources → confirmed
+  const citationSources = [hasDirectFiling, hasEdgar, hasFerc].filter(Boolean).length;
+  if (citationSources >= 2) return 'confirmed';
+
+  // Single citation-grade source with trusted URL → confirmed
   if (hasDirectFiling && hasSourceUrl && hasTrustedUrl) return 'confirmed';
-  if (hasEdgar        && hasSourceUrl && hasTrustedUrl) return 'highly_likely';
-  if (hasSponsorHist)                                    return 'highly_likely';
+
+  // EDGAR or FERC alone → highly_likely
+  if ((hasEdgar || hasFerc) && hasSourceUrl && hasTrustedUrl) return 'highly_likely';
+  if (hasSponsorHist)                                          return 'highly_likely';
+
+  // EDGAR/FERC without trusted URL → possible
+  if (hasEdgar || hasFerc) return 'possible';
+
   return 'possible';
 }
 
@@ -261,6 +280,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const isTrustedUrl = (url: string | null): boolean => {
       const d = extractDomain(url);
       if (!d) return false;
+      // Federal government domains are unconditionally trusted
+      if (d.endsWith('.gov') || d === 'sec.gov' || d.endsWith('.sec.gov')) return true;
       // Match domain or subdomain of any whitelisted entry
       for (const td of trustedDomains) {
         if (d === td || d.endsWith('.' + td)) return true;
