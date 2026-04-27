@@ -188,50 +188,6 @@ async function recordTask(
   }
 }
 
-// ── Task recorder ─────────────────────────────────────────────────────────────
-
-// Map edge-function names → agent_type CHECK values in ucc_agent_tasks
-const AGENT_TYPE_MAP: Record<string, string> = {
-  'ucc-entity-worker':     'entity_worker',
-  'ucc-records-worker':    'ucc_records_worker',
-  'ucc-county-worker':     'county_worker',
-  'ucc-edgar-worker':      'edgar_worker',
-  'ucc-supplement-worker': 'supplement_worker',
-  'ucc-reviewer':          'reviewer',
-  'ucc-doe-lpo-worker':    'doe_lpo_worker',
-  'ucc-ferc-worker':       'ferc_worker',
-  'ucc-news-fallback-worker': 'news_fallback_worker',
-};
-
-async function recordTask(
-  supabase:      ReturnType<typeof createClient>,
-  runId:         string,
-  plantCode:     string,
-  functionName:  string,
-  attempt:       number,
-  result:        WorkerResponse,
-): Promise<void> {
-  const agentType = AGENT_TYPE_MAP[functionName] ?? functionName;
-  try {
-    await supabase.from('ucc_agent_tasks').insert({
-      run_id:            runId,
-      plant_code:        plantCode,
-      agent_type:        agentType,
-      attempt_number:    attempt,
-      task_status:       result.task_status,
-      completion_score:  result.completion_score,
-      evidence_found:    result.evidence_found,
-      llm_fallback_used: result.llm_fallback_used,
-      cost_usd:          result.cost_usd,
-      duration_ms:       result.duration_ms,
-      output_json:       result as unknown as Record<string, unknown>,
-    });
-  } catch (err) {
-    // Non-fatal — observability failure must not abort the pipeline
-    log(plantCode, `recordTask failed (${agentType}): ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
 // ── Single plant research pipeline ───────────────────────────────────────────
 
 async function runPlant(

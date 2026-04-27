@@ -41,8 +41,10 @@ FROM plants p
 LEFT JOIN ucc_research_plants rp ON rp.plant_code = p.eia_plant_code
 WHERE
   p.is_likely_curtailed = true
-  -- Exclude plants that are currently processing or already done
-  AND COALESCE(rp.workflow_status, 'pending') NOT IN ('running', 'complete')
+  -- Exclude plants already processed or currently running.
+  -- Only 'pending' (never attempted) plants appear in the queue.
+  -- To re-process a plant, reset its workflow_status to 'pending' explicitly.
+  AND COALESCE(rp.workflow_status, 'pending') = 'pending'
 ORDER BY
   p.nameplate_capacity_mw DESC NULLS LAST,
   p.distress_score         DESC NULLS LAST;
