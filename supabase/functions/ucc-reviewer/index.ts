@@ -45,20 +45,25 @@ type EvidenceType    = 'direct' | 'inferred';
 // Source types whose evidence is allowed to land in ucc_lender_links
 // (the citation-backed table). Everything else routes to
 // ucc_lender_leads_unverified.
-const CITATION_SOURCE_TYPES = new Set(['ucc_scrape', 'county_scrape', 'edgar', 'doe_lpo', 'ferc']);
+//
+// 'news_validated' = a news lead whose article URL was HEAD+GET fetched and
+// whose lender name appears in the body (validated by ucc-news-fallback-worker).
+// We treat that as primary public-source evidence on par with EDGAR/FERC.
+const CITATION_SOURCE_TYPES = new Set(['ucc_scrape', 'county_scrape', 'edgar', 'doe_lpo', 'ferc', 'news_validated']);
 
 // Source type → evidence weight (higher = stronger)
 const SOURCE_WEIGHT: Record<string, number> = {
-  ucc_scrape:     100,
-  county_scrape:  100,
-  doe_lpo:         95,  // federal public record — highest confidence
-  ferc:            85,
-  edgar:           80,
-  sponsor_history: 60,
-  web_scrape:      40,
-  perplexity:      30,
-  gemini:          20,
-  news_article:    20,
+  ucc_scrape:      100,
+  county_scrape:   100,
+  doe_lpo:          95,  // federal public record — highest confidence
+  news_validated:   90,  // URL+content validated trade press / press release
+  ferc:             85,
+  edgar:            80,
+  sponsor_history:  60,
+  web_scrape:       40,
+  perplexity:       30,
+  gemini:           20,
+  news_article:     20,
 };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -137,14 +142,19 @@ function assignConfidence(
   const hasSponsorHist  = sourceTypes.some(s => s === 'sponsor_history');
   const hasDoeLpo       = sourceTypes.some(s => s === 'doe_lpo');
   const hasFerc         = sourceTypes.some(s => s === 'ferc');
+  const hasNewsValid    = sourceTypes.some(s => s === 'news_validated');
 
   // ── Corroboration rule ──────────────────────────────────────────────────
   // DOE LPO = confirmed standalone (federal public record)
   if (hasDoeLpo) return 'confirmed';
 
   // Two independent citation-grade sources → confirmed
-  const citationSources = [hasDirectFiling, hasEdgar, hasFerc].filter(Boolean).length;
+  const citationSources = [hasDirectFiling, hasEdgar, hasFerc, hasNewsValid].filter(Boolean).length;
   if (citationSources >= 2) return 'confirmed';
+
+  // News with HEAD+GET-validated URL → confirmed standalone
+  // (the validation pass already proved the lender name appears in the article body)
+  if (hasNewsValid) return 'confirmed';
 
   // Single citation-grade source with trusted URL → high_confidence
   if ((hasDirectFiling || hasEdgar || hasFerc) && hasSourceUrl && hasTrustedUrl) {
@@ -373,6 +383,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
         ucc_scrape:     'UCC state filing',
         county_scrape:  'county recorder document',
         edgar:          'SEC EDGAR disclosure',
+        doe_lpo:        'DOE Loan Programs Office',
+        ferc:           'FERC filing',
+        news_validated: 'validated news article',
+        news_article:   'news article (URL unverified)',
         sponsor_history:'sponsor financing history',
         web_scrape:     'sponsor portfolio page',
         perplexity:     'trade press search',
@@ -415,22 +429,126 @@ Deno.serve(async (req: Request): Promise<Response> => {
       });
     }
 
-    // ── Cross-source corroboration: news lead promoting high_confidence → confirmed ──
+    // ── Cross-source corroboration & news-as-primary promotion ─────────────
+    // Pulls news leads written by ucc-news-fallback-worker. Two roles:
+    //   (a) Validated news leads (URL HEAD+GET passed, lender name found in
+    //       article body) are promoted to first-class CONFIRMED candidates,
+    //       even if no scraper found them. Scrapers are the fallback for
+    //       press-coverage gaps, not the gatekeeper.
+    //   (b) Any matching news lead corroborates an existing high_confidence
+    //       candidate → confirmed.
     const { data: newsLeadRows } = await supabase
       .from('ucc_lender_leads_unverified')
-      .select('lender_entity_id, lender_normalized')
+      .select('lender_entity_id, lender_name, lender_normalized, source_url, source_types, evidence_summary')
       .eq('plant_code', plant_code)
       .eq('run_id', run_id)
       .in('evidence_type', ['news', 'news_article']);
 
-    const newsEntityIds     = new Set<number>(
-      (newsLeadRows ?? []).map((l: Record<string, unknown>) => l.lender_entity_id as number).filter(Boolean)
+    const newsRows = (newsLeadRows ?? []) as Array<{
+      lender_entity_id:  number | null;
+      lender_name:       string;
+      lender_normalized: string;
+      source_url:        string | null;
+      source_types:      string[] | null;
+      evidence_summary:  string | null;
+    }>;
+
+    const newsEntityIds       = new Set<number>(
+      newsRows.map(l => l.lender_entity_id as number).filter(Boolean)
     );
     const newsNormalizedNames = new Set<string>(
-      (newsLeadRows ?? []).map((l: Record<string, unknown>) => String(l.lender_normalized ?? '')).filter(Boolean)
+      newsRows.map(l => String(l.lender_normalized ?? '')).filter(Boolean)
     );
 
-    if ((newsLeadRows ?? []).length > 0) {
+    // (a) Add validated news leads as first-class candidates
+    let newsValidatedAdded = 0;
+
+    // Helper: ensure a ucc_entities row exists for a news lead that lost its
+    // lender_entity_id (e.g. when the news worker's upsert returned no row).
+    // Without a valid FK, the lead can never be promoted to ucc_lender_links.
+    const ensureEntityId = async (leadName: string, leadNormalized: string): Promise<number | null> => {
+      const { data: hit } = await supabase
+        .from('ucc_entities')
+        .select('id')
+        .eq('normalized_name', leadNormalized)
+        .eq('entity_type', 'lender')
+        .limit(1)
+        .maybeSingle();
+      if (hit?.id) return hit.id as number;
+      const { data: inserted, error: insErr } = await supabase
+        .from('ucc_entities')
+        .insert({
+          entity_name:     leadName,
+          entity_type:     'lender',
+          normalized_name: leadNormalized,
+          jurisdiction:    null,
+          source:          'news_article',
+        })
+        .select('id')
+        .maybeSingle();
+      if (inserted?.id) return inserted.id as number;
+      if (insErr) log(plant_code, `ensureEntityId insert error for ${leadName}: ${insErr.message}`);
+      return null;
+    };
+
+    for (const lead of newsRows) {
+      const types = lead.source_types ?? [];
+      if (!types.includes('news_validated')) continue;
+      const existing = candidates.find(c =>
+        (lead.lender_entity_id !== null && c.entity_id === lead.lender_entity_id) ||
+        c.normalized_name === lead.lender_normalized
+      );
+      if (existing) {
+        // Merge: add news_validated source_type so this becomes citation-backed
+        if (!existing.source_types.includes('news_validated')) {
+          existing.source_types.push('news_validated');
+        }
+        // Re-evaluate confidence with the new source set
+        const merged = assignConfidence(
+          existing.source_types,
+          !!existing.source_url || !!lead.source_url,
+          true, // validated news source_url is, by definition, a verified-content URL
+        );
+        const ORDER: Record<ConfidenceClass, number> = { confirmed: 0, high_confidence: 1, highly_likely: 2, possible: 3 };
+        if (ORDER[merged] < ORDER[existing.confidence_class]) {
+          existing.confidence_class = merged;
+          existing.needs_review     = false;
+          existing.review_reason    = null;
+        }
+        if (!existing.source_url && lead.source_url) existing.source_url = lead.source_url;
+        continue;
+      }
+      // No existing candidate — add this validated news lead as a fresh candidate
+      let entityId = lead.lender_entity_id;
+      if (!entityId) {
+        entityId = await ensureEntityId(lead.lender_name, lead.lender_normalized);
+        if (!entityId) {
+          log(plant_code, `Skipping news_validated promotion for ${lead.lender_name}: could not resolve entity_id`);
+          continue;
+        }
+      }
+      candidates.push({
+        entity_id:        entityId,
+        entity_name:      lead.lender_name,
+        normalized_name:  lead.lender_normalized,
+        confidence_class: 'confirmed',
+        evidence_type:    'inferred',
+        evidence_summary: `Validated news article (URL+content verified): ${(lead.evidence_summary ?? '').slice(0, 200)}`,
+        source_url:       lead.source_url,
+        supporting_count: 1,
+        source_types:     ['news_validated'],
+        needs_review:     false,
+        review_reason:    null,
+      });
+      newsValidatedAdded++;
+      if (lead.source_url && !sourceUrls.includes(lead.source_url)) sourceUrls.push(lead.source_url);
+    }
+    if (newsValidatedAdded > 0) {
+      log(plant_code, `Added ${newsValidatedAdded} news-validated candidate(s) (URL+content verified)`);
+    }
+
+    // (b) Existing corroboration: news lead promoting high_confidence → confirmed
+    if (newsRows.length > 0) {
       let corroborated = 0;
       for (const candidate of candidates) {
         if (candidate.confidence_class !== 'high_confidence') continue;
@@ -466,16 +584,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // ── Write lender links — route by citation status ─────────────────────
     // Citation-backed table (ucc_lender_links) requires:
     //   1. evidence includes a CITATION_SOURCE_TYPES source_type, AND
-    //   2. a source URL on the trusted-domain whitelist.
+    //   2. a source URL on the trusted-domain whitelist
+    //      — OR the source is 'news_validated' (URL+content already verified
+    //        via HEAD+GET in the news worker, so we trust the URL even if
+    //        the domain isn't on the whitelist).
     // Everything else lands in ucc_lender_leads_unverified so the main table
     // stays banking-grade auditable.
     let verifiedWritten   = 0;
     let unverifiedWritten = 0;
     for (const candidate of candidates) {
+      const hasNewsValidated = candidate.source_types.includes('news_validated');
       const isCitationBacked =
         candidate.source_types.some(s => CITATION_SOURCE_TYPES.has(s)) &&
         !!candidate.source_url &&
-        isTrustedUrl(candidate.source_url);
+        (isTrustedUrl(candidate.source_url) || hasNewsValidated);
 
       if (isCitationBacked) {
         await supabase.from('ucc_lender_links').upsert({

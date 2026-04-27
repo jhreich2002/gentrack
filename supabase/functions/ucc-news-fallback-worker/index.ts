@@ -57,6 +57,8 @@ interface NewsLead {
   article_date:  string | null;
   confidence:    number;   // 0-100 — always lower than citation-grade sources
   excerpt:       string;
+  url_status:    'validated' | 'url_only' | 'unreachable' | 'no_url';
+  validation_note: string | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,6 +79,90 @@ function normalizeName(name: string): string {
 
 function estimateCost(inputTokens: number, outputTokens: number): number {
   return (inputTokens / 1_000_000) * 3.0 + (outputTokens / 1_000_000) * 15.0 + 0.005;
+}
+
+// ── URL validation ────────────────────────────────────────────────────────────
+// Two-step verification:
+//   1. HEAD request — confirms URL resolves (HTTP 2xx/3xx)
+//   2. GET request — fetches body and checks lender name appears in HTML
+// Only leads passing BOTH steps are eligible for promotion to confirmed.
+//
+// Failure modes intentionally accepted:
+//   - Paywalled articles (e.g. IJGlobal, PFI) often return 200 on HEAD but
+//     deliver an excerpt + paywall stub on GET. We accept these as 'url_only'
+//     so they retain their citation rather than being discarded.
+//   - 4xx/5xx → unreachable, lead persists as 'url_only' (Perplexity may have
+//     fabricated the URL or the article moved).
+async function validateLeadUrl(
+  rawUrl:     string,
+  lenderName: string,
+): Promise<{ status: 'validated' | 'url_only' | 'unreachable'; note: string | null }> {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      return { status: 'unreachable', note: `Invalid protocol: ${url.protocol}` };
+    }
+  } catch {
+    return { status: 'unreachable', note: 'Malformed URL' };
+  }
+
+  // Step 1: HEAD
+  let headOk = false;
+  try {
+    const headResp = await fetch(url.toString(), {
+      method:  'HEAD',
+      redirect:'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GentrackBot/1.0; +https://gentrack.app)' },
+      signal:  AbortSignal.timeout(8000),
+    });
+    headOk = headResp.ok || (headResp.status >= 300 && headResp.status < 400);
+  } catch {
+    // Some servers reject HEAD — fall through to GET
+    headOk = true;
+  }
+  if (!headOk) {
+    return { status: 'unreachable', note: 'HEAD request failed' };
+  }
+
+  // Step 2: GET + grep for lender name (or a normalized-token match)
+  try {
+    const getResp = await fetch(url.toString(), {
+      method:  'GET',
+      redirect:'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GentrackBot/1.0; +https://gentrack.app)' },
+      signal:  AbortSignal.timeout(15000),
+    });
+    if (!getResp.ok) {
+      return { status: 'url_only', note: `GET ${getResp.status}` };
+    }
+    const ct = (getResp.headers.get('content-type') ?? '').toLowerCase();
+    if (!ct.includes('text') && !ct.includes('html')) {
+      return { status: 'url_only', note: `Non-text content-type: ${ct}` };
+    }
+    const body = (await getResp.text()).slice(0, 250_000); // cap at ~250 KB
+    const haystack = body.toLowerCase();
+
+    // Match strategies, in order of strictness:
+    //   a) full lender name appears verbatim
+    //   b) all multi-letter tokens of the lender name appear (handles
+    //      'JPMorgan Chase' vs 'J.P. Morgan Chase' formatting variance)
+    const needleFull = lenderName.toLowerCase();
+    if (haystack.includes(needleFull)) {
+      return { status: 'validated', note: 'Verbatim match in body' };
+    }
+    const tokens = lenderName
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(t => t.length >= 4 && !['bank','corp','group','financial','capital','trust'].includes(t));
+    if (tokens.length > 0 && tokens.every(t => haystack.includes(t))) {
+      return { status: 'validated', note: 'Token match in body' };
+    }
+    return { status: 'url_only', note: 'URL OK but lender name not in body (possible paywall)' };
+  } catch (err) {
+    return { status: 'url_only', note: `GET error: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 // ── Perplexity news search ────────────────────────────────────────────────────
@@ -177,8 +263,10 @@ Return [] if nothing is found. Only include entries with actual article/URL evid
         article_url:   p.article_url ?? null,
         article_title: p.article_title ?? null,
         article_date:  p.article_date ?? null,
-        confidence:    Math.min(Math.max(p.confidence ?? 55, 0), 70), // cap at 70 — news is never "confirmed"
+        confidence:    Math.min(Math.max(p.confidence ?? 55, 0), 95), // cap at 95 — validated news still leaves room above
         excerpt:       (p.excerpt ?? '').slice(0, 500),
+        url_status:    p.article_url ? 'url_only' : 'no_url' as const,
+        validation_note: null,
       }));
 
     return { leads, costUsd: cost, rawText: raw, error: null };
@@ -240,14 +328,34 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     log(plant_code, `News fallback: ${leads.length} leads, cost $${costUsd.toFixed(4)}`);
 
+    // ── URL validation pass (HEAD + GET + content match) ───────────────────────────────
+    // Validate concurrently — each call has its own timeout, so worst case is ~23s
+    // total even if every URL is slow.
+    const validationResults = await Promise.all(
+      leads.map(async (lead) => {
+        if (!lead.article_url) return { status: 'no_url' as const, note: null };
+        return await validateLeadUrl(lead.article_url, lead.lender_name);
+      }),
+    );
+    for (let i = 0; i < leads.length; i++) {
+      leads[i].url_status      = validationResults[i].status;
+      leads[i].validation_note = validationResults[i].note;
+    }
+    const validatedCount = leads.filter(l => l.url_status === 'validated').length;
+    log(plant_code, `URL validation: ${validatedCount}/${leads.length} validated`);
+
     // Persist leads to UNVERIFIED table only (using the existing table schema)
     const seen = new Set<string>();
     for (const lead of leads) {
       if (seen.has(lead.normalized)) continue;
       seen.add(lead.normalized);
 
-      // Upsert entity first to get lender_entity_id
-      const { data: lenderEntity } = await supabase
+      // Upsert entity first to get lender_entity_id. If upsert returns no row
+      // (e.g. on-conflict path didn't return), fall back to a SELECT so we
+      // never persist a lead with NULL entity_id (which blocks reviewer
+      // promotion to ucc_lender_links via FK).
+      let lenderEntityId: number | null = null;
+      const { data: upsertedEntity, error: entityUpsertErr } = await supabase
         .from('ucc_entities')
         .upsert({
           entity_name:     lead.lender_name,
@@ -258,18 +366,41 @@ Deno.serve(async (req: Request): Promise<Response> => {
           source_url:      lead.article_url ?? null,
         }, { onConflict: 'normalized_name,entity_type,jurisdiction', ignoreDuplicates: false })
         .select('id')
-        .single();
+        .maybeSingle();
+      if (upsertedEntity?.id) {
+        lenderEntityId = upsertedEntity.id as number;
+      } else {
+        if (entityUpsertErr) log(plant_code, `entity upsert error for ${lead.lender_name}: ${entityUpsertErr.message}`);
+        const { data: existingEntity } = await supabase
+          .from('ucc_entities')
+          .select('id')
+          .eq('normalized_name', lead.normalized)
+          .eq('entity_type', 'lender')
+          .eq('jurisdiction', state)
+          .maybeSingle();
+        if (existingEntity?.id) lenderEntityId = existingEntity.id as number;
+      }
+
+      // Validated news → mark with extra source_type so the reviewer can promote
+      // it to confirmed and route into ucc_lender_links. Unvalidated news stays
+      // as a regular lead.
+      const sourceTypes = lead.url_status === 'validated'
+        ? ['news_article', 'news_validated']
+        : ['news_article'];
+      const confidenceClass = lead.url_status === 'validated'
+        ? (lead.confidence >= 70 ? 'high_confidence' : 'highly_likely')
+        : (lead.confidence >= 60 ? 'highly_likely' : 'possible');
 
       await supabase.from('ucc_lender_leads_unverified').upsert({
         plant_code:        plant_code,
-        lender_entity_id:  lenderEntity?.id ?? null,
+        lender_entity_id:  lenderEntityId,
         lender_name:       lead.lender_name,
         lender_normalized: lead.normalized,
-        confidence_class:  lead.confidence >= 60 ? 'highly_likely' : 'possible',
+        confidence_class:  confidenceClass,
         evidence_type:     'news',
-        evidence_summary:  `${lead.role}${lead.facility_type ? ` (${lead.facility_type})` : ''}: ${lead.excerpt}`,
+        evidence_summary:  `${lead.role}${lead.facility_type ? ` (${lead.facility_type})` : ''} [url:${lead.url_status}${lead.validation_note ? ` — ${lead.validation_note}` : ''}]: ${lead.excerpt}`,
         source_url:        lead.article_url ?? null,
-        source_types:      ['news_article'],
+        source_types:      sourceTypes,
         llm_model:         PERPLEXITY_MODEL,
         run_id:            run_id || null,
       }, { onConflict: 'plant_code,lender_entity_id', ignoreDuplicates: false });
