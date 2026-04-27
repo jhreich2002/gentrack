@@ -87,7 +87,7 @@ async function searchNewsForLenders(
   state:         string,
   capacityMw:    number | null,
   perplexityKey: string,
-): Promise<{ leads: NewsLead[]; costUsd: number; rawText: string }> {
+): Promise<{ leads: NewsLead[]; costUsd: number; rawText: string; error: string | null }> {
   const stateHint    = state ? ` in ${state}` : '';
   const sponsorHint  = sponsorName ? ` developed by ${sponsorName}` : '';
   const capacityHint = capacityMw ? ` (${capacityMw} MW)` : '';
@@ -140,7 +140,10 @@ Return [] if nothing is found. Only include entries with actual article/URL evid
       signal: AbortSignal.timeout(PERPLEXITY_TIMEOUT),
     });
 
-    if (!resp.ok) throw new Error(`Perplexity HTTP ${resp.status}`);
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => '');
+      throw new Error(`Perplexity HTTP ${resp.status}: ${errBody.slice(0, 200)}`);
+    }
 
     const data  = await resp.json();
     const usage = data.usage ?? {};
@@ -178,10 +181,11 @@ Return [] if nothing is found. Only include entries with actual article/URL evid
         excerpt:       (p.excerpt ?? '').slice(0, 500),
       }));
 
-    return { leads, costUsd: cost, rawText: raw };
+    return { leads, costUsd: cost, rawText: raw, error: null };
   } catch (err) {
-    log('PERP', `Error: ${err instanceof Error ? err.message : String(err)}`);
-    return { leads: [], costUsd: 0, rawText: '' };
+    const msg = err instanceof Error ? err.message : String(err);
+    log('PERP', `Error: ${msg}`);
+    return { leads: [], costUsd: 0, rawText: '', error: msg };
   }
 }
 
@@ -223,7 +227,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     log(plant_code, `Running news fallback search for "${plant_name}"`);
 
-    const { leads, costUsd, rawText } = await searchNewsForLenders(
+    const { leads, costUsd, rawText, error: perpError } = await searchNewsForLenders(
       plant_name, sponsor_name, state, capacity_mw ?? null, perplexityKey,
     );
 
@@ -280,7 +284,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       structured_results:    leads,
       source_urls:           leads.filter(l => l.article_url).map(l => l.article_url!),
       raw_evidence_snippets: leads.map(l => l.excerpt).slice(0, 5),
-      open_questions:        leads.length === 0 ? ['No lender news found — plant may be too new, private, or too small for press coverage'] : [],
+      open_questions:        perpError
+        ? [`Perplexity error: ${perpError}`]
+        : (leads.length === 0 ? ['No lender news found — plant may be too new, private, or too small for press coverage'] : []),
       retry_recommendation:  null,
       cost_usd:              costUsd,
       llm_fallback_used:     true,
