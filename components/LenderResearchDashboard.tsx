@@ -109,6 +109,112 @@ function ConfBadge({ cls }: { cls: string }) {
   );
 }
 
+// ── Trace task panel ──────────────────────────────────────────────────────────
+
+function TraceTaskPanel({ task }: { task: UCCAgentTask }) {
+  const [expanded, setExpanded] = React.useState(false);
+
+  const queries = (task.output_json?.queries_attempted as Array<{ source: string; query: string; hit_count: number; url: string | null }> | undefined) ?? [];
+  const openQs  = (task.output_json?.open_questions as string[] | undefined) ?? [];
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
+      {/* Header row */}
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="w-full text-left px-4 py-3 hover:bg-slate-800/50 transition-colors"
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-slate-200">
+              {task.agent_type.replace(/_/g, ' ')}
+            </span>
+            {task.attempt_number > 1 && (
+              <span className="text-[10px] text-amber-400 bg-amber-900/20 px-1.5 py-0.5 rounded">
+                attempt {task.attempt_number}
+              </span>
+            )}
+            {task.llm_fallback_used && (
+              <span className="text-[10px] text-purple-400 bg-purple-900/20 px-1.5 py-0.5 rounded">LLM used</span>
+            )}
+            {task.evidence_found && (
+              <span className="text-[10px] text-emerald-400 bg-emerald-900/20 px-1.5 py-0.5 rounded">evidence ✓</span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <span className={`text-xs font-bold ${
+              task.completion_score >= 80 ? 'text-emerald-400'
+              : task.completion_score >= 60 ? 'text-amber-400'
+              : 'text-red-400'
+            }`}>{task.completion_score}</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+              task.task_status === 'success' ? 'bg-emerald-900/30 text-emerald-400'
+              : task.task_status === 'partial' ? 'bg-amber-900/30 text-amber-400'
+              : 'bg-red-900/30 text-red-400'
+            }`}>{task.task_status}</span>
+            <span className="text-[10px] text-slate-600">{expanded ? '▲' : '▼'}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-4 mt-1 text-xs text-slate-500">
+          {task.duration_ms > 0 && <span>{(task.duration_ms / 1000).toFixed(1)}s</span>}
+          {task.cost_usd > 0 && <span>${task.cost_usd.toFixed(4)}</span>}
+          {queries.length > 0 && <span>{queries.length} quer{queries.length === 1 ? 'y' : 'ies'} attempted</span>}
+        </div>
+      </button>
+
+      {/* Expanded body */}
+      {expanded && (
+        <div className="border-t border-slate-800 px-4 py-3 space-y-3">
+          {/* Queries attempted */}
+          {queries.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Queries attempted</p>
+              <div className="space-y-1">
+                {queries.map((q, i) => (
+                  <div key={i} className="flex items-start gap-2 text-xs">
+                    <span className="text-slate-600 shrink-0 w-20 truncate">{q.source}</span>
+                    <span className="text-slate-400 flex-1 break-all">{q.query}</span>
+                    <span className={`shrink-0 font-semibold ${q.hit_count > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
+                      {q.hit_count} hit{q.hit_count !== 1 ? 's' : ''}
+                    </span>
+                    {q.url && (
+                      <a href={q.url} target="_blank" rel="noopener noreferrer" className="shrink-0 text-blue-400/70 hover:text-blue-300 truncate max-w-[140px]">
+                        ↗ source
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Open questions */}
+          {openQs.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Open questions</p>
+              <ul className="space-y-0.5">
+                {openQs.map((q, i) => <li key={i} className="text-xs text-amber-400/80">• {q}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {/* Raw JSON toggle */}
+          {task.output_json && (
+            <details className="group">
+              <summary className="text-[10px] text-slate-600 hover:text-slate-400 cursor-pointer select-none uppercase tracking-wide">
+                Raw output JSON
+              </summary>
+              <pre className="mt-1.5 text-[10px] text-slate-500 bg-slate-950 rounded p-2 overflow-x-auto max-h-48">
+                {JSON.stringify(task.output_json, null, 2)}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Sub-tab types ─────────────────────────────────────────────────────────────
 
 type SubTab = 'plants' | 'leads' | 'unverified' | 'review' | 'pitch_ready' | 'trace' | 'scraper';
@@ -816,47 +922,12 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
                     </div>
 
                     {/* Task list */}
-                    <div className="flex-1 space-y-1">
+                    <div className="flex-1 space-y-2">
                       {traceTasks.length === 0 ? (
                         <div className="text-slate-500 text-sm">Select a run to view worker tasks.</div>
                       ) : (
                         traceTasks.map(task => (
-                          <div key={task.id} className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-3">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <span className="text-sm font-medium text-slate-200">
-                                  {task.agent_type.replace(/_/g, ' ')}
-                                </span>
-                                {task.attempt_number > 1 && (
-                                  <span className="ml-2 text-xs text-amber-400">attempt {task.attempt_number}</span>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-3">
-                                {task.llm_fallback_used && (
-                                  <span className="text-[10px] text-amber-500 bg-amber-900/20 px-1.5 py-0.5 rounded">LLM used</span>
-                                )}
-                                <span className={`text-xs font-bold ${
-                                  task.completion_score >= 80 ? 'text-emerald-400'
-                                  : task.completion_score >= 60 ? 'text-amber-400'
-                                  : 'text-red-400'
-                                }`}>
-                                  {task.completion_score}
-                                </span>
-                                <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                                  task.task_status === 'success' ? 'bg-emerald-900/30 text-emerald-400'
-                                  : task.task_status === 'partial' ? 'bg-amber-900/30 text-amber-400'
-                                  : 'bg-red-900/30 text-red-400'
-                                }`}>
-                                  {task.task_status}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-4 mt-1 text-xs text-slate-500">
-                              <span>{Math.round(task.duration_ms / 1000)}s</span>
-                              {task.cost_usd > 0 && <span>{fmtCost(task.cost_usd)}</span>}
-                              {task.evidence_found && <span className="text-emerald-500">evidence found</span>}
-                            </div>
-                          </div>
+                          <TraceTaskPanel key={task.id} task={task} />
                         ))
                       )}
                     </div>

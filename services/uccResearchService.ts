@@ -142,6 +142,7 @@ export interface UCCAgentTask {
   llm_fallback_used: boolean;
   cost_usd:          number;
   duration_ms:       number;
+  output_json:       Record<string, unknown> | null;
 }
 
 export interface UCCEntity {
@@ -478,7 +479,7 @@ export async function fetchAgentRuns(plantCode: string): Promise<UCCAgentRun[]> 
 export async function fetchAgentTasks(runId: string): Promise<UCCAgentTask[]> {
   const { data, error } = await supabase
     .from('ucc_agent_tasks')
-    .select('id, run_id, plant_code, agent_type, attempt_number, task_status, completion_score, evidence_found, llm_fallback_used, cost_usd, duration_ms')
+    .select('id, run_id, plant_code, agent_type, attempt_number, task_status, completion_score, evidence_found, llm_fallback_used, cost_usd, duration_ms, output_json')
     .eq('run_id', runId)
     .order('id');
 

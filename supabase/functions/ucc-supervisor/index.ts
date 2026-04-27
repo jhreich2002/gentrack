@@ -144,6 +144,94 @@ async function invokeWorker(
   }
 }
 
+// ── Task recorder ─────────────────────────────────────────────────────────────
+
+// Map edge-function names → agent_type CHECK values in ucc_agent_tasks
+const AGENT_TYPE_MAP: Record<string, string> = {
+  'ucc-entity-worker':     'entity_worker',
+  'ucc-records-worker':    'ucc_records_worker',
+  'ucc-county-worker':     'county_worker',
+  'ucc-edgar-worker':      'edgar_worker',
+  'ucc-supplement-worker': 'supplement_worker',
+  'ucc-reviewer':          'reviewer',
+  'ucc-doe-lpo-worker':    'doe_lpo_worker',
+  'ucc-ferc-worker':       'ferc_worker',
+  'ucc-news-fallback-worker': 'news_fallback_worker',
+};
+
+async function recordTask(
+  supabase:      ReturnType<typeof createClient>,
+  runId:         string,
+  plantCode:     string,
+  functionName:  string,
+  attempt:       number,
+  result:        WorkerResponse,
+): Promise<void> {
+  const agentType = AGENT_TYPE_MAP[functionName] ?? functionName;
+  try {
+    await supabase.from('ucc_agent_tasks').insert({
+      run_id:            runId,
+      plant_code:        plantCode,
+      agent_type:        agentType,
+      attempt_number:    attempt,
+      task_status:       result.task_status,
+      completion_score:  result.completion_score,
+      evidence_found:    result.evidence_found,
+      llm_fallback_used: result.llm_fallback_used,
+      cost_usd:          result.cost_usd,
+      duration_ms:       result.duration_ms,
+      output_json:       result as unknown as Record<string, unknown>,
+    });
+  } catch (err) {
+    // Non-fatal — observability failure must not abort the pipeline
+    log(plantCode, `recordTask failed (${agentType}): ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ── Task recorder ─────────────────────────────────────────────────────────────
+
+// Map edge-function names → agent_type CHECK values in ucc_agent_tasks
+const AGENT_TYPE_MAP: Record<string, string> = {
+  'ucc-entity-worker':     'entity_worker',
+  'ucc-records-worker':    'ucc_records_worker',
+  'ucc-county-worker':     'county_worker',
+  'ucc-edgar-worker':      'edgar_worker',
+  'ucc-supplement-worker': 'supplement_worker',
+  'ucc-reviewer':          'reviewer',
+  'ucc-doe-lpo-worker':    'doe_lpo_worker',
+  'ucc-ferc-worker':       'ferc_worker',
+  'ucc-news-fallback-worker': 'news_fallback_worker',
+};
+
+async function recordTask(
+  supabase:      ReturnType<typeof createClient>,
+  runId:         string,
+  plantCode:     string,
+  functionName:  string,
+  attempt:       number,
+  result:        WorkerResponse,
+): Promise<void> {
+  const agentType = AGENT_TYPE_MAP[functionName] ?? functionName;
+  try {
+    await supabase.from('ucc_agent_tasks').insert({
+      run_id:            runId,
+      plant_code:        plantCode,
+      agent_type:        agentType,
+      attempt_number:    attempt,
+      task_status:       result.task_status,
+      completion_score:  result.completion_score,
+      evidence_found:    result.evidence_found,
+      llm_fallback_used: result.llm_fallback_used,
+      cost_usd:          result.cost_usd,
+      duration_ms:       result.duration_ms,
+      output_json:       result as unknown as Record<string, unknown>,
+    });
+  } catch (err) {
+    // Non-fatal — observability failure must not abort the pipeline
+    log(plantCode, `recordTask failed (${agentType}): ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 // ── Single plant research pipeline ───────────────────────────────────────────
 
 async function runPlant(
@@ -175,6 +263,7 @@ async function runPlant(
 
     entityResult = await invokeWorker('ucc-entity-worker', base);
     totalCost += entityResult.cost_usd;
+    await recordTask(supabase, runId, plant_code, 'ucc-entity-worker', attempt, entityResult);
 
     log(plant_code, `Entity worker → score=${entityResult.completion_score}, found=${entityResult.evidence_found}`);
 
@@ -255,6 +344,13 @@ async function runPlant(
 
   totalCost += uccResult.cost_usd + countyResult.cost_usd + edgarResult.cost_usd;
 
+  // Record all three parallel tasks
+  await Promise.all([
+    recordTask(supabase, runId, plant_code, 'ucc-records-worker', 1, uccResult),
+    recordTask(supabase, runId, plant_code, 'ucc-county-worker',  1, countyResult),
+    recordTask(supabase, runId, plant_code, 'ucc-edgar-worker',   1, edgarResult),
+  ]);
+
   log(plant_code, [
     `UCC: score=${uccResult.completion_score}`,
     `County: score=${countyResult.completion_score}`,
@@ -279,6 +375,7 @@ async function runPlant(
       allow_llm_fallback: true,
     });
     totalCost += suppResult.cost_usd;
+    await recordTask(supabase, runId, plant_code, 'ucc-supplement-worker', 1, suppResult);
     log(plant_code, `Supplement: score=${suppResult.completion_score}, found=${suppResult.evidence_found}`);
   } else {
     log(plant_code, `No evidence found — skipping supplement worker`);
@@ -292,6 +389,7 @@ async function runPlant(
     capacity_mw,
   });
   totalCost += reviewerResult.cost_usd;
+  await recordTask(supabase, runId, plant_code, 'ucc-reviewer', 1, reviewerResult);
 
   log(plant_code, `Reviewer: score=${reviewerResult.completion_score}, escalate=${reviewerResult.escalate_to_review}`);
 
