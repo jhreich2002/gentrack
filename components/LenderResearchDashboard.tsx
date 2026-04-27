@@ -7,6 +7,8 @@ import {
   fetchAgentTasks,
   fetchUnverifiedLeads,
   fetchPitchReadyLeads,
+  fetchStateScraperHealth,
+  fetchEvidenceProvenance,
   markPitchReady,
   runSinglePlantResearch,
   runBatchResearch,
@@ -19,6 +21,8 @@ import {
   UCCAgentTask,
   UCCUnverifiedLead,
   UCCPitchReadyLead,
+  UCCStateScraperHealthRow,
+  UCCEvidenceProvenanceRow,
   WorkflowStatus,
   SupervisorResult,
 } from '../services/uccResearchService';
@@ -103,7 +107,7 @@ function ConfBadge({ cls }: { cls: string }) {
 
 // ── Sub-tab types ─────────────────────────────────────────────────────────────
 
-type SubTab = 'plants' | 'leads' | 'unverified' | 'review' | 'pitch_ready' | 'trace';
+type SubTab = 'plants' | 'leads' | 'unverified' | 'review' | 'pitch_ready' | 'trace' | 'scraper';
 
 const PAGE_SIZE = 50;
 
@@ -122,6 +126,8 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchResult, setBatchResult]   = useState<SupervisorResult | null>(null);
   const [pitchActionId, setPitchActionId] = useState<number | null>(null);
+  const [scraperHealth, setScraperHealth]         = useState<UCCStateScraperHealthRow[]>([]);
+  const [evidenceProvenance, setEvidenceProvenance] = useState<UCCEvidenceProvenanceRow[]>([]);
 
   // Filters
   const [search, setSearch]         = useState('');
@@ -142,18 +148,22 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [p, l, q, u, pr] = await Promise.all([
+    const [p, l, q, u, pr, sh, ep] = await Promise.all([
       fetchUCCResearchPlants({ state: stateFilter !== 'all' ? stateFilter : undefined }),
       fetchLenderLeads(),
       fetchReviewQueue(),
       fetchUnverifiedLeads(),
       fetchPitchReadyLeads(),
+      fetchStateScraperHealth(),
+      fetchEvidenceProvenance(),
     ]);
     setPlants(p);
     setLeads(l);
     setQueue(q);
     setUnverified(u);
     setPitchReady(pr);
+    setScraperHealth(sh);
+    setEvidenceProvenance(ep);
     setLoading(false);
   }, [stateFilter]);
 
@@ -305,11 +315,12 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
 
         {/* Sub-tabs */}
         <div className="flex gap-1 mt-4 flex-wrap">
-          {(['plants', 'leads', 'unverified', 'review', 'pitch_ready', 'trace'] as SubTab[]).map(tab => {
+          {(['plants', 'leads', 'unverified', 'review', 'pitch_ready', 'scraper', 'trace'] as SubTab[]).map(tab => {
             const label =
               tab === 'pitch_ready' ? `Pitch Ready ${pitchReady.length > 0 ? `(${pitchReady.length})` : ''}`
               : tab === 'unverified'  ? `Unverified ${unverified.length > 0 ? `(${unverified.length})` : ''}`
               : tab === 'review'      ? `Review ${queue.length > 0 ? `(${queue.length})` : ''}`
+              : tab === 'scraper'     ? 'Scraper Pipeline'
               : tab.charAt(0).toUpperCase() + tab.slice(1);
             return (
               <button
@@ -846,6 +857,105 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
                 )}
               </>
             )}
+          </>
+        )}
+
+        {/* ── Scraper Pipeline tab ──────────────────────────────────────── */}
+        {subTab === 'scraper' && (
+          <>
+            {/* Evidence Provenance */}
+            <div className="mb-6">
+              <h2 className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wide">Evidence by Source &amp; Worker</h2>
+              {evidenceProvenance.length === 0 ? (
+                <div className="text-center text-slate-500 py-8 text-sm">No evidence provenance data yet.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-500 uppercase tracking-wide">
+                        <th className="pb-2 pr-4 font-semibold">Source Type</th>
+                        <th className="pb-2 pr-4 font-semibold">Worker</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">Evidence</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">w/ URL</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">Trusted URL</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">Plants</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">Runs</th>
+                        <th className="pb-2 font-semibold text-right">Last Seen</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                      {evidenceProvenance.map((row, i) => (
+                        <tr key={i} className="hover:bg-slate-800/30 transition-colors">
+                          <td className="py-2 pr-4 text-slate-200 font-medium">{row.source_type}</td>
+                          <td className="py-2 pr-4 text-slate-400">{row.worker_name}</td>
+                          <td className="py-2 pr-4 text-right text-white font-semibold">{row.evidence_count.toLocaleString()}</td>
+                          <td className="py-2 pr-4 text-right text-slate-300">{row.with_source_url.toLocaleString()}</td>
+                          <td className="py-2 pr-4 text-right">
+                            <span className={row.with_trusted_url > 0 ? 'text-emerald-400' : 'text-slate-600'}>
+                              {row.with_trusted_url.toLocaleString()}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-4 text-right text-slate-300">{row.distinct_plants}</td>
+                          <td className="py-2 pr-4 text-right text-slate-300">{row.distinct_runs}</td>
+                          <td className="py-2 text-right text-slate-500">{row.last_seen ? timeAgo(row.last_seen) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* State Scraper Health */}
+            <div>
+              <h2 className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wide">State Scraper Health</h2>
+              {scraperHealth.length === 0 ? (
+                <div className="text-center text-slate-500 py-8 text-sm">No scraper health data yet.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-500 uppercase tracking-wide">
+                        <th className="pb-2 pr-4 font-semibold">State</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">Plants w/ Evidence</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">UCC Hits</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">LLM Only</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">UCC Records</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">LLM Records</th>
+                        <th className="pb-2 pr-4 font-semibold text-right">Trusted URLs</th>
+                        <th className="pb-2 font-semibold text-right">Last Evidence</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                      {scraperHealth.map(row => (
+                        <tr key={row.state} className="hover:bg-slate-800/30 transition-colors">
+                          <td className="py-2 pr-4 font-bold text-white">{row.state}</td>
+                          <td className="py-2 pr-4 text-right text-slate-200">{row.plants_with_evidence}</td>
+                          <td className="py-2 pr-4 text-right">
+                            <span className={row.plants_with_ucc_hit > 0 ? 'text-emerald-400 font-semibold' : 'text-slate-600'}>
+                              {row.plants_with_ucc_hit}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-4 text-right">
+                            <span className={row.plants_with_llm_fallback_only > 0 ? 'text-amber-400' : 'text-slate-600'}>
+                              {row.plants_with_llm_fallback_only}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-4 text-right text-slate-300">{row.ucc_evidence_records.toLocaleString()}</td>
+                          <td className="py-2 pr-4 text-right text-slate-300">{row.llm_evidence_records.toLocaleString()}</td>
+                          <td className="py-2 pr-4 text-right">
+                            <span className={row.ucc_with_trusted_url > 0 ? 'text-emerald-400' : 'text-slate-600'}>
+                              {row.ucc_with_trusted_url}
+                            </span>
+                          </td>
+                          <td className="py-2 text-right text-slate-500">{row.last_evidence_at ? timeAgo(row.last_evidence_at) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </>
         )}
       </div>
