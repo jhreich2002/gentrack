@@ -39,7 +39,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
 const MAX_RETRIES    = 2;
-const BATCH_MAX      = 10;    // max plants per batch invocation (realistic for ~150s edge timeout)
+const BATCH_MAX      = 3;    // plants per batch invocation — serialised workers, keep under resource limits
 const DEFAULT_BUDGET = 0.25;  // USD per-plant ceiling (revisit after first cohort)
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -271,45 +271,29 @@ async function runPlant(
     sponsor_name,
   };
 
-  log(plant_code, `Dispatching parallel workers (UCC + County + EDGAR + DOE LPO + FERC)`);
+  log(plant_code, `Dispatching research workers (UCC + County + EDGAR sequentially, then DOE LPO + FERC)`);
 
-  const [uccResult, countyResult, edgarResult, doeLpoResult, fercResult] = await Promise.all([
-    invokeWorker('ucc-records-worker', {
-      ...parallelBase,
-      allow_llm_fallback: true,
-    }),
-    invokeWorker('ucc-county-worker', {
-      ...parallelBase,
-      county:             county ?? '',
-      allow_llm_fallback: true,
-    }),
-    invokeWorker('ucc-edgar-worker', {
-      ...parallelBase,
-      cod_year,
-    }),
-    invokeWorker('ucc-doe-lpo-worker', {
-      ...parallelBase,
-      capacity_mw,
-      cod_year,
-    }),
-    invokeWorker('ucc-ferc-worker', {
-      ...parallelBase,
-      capacity_mw,
-      cod_year,
-    }),
-  ]);
+  // Wave 1: the three highest-value workers (serialised to stay within resource limits)
+  const uccResult    = await invokeWorker('ucc-records-worker', { ...parallelBase, allow_llm_fallback: true });
+  totalCost += uccResult.cost_usd;
+  await recordTask(supabase, runId, plant_code, 'ucc-records-worker', 1, uccResult);
 
-  totalCost += uccResult.cost_usd + countyResult.cost_usd + edgarResult.cost_usd
-    + doeLpoResult.cost_usd + fercResult.cost_usd;
+  const countyResult = await invokeWorker('ucc-county-worker', { ...parallelBase, county: county ?? '', allow_llm_fallback: true });
+  totalCost += countyResult.cost_usd;
+  await recordTask(supabase, runId, plant_code, 'ucc-county-worker', 1, countyResult);
 
-  // Record all five parallel tasks
-  await Promise.all([
-    recordTask(supabase, runId, plant_code, 'ucc-records-worker',   1, uccResult),
-    recordTask(supabase, runId, plant_code, 'ucc-county-worker',    1, countyResult),
-    recordTask(supabase, runId, plant_code, 'ucc-edgar-worker',     1, edgarResult),
-    recordTask(supabase, runId, plant_code, 'ucc-doe-lpo-worker',   1, doeLpoResult),
-    recordTask(supabase, runId, plant_code, 'ucc-ferc-worker',      1, fercResult),
-  ]);
+  const edgarResult  = await invokeWorker('ucc-edgar-worker', { ...parallelBase, cod_year });
+  totalCost += edgarResult.cost_usd;
+  await recordTask(supabase, runId, plant_code, 'ucc-edgar-worker', 1, edgarResult);
+
+  // Wave 2: supplemental regulatory workers
+  const doeLpoResult = await invokeWorker('ucc-doe-lpo-worker', { ...parallelBase, capacity_mw, cod_year });
+  totalCost += doeLpoResult.cost_usd;
+  await recordTask(supabase, runId, plant_code, 'ucc-doe-lpo-worker', 1, doeLpoResult);
+
+  const fercResult   = await invokeWorker('ucc-ferc-worker', { ...parallelBase, capacity_mw, cod_year });
+  totalCost += fercResult.cost_usd;
+  await recordTask(supabase, runId, plant_code, 'ucc-ferc-worker', 1, fercResult);
 
   log(plant_code, [
     `UCC: score=${uccResult.completion_score}`,
