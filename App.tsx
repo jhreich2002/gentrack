@@ -19,13 +19,14 @@ import TaxEquityPursuitsDashboard from './components/TaxEquityPursuitsDashboard'
 import ArchivedPursuitsDashboard from './components/ArchivedPursuitsDashboard';
 import PipelineTourModal from './components/PipelineTourModal';
 import WatchlistDashboard from './components/WatchlistDashboard';
+import LenderResearchDashboard from './components/LenderResearchDashboard';
 import DeveloperListView from './components/DeveloperListView';
 import DeveloperDetailView from './components/DeveloperDetailView';
 import AssetRegistryDetailView from './components/AssetRegistryDetailView';
 import type { DeveloperMapViewport } from './components/DeveloperAssetMap';
 import { fetchDevelopers, DeveloperRow } from './services/developerService';
 
-type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail' | 'archived';
+type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'lender-research' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail' | 'archived';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor' | 'data';
 
@@ -537,6 +538,19 @@ const App: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setView('lender-research')}
+            title={sidebarCollapsed ? 'Lender Research' : undefined}
+            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
+              view === 'lender-research'
+                ? 'bg-amber-700 text-white shadow-lg shadow-amber-900/20'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+            }`}
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Lender Research</span>}
+          </button>
+
+          <button
             onClick={() => setView('taxequity')}
             title={sidebarCollapsed ? 'Tax Equity Pursuits' : undefined}
             className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
@@ -896,6 +910,8 @@ const App: React.FC = () => {
         ) : (
           view === 'company' && selectedUltParent
             ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} onPlantClick={handlePlantClickFromCompany} initialTab={companyActiveTab} onTabChange={setCompanyActiveTab} />
+            : view === 'lender-research'
+            ? <LenderResearchDashboard userRole={userRole} />
             : view === 'lenders'
             ? <LenderPursuitsDashboard onLenderClick={handleLenderClick} watchlist={watchlist} onToggleWatch={toggleWatch} />
             : view === 'taxequity'
