@@ -21,9 +21,11 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const EDGAR_SEARCH = 'https://efts.sec.gov/LATEST/search-index';
-const EDGAR_BASE   = 'https://www.sec.gov';
-const TIMEOUT_MS   = 15_000;
+const EDGAR_SEARCH      = 'https://efts.sec.gov/LATEST/search-index';
+const EDGAR_BASE        = 'https://www.sec.gov';
+const EDGAR_COMPANY_API = 'https://efts.sec.gov/LATEST/search-index';
+const EDGAR_SUBMIT_API  = 'https://data.sec.gov/submissions';
+const TIMEOUT_MS        = 15_000;
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
 
 // Lender indicator keywords found near entity names in credit agreements
@@ -90,6 +92,7 @@ interface WorkerOutput {
   cost_usd:              0;
   llm_fallback_used:     false;
   duration_ms:           number;
+  queries_attempted:     Array<{ source: string; query: string; hit_count: number; url: string | null }>;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -340,6 +343,161 @@ function maybeExtractFilingEntityAsLender(
   };
 }
 
+// ── Persist extracted lenders ─────────────────────────────────────────────────
+
+async function persistEdgarLenders(
+  supabase:   ReturnType<typeof createClient>,
+  plantCode:  string,
+  runId:      string,
+  state:      string,
+  lenders:    ExtractedLender[],
+  result:     EdgarSearchResult,
+): Promise<void> {
+  for (const lender of lenders) {
+    const { data: lenderEntity } = await supabase
+      .from('ucc_entities')
+      .upsert({
+        entity_name:     lender.name,
+        entity_type:     lender.role.includes('agent') ? 'agent' : 'lender',
+        normalized_name: lender.normalized,
+        jurisdiction:    state,
+        source:          'edgar',
+        source_url:      result.file_url,
+      }, { onConflict: 'normalized_name,entity_type,jurisdiction', ignoreDuplicates: false })
+      .select('id')
+      .single();
+
+    await supabase.from('ucc_filings').insert({
+      plant_code:               plantCode,
+      filing_type:              result.filing_type === '8-K' ? 'edgar_8k' : 'edgar_10k',
+      state,
+      filing_date:              result.filed_at || null,
+      debtor_name:              result.entity_name,
+      debtor_normalized:        normalizeName(result.entity_name),
+      secured_party_name:       lender.name,
+      secured_party_normalized: lender.normalized,
+      is_representative_party:  lender.role.toLowerCase().includes('agent'),
+      representative_role:      lender.role.toLowerCase().includes('collateral') ? 'collateral_agent'
+                              : lender.role.toLowerCase().includes('admin')      ? 'administrative_agent'
+                              : null,
+      collateral_text:          lender.facility_type,
+      source_url:               result.file_url,
+      raw_text:                 lender.context,
+      filing_number:            result.adsh || null,
+      worker_name:              'ucc_edgar_worker',
+      run_id:                   runId || null,
+    });
+
+    await supabase.from('ucc_evidence_records').insert({
+      plant_code:               plantCode,
+      run_id:                   runId || null,
+      lender_entity_id:         lenderEntity?.id ?? null,
+      source_type:              'edgar',
+      source_url:               result.file_url,
+      excerpt:                  `${result.filing_type} filed ${result.filed_at} — ${lender.name} as ${lender.role}`,
+      raw_text:                 lender.context,
+      extracted_fields: {
+        lender_name:   lender.name,
+        role:          lender.role,
+        facility_type: lender.facility_type,
+        filing_type:   result.filing_type,
+        filed_date:    result.filed_at,
+      },
+      worker_name:              'ucc_edgar_worker',
+      confidence_contribution:  'highly_likely',
+    });
+  }
+}
+
+// ── CIK lookup ────────────────────────────────────────────────────────────────
+
+/**
+ * Find the SEC CIK for a company by name using the EDGAR company search.
+ * Returns the CIK (without leading zeros) or null if not found.
+ */
+async function lookupCik(companyName: string): Promise<string | null> {
+  try {
+    const url = new URL(EDGAR_COMPANY_API);
+    url.searchParams.set('entity', companyName);
+    url.searchParams.set('forms', '10-K');
+
+    const resp = await fetch(url.toString(), {
+      headers: {
+        'User-Agent': 'GenTrack-LenderResearch/1.0 compliance@example.com',
+        'Accept':     'application/json',
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+
+    if (!resp.ok) return null;
+
+    const data = await resp.json();
+    const hits = (data?.hits?.hits ?? []) as Array<Record<string, unknown>>;
+    if (hits.length === 0) return null;
+
+    const first = (hits[0]._source ?? {}) as Record<string, unknown>;
+    const ciks  = (first.ciks as string[] | undefined) ?? [];
+    const rawCik = ciks[0] ?? '';
+    return rawCik ? String(parseInt(rawCik, 10)) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get recent 8-K and 10-K filing accession numbers for a known CIK.
+ * Uses the EDGAR submissions JSON API (free, no auth).
+ */
+async function fetchFilingsByCik(cik: string, maxPerType = 5): Promise<EdgarSearchResult[]> {
+  const paddedCik = cik.padStart(10, '0');
+  try {
+    const resp = await fetch(`${EDGAR_SUBMIT_API}/CIK${paddedCik}.json`, {
+      headers: { 'User-Agent': 'GenTrack-LenderResearch/1.0 compliance@example.com' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+
+    if (!resp.ok) return [];
+
+    const data = await resp.json();
+    const entityName: string = data.name ?? '';
+    const recent = data.filings?.recent;
+    if (!recent) return [];
+
+    const forms:      string[] = recent.form   ?? [];
+    const fileDates:  string[] = recent.filingDate ?? [];
+    const accessions: string[] = recent.accessionNumber ?? [];
+
+    const results: EdgarSearchResult[] = [];
+    const wantForms = new Set(['8-K', '10-K', 'EX-10.1', 'EX-10']);
+    const countsByForm: Record<string, number> = {};
+
+    for (let i = 0; i < forms.length && results.length < maxPerType * wantForms.size; i++) {
+      const form = forms[i];
+      const baseForm = form.split('/')[0];
+      if (!wantForms.has(baseForm) && !baseForm.startsWith('EX-10')) continue;
+      countsByForm[baseForm] = (countsByForm[baseForm] ?? 0) + 1;
+      if (countsByForm[baseForm] > maxPerType) continue;
+
+      const adsh       = accessions[i] ?? '';
+      const adshNodash = adsh.replace(/-/g, '');
+      results.push({
+        query:       `CIK:${cik}`,
+        filing_type: form,
+        filed_at:    fileDates[i] ?? '',
+        entity_name: entityName,
+        cik,
+        adsh,
+        adsh_nodash:  adshNodash,
+        file_url:    `${EDGAR_BASE}/Archives/edgar/data/${cik}/${adshNodash}/${adsh}-index.htm`,
+      });
+    }
+
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -385,12 +543,38 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const allHits: EdgarHit[] = [];
     const sourceUrls: string[] = [];
     const snippets:   string[] = [];
+    const queriesAttempted: Array<{ source: string; query: string; hit_count: number; url: string | null }> = [];
 
-    log(plant_code, `Running ${queries.length} EDGAR queries`);
+    // ── CIK lookup: use sponsor/SPV name to get direct filing index ──────────
+    let sponsorCik: string | null = null;
+    if (sponsor_name) {
+      sponsorCik = await lookupCik(sponsor_name);
+      queriesAttempted.push({ source: 'edgar_cik_lookup', query: sponsor_name, hit_count: sponsorCik ? 1 : 0, url: null });
+      log(plant_code, `CIK lookup for "${sponsor_name}": ${sponsorCik ?? 'not found'}`);
+    }
+
+    // If CIK found, pull 8-K + 10-K filings directly (bypasses keyword search)
+    if (sponsorCik) {
+      const cikFilings = await fetchFilingsByCik(sponsorCik, 8);
+      queriesAttempted.push({ source: 'edgar_submissions', query: `CIK:${sponsorCik}`, hit_count: cikFilings.length, url: `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany&CIK=${sponsorCik}&type=8-K&dateb=&owner=include&count=10` });
+      log(plant_code, `CIK ${sponsorCik}: ${cikFilings.length} filings from submissions API`);
+
+      for (const result of cikFilings) {
+        if (sourceUrls.includes(result.file_url)) continue;
+        const lenders = await fetchAndExtractLenders(result.file_url, result.adsh_nodash, result.cik, result.entity_name, plant_name);
+        allHits.push({ ...result, lenders, doc_url: result.file_url });
+        sourceUrls.push(result.file_url);
+        snippets.push(`CIK ${result.filing_type} | ${result.entity_name} | ${result.filed_at} | Lenders: ${lenders.map(l => l.name).join(', ') || 'none extracted'}`);
+        await persistEdgarLenders(supabase, plant_code, run_id, state, lenders, result);
+      }
+    }
+
+    log(plant_code, `Running ${queries.length} EDGAR keyword queries`);
 
     for (const query of queries) {
-      await sleep(300); // be polite to EDGAR — rate limit ~10 req/s
+      await sleep(300);
       const results = await edgarSearch(query);
+      queriesAttempted.push({ source: 'edgar_efts', query, hit_count: results.length, url: `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(query)}` });
       log(plant_code, `  Query "${query.slice(0, 50)}" → ${results.length} hits`);
 
       for (const result of results) {
@@ -408,62 +592,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         allHits.push({ ...result, lenders, doc_url: result.file_url });
         sourceUrls.push(result.file_url);
         snippets.push(`${result.filing_type} | ${result.entity_name} | ${result.filed_at} | Lenders: ${lenders.map(l => l.name).join(', ') || 'none extracted'}`);
-
-        // Persist each extracted lender to evidence and entities tables
-        for (const lender of lenders) {
-          const { data: lenderEntity } = await supabase
-            .from('ucc_entities')
-            .upsert({
-              entity_name:     lender.name,
-              entity_type:     lender.role.includes('agent') ? 'agent' : 'lender',
-              normalized_name: lender.normalized,
-              jurisdiction:    state,
-              source:          'edgar',
-              source_url:      result.file_url,
-            }, { onConflict: 'normalized_name,entity_type,jurisdiction', ignoreDuplicates: false })
-            .select('id')
-            .single();
-
-          await supabase.from('ucc_filings').insert({
-            plant_code,
-            filing_type:              result.filing_type === '8-K' ? 'edgar_8k' : 'edgar_10k',
-            state,
-            filing_date:              result.filed_at || null,
-            debtor_name:              plant_name,
-            debtor_normalized:        normalizeName(plant_name),
-            secured_party_name:       lender.name,
-            secured_party_normalized: lender.normalized,
-            is_representative_party:  lender.role.toLowerCase().includes('agent'),
-            representative_role:      lender.role.toLowerCase().includes('collateral') ? 'collateral_agent'
-                                    : lender.role.toLowerCase().includes('admin') ? 'administrative_agent'
-                                    : null,
-            collateral_text:          lender.facility_type,
-            source_url:               result.file_url,
-            raw_text:                 lender.context,
-            filing_number:            result.adsh || null,
-            worker_name:              'ucc_edgar_worker',
-            run_id:                   run_id ?? null,
-          });
-
-          await supabase.from('ucc_evidence_records').insert({
-            plant_code,
-            run_id:                   run_id ?? null,
-            lender_entity_id:         lenderEntity?.id ?? null,
-            source_type:              'edgar',
-            source_url:               result.file_url,
-            excerpt:                  `${result.filing_type} filed ${result.filed_at} — ${lender.name} as ${lender.role}`,
-            raw_text:                 lender.context,
-            extracted_fields: {
-              lender_name:   lender.name,
-              role:          lender.role,
-              facility_type: lender.facility_type,
-              filing_type:   result.filing_type,
-              filed_date:    result.filed_at,
-            },
-            worker_name:              'ucc_edgar_worker',
-            confidence_contribution:  'highly_likely',
-          });
-        }
+        await persistEdgarLenders(supabase, plant_code, run_id, state, lenders, result);
       }
     }
 
@@ -483,7 +612,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
 
     const output: WorkerOutput = {
-      task_status:           'success', // EDGAR search always completes — no data is valid
+      task_status:           'success',
       completion_score:      completionScore,
       evidence_found:        totalLenders > 0,
       structured_results:    allHits,
@@ -494,25 +623,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       cost_usd:              0,
       llm_fallback_used:     false,
       duration_ms:           Date.now() - startMs,
+      queries_attempted:     queriesAttempted,
     };
 
-    if (run_id) {
-      await supabase.from('ucc_agent_tasks').insert({
-        run_id,
-        plant_code,
-        agent_type:        'edgar_worker',
-        attempt_number:    1,
-        task_status:       'success',
-        completion_score:  completionScore,
-        evidence_found:    totalLenders > 0,
-        llm_fallback_used: false,
-        cost_usd:          0,
-        duration_ms:       output.duration_ms,
-        output_json:       output,
-      });
-    }
+    // Note: supervisor calls recordTask() after invokeWorker — no self-insert needed.
 
-    log(plant_code, `Done — ${allHits.length} filings, ${totalLenders} lenders, score=${completionScore}, ${output.duration_ms}ms`);
+    log(plant_code, `Done — ${allHits.length} filings, ${totalLenders} lenders, CIK=${sponsorCik ?? 'n/a'}, score=${completionScore}, ${output.duration_ms}ms`);
     return new Response(JSON.stringify(output), { headers: CORS });
 
   } catch (err) {
@@ -522,7 +638,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       task_status: 'failed', completion_score: 0, evidence_found: false,
       structured_results: [], source_urls: [], raw_evidence_snippets: [],
       open_questions: [msg], retry_recommendation: 'Unexpected error — check logs',
-      cost_usd: 0, llm_fallback_used: false, duration_ms: 0,
+      cost_usd: 0, llm_fallback_used: false, duration_ms: 0, queries_attempted: [],
     }), { status: 500, headers: CORS });
   }
 });
