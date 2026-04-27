@@ -11,13 +11,13 @@
  *
  * Worker dispatch sequence:
  *   1. ucc-entity-worker  (resolves SPV name)
- *   2. In parallel: ucc-records-worker + ucc-county-worker + ucc-edgar-worker
+ *   2. Research workers: ucc-records-worker + ucc-county-worker + ucc-edgar-worker + DOE LPO + FERC
  *   3. ucc-supplement-worker  (only if ≥1 filing found)
  *   4. ucc-reviewer  (quality gate, writes lender_links)
  *
  * Quality gates between each step:
  *   - Entity worker must return completion_score ≥ 60 (≥1 SPV alias)
- *   - Each parallel worker must complete (failed → retry, not block)
+ *   - Each research worker must complete (failed → retry, not block)
  *   - Supplement only runs if any parallel worker found evidence
  *   - Reviewer always runs; escalates to human queue if needed
  *
@@ -244,9 +244,9 @@ async function runPlant(
 
   log(plant_code, `${spvAliases.length} SPV aliases found`);
 
-  // ── Step 2: Parallel workers ──────────────────────────────────────────
+  // ── Step 2: Research workers ─────────────────────────────────────────
   if (totalCost > budgetLeft) {
-    const budgetMsg = `budget_exceeded_before_parallel_workers (spent $${totalCost.toFixed(4)} / $${budgetLeft.toFixed(4)})`;
+    const budgetMsg = `budget_exceeded_before_research_workers (spent $${totalCost.toFixed(4)} / $${budgetLeft.toFixed(4)})`;
     log(plant_code, budgetMsg);
     await supabase.from('ucc_research_plants').update({
       workflow_status: 'budget_exceeded',
@@ -328,21 +328,21 @@ async function runPlant(
     log(plant_code, `No evidence found — skipping supplement worker`);
   }
 
-  // ── Step 3b: News fallback (runs only when zero evidence found) ───────
-  if (!anyEvidenceFound) {
-    log(plant_code, `No citation-grade evidence — running news-article fallback`);
-    const newsResult = await invokeWorker('ucc-news-fallback-worker', {
-      plant_code,
-      run_id:      runId,
-      plant_name,
-      sponsor_name,
-      state,
-      capacity_mw,
-    });
-    totalCost += newsResult.cost_usd;
-    await recordTask(supabase, runId, plant_code, 'ucc-news-fallback-worker', 1, newsResult);
-    log(plant_code, `News fallback: ${newsResult.evidence_found ? newsResult.structured_results?.length + ' leads' : 'no leads'}`);
-  }
+  // ── Step 3b: News fallback (always runs — used as corroboration when citation evidence exists) ──
+  log(plant_code, anyEvidenceFound
+    ? `Running news fallback as corroboration alongside citation evidence`
+    : `No citation-grade evidence — running news-article fallback`);
+  const newsResult = await invokeWorker('ucc-news-fallback-worker', {
+    plant_code,
+    run_id:      runId,
+    plant_name,
+    sponsor_name,
+    state,
+    capacity_mw,
+  });
+  totalCost += newsResult.cost_usd;
+  await recordTask(supabase, runId, plant_code, 'ucc-news-fallback-worker', 1, newsResult);
+  log(plant_code, `News fallback: ${newsResult.evidence_found ? newsResult.structured_results?.length + ' leads' : 'no leads'}`);
 
   // ── Step 4: Reviewer ──────────────────────────────────────────────────
   log(plant_code, `Running reviewer`);
@@ -356,9 +356,19 @@ async function runPlant(
 
   log(plant_code, `Reviewer: score=${reviewerResult.completion_score}, escalate=${reviewerResult.escalate_to_review}`);
 
+  const reviewerCandidates = (reviewerResult.structured_results ?? []) as Array<Record<string, unknown>>;
+  const hasConfirmed       = reviewerCandidates.some(c => String(c.confidence_class ?? '') === 'confirmed');
+  const hasHighConfidence  = reviewerCandidates.some(c => String(c.confidence_class ?? '') === 'high_confidence');
+  const lenderCount        = reviewerCandidates.length;
+
+  const confidenceOrder = ['confirmed', 'high_confidence', 'highly_likely', 'possible'];
+  const topConfidence   = confidenceOrder.find(level =>
+    reviewerCandidates.some(c => String(c.confidence_class ?? '') === level),
+  ) ?? null;
+
   // ── 6 acceptance criteria ─────────────────────────────────────────────
   const criteria = {
-    sponsor_confirmed:      entityResult!.completion_score >= 70,
+    sponsor_confirmed:      entityResult!.completion_score >= 60,
     spv_alias_found:        spvAliases.length >= 1,
     ucc_or_county_searched: uccResult.completion_score > 0 || countyResult.completion_score > 0,
     edgar_completed:        edgarResult.completion_score > 0,
@@ -378,9 +388,14 @@ async function runPlant(
   let finalOutcome: string;
 
   if (escalated) {
-    workflowStatus = 'needs_review';
-    finalOutcome   = `needs_review: ${(reviewerResult as WorkerResponse & { escalation_reason?: string }).escalation_reason ?? 'reviewer escalated'}`;
-  } else if (allCriteriaMet) {
+    if (hasConfirmed || hasHighConfidence) {
+      workflowStatus = 'confirmed_partial';
+      finalOutcome   = `confirmed_partial: reviewer escalated with actionable lenders (${lenderCount} candidate(s), top=${topConfidence ?? 'n/a'})`;
+    } else {
+      workflowStatus = 'needs_review';
+      finalOutcome   = `needs_review: ${(reviewerResult as WorkerResponse & { escalation_reason?: string }).escalation_reason ?? 'reviewer escalated'}`;
+    }
+  } else if (allCriteriaMet && lenderCount > 0) {
     workflowStatus = 'complete';
     const sourceList = [
       uccResult.evidence_found      ? 'UCC SoS' : null,
@@ -390,7 +405,7 @@ async function runPlant(
       fercResult.evidence_found     ? 'FERC' : null,
     ].filter(Boolean).join(' + ') || 'unknown source';
     finalOutcome = `complete via ${sourceList} (cost $${totalCost.toFixed(4)})`;
-  } else if (!anyEvidenceFound) {
+  } else if (lenderCount === 0) {
     // Check if news fallback found unverified leads
     const { count: newsLeadCount } = await supabase
       .from('ucc_lender_leads_unverified')
@@ -416,6 +431,8 @@ async function runPlant(
     last_run_at:      new Date().toISOString(),
     total_cost_usd:   totalCost,
     sponsor_name:     sponsor_name ?? (entityData?.sponsor_name as string ?? null),
+    lender_count:     lenderCount,
+    top_confidence:   topConfidence,
   }).eq('plant_code', plant_code);
 
   // Update run record
@@ -512,7 +529,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         const { data: skipPlants } = await supabase
           .from('ucc_research_plants')
           .select('plant_code')
-          .in('workflow_status', ['complete', 'running']);
+          .in('workflow_status', ['complete', 'confirmed_partial', 'running']);
 
         const skipCodes = (skipPlants ?? []).map((r: Record<string, unknown>) => r.plant_code as string);
         if (skipCodes.length) query = query.not('eia_plant_code', 'in', `(${skipCodes.join(',')})`);

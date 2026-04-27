@@ -39,7 +39,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
 
-type ConfidenceClass = 'confirmed' | 'highly_likely' | 'possible';
+type ConfidenceClass = 'confirmed' | 'high_confidence' | 'highly_likely' | 'possible';
 type EvidenceType    = 'direct' | 'inferred';
 
 // Source types whose evidence is allowed to land in ucc_lender_links
@@ -146,11 +146,12 @@ function assignConfidence(
   const citationSources = [hasDirectFiling, hasEdgar, hasFerc].filter(Boolean).length;
   if (citationSources >= 2) return 'confirmed';
 
-  // Single citation-grade source with trusted URL → confirmed
-  if (hasDirectFiling && hasSourceUrl && hasTrustedUrl) return 'confirmed';
+  // Single citation-grade source with trusted URL → high_confidence
+  if ((hasDirectFiling || hasEdgar || hasFerc) && hasSourceUrl && hasTrustedUrl) {
+    return 'high_confidence';
+  }
 
-  // EDGAR or FERC alone → highly_likely
-  if ((hasEdgar || hasFerc) && hasSourceUrl && hasTrustedUrl) return 'highly_likely';
+  // Sponsor history can indicate repeat lender patterns
   if (hasSponsorHist)                                          return 'highly_likely';
 
   // EDGAR/FERC without trusted URL → possible
@@ -414,26 +415,50 @@ Deno.serve(async (req: Request): Promise<Response> => {
       });
     }
 
-    // Sort: confirmed first, then highly_likely, then possible
-    const ORDER: Record<ConfidenceClass, number> = { confirmed: 0, highly_likely: 1, possible: 2 };
-    candidates.sort((a, b) => ORDER[a.confidence_class] - ORDER[b.confidence_class]);
+    // ── Cross-source corroboration: news lead promoting high_confidence → confirmed ──
+    const { data: newsLeadRows } = await supabase
+      .from('ucc_lender_leads_unverified')
+      .select('lender_entity_id, lender_normalized')
+      .eq('plant_code', plant_code)
+      .eq('run_id', run_id)
+      .in('evidence_type', ['news', 'news_article']);
 
-    // ── Check for conflicts ────────────────────────────────────────────────
-    // Conflict: multiple confirmed lenders with different secured party names
-    // in the same source type (both UCC AND county both point somewhere different)
-    const confirmedDirect = candidates.filter(c => c.confidence_class === 'confirmed' && c.evidence_type === 'direct');
-    const hasConflict     = confirmedDirect.length > 3; // > 3 confirmed is unusual, worth flagging
+    const newsEntityIds     = new Set<number>(
+      (newsLeadRows ?? []).map((l: Record<string, unknown>) => l.lender_entity_id as number).filter(Boolean)
+    );
+    const newsNormalizedNames = new Set<string>(
+      (newsLeadRows ?? []).map((l: Record<string, unknown>) => String(l.lender_normalized ?? '')).filter(Boolean)
+    );
+
+    if ((newsLeadRows ?? []).length > 0) {
+      let corroborated = 0;
+      for (const candidate of candidates) {
+        if (candidate.confidence_class !== 'high_confidence') continue;
+        const matchedByEntity = newsEntityIds.has(candidate.entity_id);
+        const matchedByName   = newsNormalizedNames.has(candidate.normalized_name);
+        if (matchedByEntity || matchedByName) {
+          log(plant_code, `  News corroboration: ${candidate.entity_name} promoted high_confidence → confirmed`);
+          candidate.confidence_class = 'confirmed';
+          candidate.needs_review     = false;
+          candidate.review_reason    = null;
+          corroborated++;
+        }
+      }
+      if (corroborated > 0) log(plant_code, `${corroborated} candidate(s) confirmed via cross-source news corroboration`);
+    }
+
+    // Sort: confirmed first, then high_confidence, then highly_likely, then possible
+    const ORDER: Record<ConfidenceClass, number> = { confirmed: 0, high_confidence: 1, highly_likely: 2, possible: 3 };
+    candidates.sort((a, b) => ORDER[a.confidence_class] - ORDER[b.confidence_class]);
 
     let escalateToReview = false;
     let escalationReason: string | null = null;
+    const hasConfirmed = candidates.some(c => c.confidence_class === 'confirmed');
 
-    if (candidates.every(c => c.confidence_class === 'possible')) {
+    if (candidates.length > 0 && candidates.every(c => c.confidence_class === 'possible')) {
       escalateToReview = true;
       escalationReason = 'All lender candidates are possible-only — no direct filing or EDGAR evidence found';
-    } else if (hasConflict) {
-      escalateToReview = true;
-      escalationReason = `${confirmedDirect.length} confirmed lenders — unusually high, may indicate naming conflicts or multiple syndicate members`;
-    } else if (candidates.some(c => c.needs_review)) {
+    } else if (candidates.length > 0 && !hasConfirmed && candidates.some(c => c.needs_review)) {
       escalateToReview = true;
       escalationReason = candidates.find(c => c.needs_review)?.review_reason ?? 'Manual review flagged';
     }
@@ -505,34 +530,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       candidates.length === 0                                              ? 30
       : candidates.every(c => c.confidence_class === 'possible')          ? 55
       : candidates.some(c => c.confidence_class === 'confirmed')          ? 95
+      : candidates.some(c => c.confidence_class === 'high_confidence')    ? 90
       : 80;
 
     const openQuestions: string[] = [];
     if (retryMessages.length) openQuestions.push(...retryMessages);
     if (escalationReason)     openQuestions.push(escalationReason);
     if (candidates.length === 0) openQuestions.push('No lender evidence found in any worker output for this run');
-
-    if (run_id) {
-      await supabase.from('ucc_agent_tasks').insert({
-        run_id,
-        plant_code,
-        agent_type:        'reviewer',
-        attempt_number:    1,
-        task_status:       'success',
-        completion_score:  completionScore,
-        evidence_found:    candidates.length > 0,
-        llm_fallback_used: geminiCost > 0,
-        cost_usd:          geminiCost,
-        duration_ms:       Date.now() - startMs,
-        output_json:       {
-          candidates_count: candidates.length,
-          escalate:         escalateToReview,
-          verified_links:   verifiedWritten,
-          unverified_links: unverifiedWritten,
-          trusted_domain_count: trustedDomains.size,
-        },
-      });
-    }
 
     const output: ReviewerOutput = {
       task_status:           retryMessages.length > 0 ? 'partial' : 'success',
