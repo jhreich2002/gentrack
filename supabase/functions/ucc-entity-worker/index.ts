@@ -56,11 +56,12 @@ const STATE_JURISDICTION: Record<string, string> = {
 
 interface PlantRow {
   eia_plant_code:        string;
-  name:                  string;  // actual column name in plants table
+  name:                  string;
   state:                 string;
   county:                string | null;
   nameplate_capacity_mw: number | null;
   owner:                 string | null;
+  operator:              string | null;
   fuel_source:           string | null;
   cod:                   string | null;
 }
@@ -88,6 +89,7 @@ interface WorkerOutput {
   cost_usd:              number;
   llm_fallback_used:     boolean;
   duration_ms:           number;
+  queries_attempted:     Array<{ source: string; query: string; hit_count: number; url: string | null }>;
 }
 
 interface EntityResult {
@@ -369,7 +371,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     const { data: plant, error: plantErr } = await supabase
       .from('plants')
-      .select('eia_plant_code, name, state, county, nameplate_capacity_mw, owner, fuel_source, cod')
+      .select('eia_plant_code, name, state, county, nameplate_capacity_mw, owner, operator, fuel_source, cod')
       .eq('eia_plant_code', plant_code)
       .single<PlantRow>();
 
@@ -387,17 +389,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
         cost_usd: 0,
         llm_fallback_used: false,
         duration_ms: Date.now() - startMs,
+        queries_attempted: [],
       };
       return new Response(JSON.stringify(output), { headers: CORS });
     }
 
-    const sponsorName = plant.owner ?? null;
-    const state       = plant.state?.toUpperCase() ?? '';
-    const county      = plant.county ?? null;
-    const plantName   = plant.name;
-    const jurisdCode  = STATE_JURISDICTION[state] ?? `us_${state.toLowerCase()}`;
+    const sponsorName  = plant.owner ?? null;
+    const operatorName = plant.operator ?? null;
+    const state        = plant.state?.toUpperCase() ?? '';
+    const county       = plant.county ?? null;
+    const plantName    = plant.name;
+    const jurisdCode   = STATE_JURISDICTION[state] ?? `us_${state.toLowerCase()}`;
 
-    log(plant_code, `Plant: "${plantName}" | Sponsor: "${sponsorName}" | ${county}, ${state}`);
+    log(plant_code, `Plant: "${plantName}" | Owner: "${sponsorName}" | Operator: "${operatorName}" | ${county}, ${state}`);
+
+    // Queries log for Trace tab
+    const queriesAttempted: Array<{ source: string; query: string; hit_count: number; url: string | null }> = [];
 
     // ── Step 2: OpenCorporates search ─────────────────────────────────────────
     log(plant_code, 'Step 2 — OpenCorporates search');
@@ -410,16 +417,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const sponsorShort = sponsorName.split(/\s+/).slice(0, 2).join(' ');
       ocQueries.push(`${sponsorShort} ${plantName}`);
     }
+    // Also search by operator if distinct from owner
+    if (operatorName && operatorName !== sponsorName) {
+      ocQueries.push(operatorName);
+    }
 
     const ocResultsRaw = await Promise.all(
       ocQueries.map(q => searchOpenCorporates(q, jurisdCode))
     );
+    for (let i = 0; i < ocQueries.length; i++) {
+      queriesAttempted.push({ source: 'opencorporates', query: ocQueries[i], hit_count: ocResultsRaw[i].length, url: `https://opencorporates.com/companies?q=${encodeURIComponent(ocQueries[i])}` });
+    }
     const ocResults = ocResultsRaw.flat();
     log(plant_code, `OpenCorporates: ${ocResults.length} candidates`);
 
     // ── Step 3: Algorithmic alias generation (always runs) ────────────────────
     log(plant_code, 'Step 3 — generating algorithmic aliases');
-    const algorithmic = generateAliases(plantName, sponsorName, state);
+    const algorithmic = generateAliases(plantName, sponsorName ?? operatorName, state);
 
     // ── Merge and deduplicate ─────────────────────────────────────────────────
     const seen    = new Set<string>();
@@ -447,7 +461,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       llmFallback = true;
 
       const { candidates: perpCandidates, costUsd: perpCost, rawText } =
-        await perplexityEntitySearch(plantName, sponsorName, state, county, perplexityKey);
+        await perplexityEntitySearch(plantName, sponsorName ?? operatorName, state, county, perplexityKey);
+
+      queriesAttempted.push({ source: 'perplexity', query: `${plantName} SPV LLC ${state}`, hit_count: perpCandidates.length, url: null });
 
       perplexityRaw = rawText;
       costUsd       = perpCost;
@@ -545,9 +561,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
 
     const result: EntityResult = {
-      sponsor_name:  sponsorName ?? 'Unknown',
+      sponsor_name:  sponsorName ?? operatorName ?? 'Unknown',
       owner_name:    plant.owner ?? null,
-      operator_name: plant.operator ?? null,
+      operator_name: operatorName,
       spv_candidates: topCandidates,
     };
 
@@ -565,24 +581,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
       cost_usd:              costUsd,
       llm_fallback_used:     llmFallback,
       duration_ms:           Date.now() - startMs,
+      queries_attempted:     queriesAttempted,
     };
 
-    // ── Write task record ─────────────────────────────────────────────────────
-    if (run_id) {
-      await supabase.from('ucc_agent_tasks').insert({
-        run_id,
-        plant_code,
-        agent_type:       'entity_worker',
-        attempt_number:   1,
-        task_status:      output.task_status,
-        completion_score: output.completion_score,
-        evidence_found:   output.evidence_found,
-        llm_fallback_used: llmFallback,
-        cost_usd:         costUsd,
-        duration_ms:      output.duration_ms,
-        output_json:      output,
-      });
-    }
+    // ── Write task record (non-fatal) ─────────────────────────────────────────
+    // Note: supervisor calls recordTask() after invokeWorker returns — no insert needed here.
 
     log(plant_code, `Done — score=${completionScore}, candidates=${allCandidates.length}, llm=${llmFallback}, cost=$${costUsd.toFixed(4)}, ${output.duration_ms}ms`);
 
@@ -603,6 +606,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       cost_usd: 0,
       llm_fallback_used: false,
       duration_ms: 0,
+      queries_attempted: [],
     };
     return new Response(JSON.stringify(output), { status: 500, headers: CORS });
   }

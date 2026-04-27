@@ -276,18 +276,9 @@ async function runPlant(
 
   if (!entityResult || entityResult.completion_score < 60) {
     const reason = entityResult?.open_questions?.[0] ?? 'unknown';
-    log(plant_code, `Entity worker failed after retries — score=${entityResult?.completion_score ?? 0} reason=${reason}`);
-    await supabase.from('ucc_research_plants').update({
-      workflow_status: 'unresolved',
-      last_run_at:     new Date().toISOString(),
-      total_cost_usd:  totalCost,
-    }).eq('plant_code', plant_code);
-    await supabase.from('ucc_agent_runs').update({
-      supervisor_status: 'unresolved',
-      completed_at:      new Date().toISOString(),
-      final_outcome:     `entity_worker_failed: ${reason}`,
-    }).eq('id', runId);
-    return { outcome: 'unresolved', cost: totalCost, escalated: false, debug: reason } as unknown as { outcome: string; cost: number; escalated: boolean };
+    log(plant_code, `Entity worker low score after retries — score=${entityResult?.completion_score ?? 0} reason=${reason}. Continuing with algorithmic aliases.`);
+    // Phase 3: Don't hard-exit. Continue with whatever aliases were generated.
+    // The plant stays 'running'; downstream workers will decide final outcome.
   }
 
   // Extract SPV aliases from entity worker output
