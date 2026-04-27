@@ -388,6 +388,22 @@ async function runPlant(
     log(plant_code, `No evidence found — skipping supplement worker`);
   }
 
+  // ── Step 3b: News fallback (runs only when zero evidence found) ───────
+  if (!anyEvidenceFound) {
+    log(plant_code, `No citation-grade evidence — running news-article fallback`);
+    const newsResult = await invokeWorker('ucc-news-fallback-worker', {
+      plant_code,
+      run_id:      runId,
+      plant_name,
+      sponsor_name,
+      state,
+      capacity_mw,
+    });
+    totalCost += newsResult.cost_usd;
+    await recordTask(supabase, runId, plant_code, 'ucc-news-fallback-worker', 1, newsResult);
+    log(plant_code, `News fallback: ${newsResult.evidence_found ? newsResult.structured_results?.length + ' leads' : 'no leads'}`);
+  }
+
   // ── Step 4: Reviewer ──────────────────────────────────────────────────
   log(plant_code, `Running reviewer`);
   const reviewerResult = await invokeWorker('ucc-reviewer', {
@@ -427,16 +443,32 @@ async function runPlant(
   } else if (allCriteriaMet) {
     workflowStatus = 'complete';
     const sourceList = [
-      uccResult.evidence_found    ? 'UCC SoS' : null,
-      countyResult.evidence_found ? 'county records' : null,
-      edgarResult.evidence_found  ? 'EDGAR' : null,
+      uccResult.evidence_found      ? 'UCC SoS' : null,
+      countyResult.evidence_found   ? 'county records' : null,
+      edgarResult.evidence_found    ? 'EDGAR' : null,
+      doeLpoResult.evidence_found   ? 'DOE LPO' : null,
+      fercResult.evidence_found     ? 'FERC' : null,
     ].filter(Boolean).join(' + ') || 'unknown source';
     finalOutcome = `complete via ${sourceList} (cost $${totalCost.toFixed(4)})`;
+  } else if (!anyEvidenceFound) {
+    // Check if news fallback found unverified leads
+    const { count: newsLeadCount } = await supabase
+      .from('ucc_lender_leads_unverified')
+      .select('*', { count: 'exact', head: true })
+      .eq('plant_code', plant_code);
+
+    if ((newsLeadCount ?? 0) > 0) {
+      workflowStatus = 'partial';
+      finalOutcome   = `partial: no citation-grade evidence; ${newsLeadCount} unverified news leads found (cost $${totalCost.toFixed(4)})`;
+    } else {
+      workflowStatus = 'unresolved';
+      finalOutcome   = `no_evidence: tried ${spvAliases.length} aliases across UCC, county, EDGAR, DOE LPO, FERC + news fallback; no leads (cost $${totalCost.toFixed(4)})`;
+    }
   } else {
     const unmet = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);
     log(plant_code, `Criteria not met: ${unmet.join(', ')}`);
     workflowStatus = 'unresolved';
-    finalOutcome   = `no_evidence: tried ${spvAliases.length} aliases across UCC, county, EDGAR; unmet: ${unmet.join(', ')} (cost $${totalCost.toFixed(4)})`;
+    finalOutcome   = `no_evidence: tried ${spvAliases.length} aliases across UCC, county, EDGAR, DOE LPO, FERC; unmet: ${unmet.join(', ')} (cost $${totalCost.toFixed(4)})`;
   }
 
   await supabase.from('ucc_research_plants').update({
