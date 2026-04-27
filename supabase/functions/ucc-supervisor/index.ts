@@ -315,9 +315,9 @@ async function runPlant(
     sponsor_name,
   };
 
-  log(plant_code, `Dispatching parallel workers (UCC + County + EDGAR)`);
+  log(plant_code, `Dispatching parallel workers (UCC + County + EDGAR + DOE LPO + FERC)`);
 
-  const [uccResult, countyResult, edgarResult] = await Promise.all([
+  const [uccResult, countyResult, edgarResult, doeLpoResult, fercResult] = await Promise.all([
     invokeWorker('ucc-records-worker', {
       ...parallelBase,
       allow_llm_fallback: true,
@@ -331,24 +331,40 @@ async function runPlant(
       ...parallelBase,
       cod_year,
     }),
+    invokeWorker('ucc-doe-lpo-worker', {
+      ...parallelBase,
+      capacity_mw,
+      cod_year,
+    }),
+    invokeWorker('ucc-ferc-worker', {
+      ...parallelBase,
+      capacity_mw,
+      cod_year,
+    }),
   ]);
 
-  totalCost += uccResult.cost_usd + countyResult.cost_usd + edgarResult.cost_usd;
+  totalCost += uccResult.cost_usd + countyResult.cost_usd + edgarResult.cost_usd
+    + doeLpoResult.cost_usd + fercResult.cost_usd;
 
-  // Record all three parallel tasks
+  // Record all five parallel tasks
   await Promise.all([
-    recordTask(supabase, runId, plant_code, 'ucc-records-worker', 1, uccResult),
-    recordTask(supabase, runId, plant_code, 'ucc-county-worker',  1, countyResult),
-    recordTask(supabase, runId, plant_code, 'ucc-edgar-worker',   1, edgarResult),
+    recordTask(supabase, runId, plant_code, 'ucc-records-worker',   1, uccResult),
+    recordTask(supabase, runId, plant_code, 'ucc-county-worker',    1, countyResult),
+    recordTask(supabase, runId, plant_code, 'ucc-edgar-worker',     1, edgarResult),
+    recordTask(supabase, runId, plant_code, 'ucc-doe-lpo-worker',   1, doeLpoResult),
+    recordTask(supabase, runId, plant_code, 'ucc-ferc-worker',      1, fercResult),
   ]);
 
   log(plant_code, [
     `UCC: score=${uccResult.completion_score}`,
     `County: score=${countyResult.completion_score}`,
     `EDGAR: score=${edgarResult.completion_score}`,
+    `DOE LPO: score=${doeLpoResult.completion_score}`,
+    `FERC: score=${fercResult.completion_score}`,
   ].join(' | '));
 
-  const anyEvidenceFound = uccResult.evidence_found || countyResult.evidence_found || edgarResult.evidence_found;
+  const anyEvidenceFound = uccResult.evidence_found || countyResult.evidence_found
+    || edgarResult.evidence_found || doeLpoResult.evidence_found || fercResult.evidence_found;
 
   // ── Step 3: Supplement worker (only if evidence found) ────────────────
   if (anyEvidenceFound) {
@@ -386,7 +402,7 @@ async function runPlant(
 
   // ── 6 acceptance criteria ─────────────────────────────────────────────
   const criteria = {
-    sponsor_confirmed:      entityResult.completion_score >= 70,
+    sponsor_confirmed:      entityResult!.completion_score >= 70,
     spv_alias_found:        spvAliases.length >= 1,
     ucc_or_county_searched: uccResult.completion_score > 0 || countyResult.completion_score > 0,
     edgar_completed:        edgarResult.completion_score > 0,
