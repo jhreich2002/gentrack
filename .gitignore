@@ -26,3 +26,24 @@ dist-ssr
 
 
 fetch-log.txt
+
+# Local agent/tool config (may contain auth tokens)
+.claude/
+
+# Supabase CLI cache
+supabase/.temp/
+
+# One-off debugging scratch scripts (kept local; productionised tooling lives elsewhere)
+scripts/debug_*
+scripts/diag_*
+scripts/inspect_*
+scripts/check_*
+scripts/query_*
+scripts/dump_*
+scripts/probe_*
+scripts/quick_*
+scripts/search_*
+scripts/fix_constraint*
+scripts/invoke_reviewer*
+inspection_results.txt
+inspect.ts
