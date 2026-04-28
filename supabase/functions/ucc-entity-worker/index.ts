@@ -62,7 +62,8 @@ interface PlantRow {
   county:                string | null;
   nameplate_capacity_mw: number | null;
   owner:                 string | null;
-  operator:              string | null;
+  // operator column doesn't exist on plants (only operator_id FK).
+  // We don't use the joined name here — owner alone is the canonical SPV signal.
   fuel_source:           string | null;
   cod:                   string | null;
 }
@@ -448,7 +449,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     const { data: plant, error: plantErr } = await supabase
       .from('plants')
-      .select('eia_plant_code, name, state, county, nameplate_capacity_mw, owner, operator, fuel_source, cod')
+      .select('eia_plant_code, name, state, county, nameplate_capacity_mw, owner, fuel_source, cod')
       .eq('eia_plant_code', plant_code)
       .single<PlantRow>();
 
@@ -472,7 +473,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
 
     const sponsorName  = plant.owner ?? null;
-    const operatorName = plant.operator ?? null;
+    const operatorName: string | null = null;  // operator name no longer queried — see PlantRow note
     const state        = plant.state?.toUpperCase() ?? '';
     const county       = plant.county ?? null;
     const plantName    = plant.name;

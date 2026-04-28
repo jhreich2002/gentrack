@@ -425,8 +425,27 @@ async function persistEdgarLenders(
 // ── CIK lookup ────────────────────────────────────────────────────────────────
 
 /**
+ * Strip common corporate suffixes and punctuation, returning a normalised
+ * lowercase token string suitable for substring matching.
+ */
+function normaliseEntityName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[.,()'"]/g, ' ')
+    .replace(/\b(llc|inc|incorporated|corp|corporation|company|co|ltd|limited|lp|llp|holdings?|trust|partners?)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Find the SEC CIK for a company by name using the EDGAR company search.
  * Returns the CIK (without leading zeros) or null if not found.
+ *
+ * IMPORTANT: EDGAR's full-text search ranks loosely and will return ANY company
+ * whose filings mention tokens from the query. We MUST validate that the
+ * returned hit's display_name actually corresponds to the queried sponsor
+ * (otherwise we burn budget pulling filings for an unrelated company —
+ * e.g. "SoCore Energy LLC" → "Jubilant Flame International, Ltd").
  */
 async function lookupCik(companyName: string): Promise<string | null> {
   try {
@@ -448,10 +467,28 @@ async function lookupCik(companyName: string): Promise<string | null> {
     const hits = (data?.hits?.hits ?? []) as Array<Record<string, unknown>>;
     if (hits.length === 0) return null;
 
-    const first = (hits[0]._source ?? {}) as Record<string, unknown>;
-    const ciks  = (first.ciks as string[] | undefined) ?? [];
-    const rawCik = ciks[0] ?? '';
-    return rawCik ? String(parseInt(rawCik, 10)) : null;
+    const queryNorm = normaliseEntityName(companyName);
+    if (!queryNorm) return null;
+    // Require at least the first significant token of the query to appear in
+    // the matched display_names. This rejects "SoCore Energy" → "Jubilant Flame"
+    // style spurious matches while still allowing variations like trailing
+    // suffixes or middle words.
+    const queryTokens = queryNorm.split(' ').filter(t => t.length >= 3);
+    if (queryTokens.length === 0) return null;
+    const primaryToken = queryTokens[0];
+
+    for (const hit of hits.slice(0, 5)) {
+      const src         = (hit._source ?? {}) as Record<string, unknown>;
+      const ciks        = (src.ciks as string[] | undefined) ?? [];
+      const displayRaw  = Array.isArray(src.display_names)
+        ? (src.display_names as string[]).join(' | ')
+        : String(src.display_names ?? '');
+      const displayNorm = normaliseEntityName(displayRaw);
+      if (!displayNorm.includes(primaryToken)) continue;
+      const rawCik = ciks[0] ?? '';
+      if (rawCik) return String(parseInt(rawCik, 10));
+    }
+    return null;
   } catch {
     return null;
   }

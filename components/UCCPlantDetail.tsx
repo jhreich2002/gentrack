@@ -76,7 +76,29 @@ const UCCPlantDetail: React.FC<Props> = ({ plant, onBack, onRun, onRunWithBudget
 
   const openDrawer = async (link: UCCLenderLink) => {
     const evidence = await fetchEvidenceRecords(plant.plant_code, link.lender_entity_id);
-    setDrawerEvidence(evidence);
+    // Fallback: some lender links (news-fallback worker, citation-grade fast path)
+    // store provenance inline on the link itself rather than in
+    // ucc_evidence_records. Synthesize a record so the drawer always has
+    // something auditable to show.
+    let finalEvidence = evidence;
+    if (evidence.length === 0 && (link.evidence_summary || link.source_url)) {
+      finalEvidence = [{
+        id:                      -link.id,
+        plant_code:              plant.plant_code,
+        source_type:             link.source_url?.includes('sec.gov') ? 'edgar'
+                                 : link.source_url ? 'web_scrape'
+                                 : 'sponsor_history',
+        source_url:              link.source_url,
+        excerpt:                 link.evidence_summary ?? '',
+        raw_text:                null,
+        confidence_contribution: link.confidence_class,
+        worker_name:             'lender_link',
+        extracted_fields:        { evidence_type: link.evidence_type },
+        lender_entity_id:        link.lender_entity_id,
+        lender_name:             link.lender_name,
+      }];
+    }
+    setDrawerEvidence(finalEvidence);
     setDrawerLender(link.lender_name);
     setDrawerOpen(true);
   };
@@ -113,16 +135,34 @@ const UCCPlantDetail: React.FC<Props> = ({ plant, onBack, onRun, onRunWithBudget
         </div>
       </div>
 
-      {/* Budget / unresolved reason banner */}
-      {!loading && !running && (plant.workflow_status === 'budget_exceeded' || plant.workflow_status === 'unresolved') && lastRun?.final_outcome && (
+      {/* Status banner — explain WHY a plant is in its current state.
+          Critical for auditability: every workflow_status that isn't
+          `complete` should tell the user what's missing and (where
+          relevant) offer a re-run.  */}
+      {!loading && !running && lastRun?.final_outcome && (
+        plant.workflow_status === 'budget_exceeded' ||
+        plant.workflow_status === 'unresolved' ||
+        plant.workflow_status === 'confirmed_partial' ||
+        plant.workflow_status === 'partial' ||
+        plant.workflow_status === 'needs_review'
+      ) && (
         <div className={`px-6 py-3 border-b flex items-center justify-between gap-4 text-sm ${
           plant.workflow_status === 'budget_exceeded'
             ? 'bg-yellow-900/20 border-yellow-800/40 text-yellow-300'
-            : 'bg-red-900/20 border-red-800/40 text-red-400'
+          : plant.workflow_status === 'unresolved'
+            ? 'bg-red-900/20 border-red-800/40 text-red-400'
+          : plant.workflow_status === 'needs_review'
+            ? 'bg-orange-900/20 border-orange-800/40 text-orange-300'
+          // confirmed_partial / partial — actionable evidence found, but not citation-grade
+            : 'bg-amber-900/20 border-amber-800/40 text-amber-300'
         }`}>
           <div className="flex items-center gap-2 min-w-0">
             <span className="font-semibold shrink-0">
-              {plant.workflow_status === 'budget_exceeded' ? '$ Budget halted:' : '⚠ Unresolved:'}
+              {plant.workflow_status === 'budget_exceeded' ? '$ Budget halted:'
+              : plant.workflow_status === 'unresolved'    ? '⚠ Unresolved:'
+              : plant.workflow_status === 'needs_review'  ? '⚑ Needs review:'
+              : plant.workflow_status === 'confirmed_partial' ? '◐ Confirmed (partial):'
+              : '◐ Partial:'}
             </span>
             <span className="truncate text-xs opacity-80">{lastRun.final_outcome}</span>
           </div>

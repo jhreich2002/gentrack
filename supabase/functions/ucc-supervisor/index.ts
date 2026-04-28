@@ -399,10 +399,36 @@ async function runPlant(
   const allCriteriaMet = Object.values(criteria).every(Boolean);
   const escalated      = !!(reviewerResult as WorkerResponse & { escalate_to_review?: boolean }).escalate_to_review;
 
+  // ── Citation-grade fast path ──────────────────────────────────────────
+  // If the reviewer produced one or more `confirmed` lender candidates AND
+  // each has a source URL (criterion #6), the result is auditable evidence
+  // of record. That outweighs upstream-worker score gaps (e.g. entity_worker
+  // failed but news-fallback + EDGAR still produced a citation chain) and
+  // outweighs reviewer escalation flags (the reviewer escalates whenever
+  // any worker has a retry_recommendation, which is too noisy).
+  // Without this gate, plants with confirmed citations were being recorded
+  // as `unresolved` (e.g. plant 56812 — 3 confirmed lenders, status=unresolved
+  // because entity_worker hit a column-doesn't-exist bug).
+  const confirmedWithUrls = reviewerCandidates.filter(c =>
+    String(c.confidence_class ?? '') === 'confirmed' && !!c.source_url
+  ).length;
+
   let workflowStatus: string;
   let finalOutcome: string;
 
-  if (escalated) {
+  if (confirmedWithUrls > 0) {
+    workflowStatus = 'complete';
+    const sourceList = [
+      uccResult.evidence_found      ? 'UCC SoS' : null,
+      countyResult.evidence_found   ? 'county records' : null,
+      edgarResult.evidence_found    ? 'EDGAR' : null,
+      doeLpoResult.evidence_found   ? 'DOE LPO' : null,
+      fercResult.evidence_found     ? 'FERC' : null,
+    ].filter(Boolean).join(' + ') || 'reviewer synthesis';
+    const partials = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);
+    const partialNote = partials.length ? ` [partial criteria: ${partials.join(', ')}]` : '';
+    finalOutcome = `complete via ${sourceList} — ${confirmedWithUrls} citation-grade lender(s)${partialNote} (cost $${totalCost.toFixed(4)})`;
+  } else if (escalated) {
     if (hasConfirmed || hasHighConfidence) {
       workflowStatus = 'confirmed_partial';
       finalOutcome   = `confirmed_partial: reviewer escalated with actionable lenders (${lenderCount} candidate(s), top=${topConfidence ?? 'n/a'})`;
