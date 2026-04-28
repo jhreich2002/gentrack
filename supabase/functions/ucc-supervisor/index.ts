@@ -200,7 +200,20 @@ async function runPlant(
 
   let totalCost = 0;
   let entityResult: WorkerResponse | null = null;
-
+  // ── Step 0: News discovery kicks off in parallel with entity worker ─────
+  // News runs as a discovery accelerator: lender names found here feed into the
+  // citation workers below as targeted query hints. News leads alone never reach
+  // ucc_lender_links — they only land in ucc_lender_leads_unverified. Citation
+  // workers remain authoritative.
+  log(plant_code, `Kicking off news discovery in parallel with entity worker`);
+  const newsPromise = invokeWorker('ucc-news-fallback-worker', {
+    plant_code,
+    run_id:      runId,
+    plant_name,
+    sponsor_name,
+    state,
+    capacity_mw,
+  });
   // ── Step 1: Entity worker (with retry) ────────────────────────────────
   for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
     log(plant_code, `Entity worker attempt ${attempt}`);
@@ -244,6 +257,20 @@ async function runPlant(
 
   log(plant_code, `${spvAliases.length} SPV aliases found`);
 
+  // ── Await news discovery and extract lender hints ──────────────
+  const newsResult = await newsPromise;
+  totalCost += newsResult.cost_usd;
+  await recordTask(supabase, runId, plant_code, 'ucc-news-fallback-worker', 1, newsResult);
+
+  const newsLeads = (newsResult.structured_results ?? []) as Array<{ lender_name?: string; confidence?: number }>;
+  const discoveredLenderHints: string[] = newsLeads
+    .filter(l => !!l.lender_name && (l.confidence ?? 0) >= 50)
+    .map(l => l.lender_name!.trim())
+    .filter((v, i, a) => a.indexOf(v) === i)  // dedupe
+    .slice(0, 5);                              // cap at 5 hints
+
+  log(plant_code, `News discovery: ${newsLeads.length} leads, ${discoveredLenderHints.length} hints → [${discoveredLenderHints.join(', ')}]`);
+
   // ── Step 2: Research workers ─────────────────────────────────────────
   if (totalCost > budgetLeft) {
     const budgetMsg = `budget_exceeded_before_research_workers (spent $${totalCost.toFixed(4)} / $${budgetLeft.toFixed(4)})`;
@@ -269,6 +296,7 @@ async function runPlant(
     state,
     spv_aliases: spvAliases,
     sponsor_name,
+    discovered_lender_hints: discoveredLenderHints,
   };
 
   log(plant_code, `Dispatching research workers (UCC + County + EDGAR sequentially, then DOE LPO + FERC)`);
@@ -328,21 +356,6 @@ async function runPlant(
     log(plant_code, `No evidence found — skipping supplement worker`);
   }
 
-  // ── Step 3b: News fallback (always runs — used as corroboration when citation evidence exists) ──
-  log(plant_code, anyEvidenceFound
-    ? `Running news fallback as corroboration alongside citation evidence`
-    : `No citation-grade evidence — running news-article fallback`);
-  const newsResult = await invokeWorker('ucc-news-fallback-worker', {
-    plant_code,
-    run_id:      runId,
-    plant_name,
-    sponsor_name,
-    state,
-    capacity_mw,
-  });
-  totalCost += newsResult.cost_usd;
-  await recordTask(supabase, runId, plant_code, 'ucc-news-fallback-worker', 1, newsResult);
-  log(plant_code, `News fallback: ${newsResult.evidence_found ? newsResult.structured_results?.length + ' leads' : 'no leads'}`);
 
   // ── Step 4: Reviewer ──────────────────────────────────────────────────
   log(plant_code, `Running reviewer`);

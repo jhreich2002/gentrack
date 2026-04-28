@@ -184,8 +184,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const startMs = Date.now();
 
   try {
-    const { plant_code, run_id, plant_name, sponsor_name, state }:
-      { plant_code: string; run_id: string; plant_name: string; sponsor_name: string | null; state: string } =
+    const { plant_code, run_id, plant_name, sponsor_name, state, discovered_lender_hints = [] }:
+      { plant_code: string; run_id: string; plant_name: string; sponsor_name: string | null; state: string; discovered_lender_hints?: string[] } =
       await req.json();
 
     if (!plant_code || !plant_name) {
@@ -210,6 +210,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     ];
     if (sponsor_name) {
       queries.push(`"${sponsor_name}" "${plant_name}"`);
+    }
+
+    // Targeted queries from news-discovered lender hints (cap at 2 — FERC search is rate-limited)
+    for (const hint of (discovered_lender_hints ?? []).slice(0, 2)) {
+      queries.push(`"${plant_name}" "${hint}"`);
     }
 
     for (const query of queries) {
