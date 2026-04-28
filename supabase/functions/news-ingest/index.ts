@@ -27,6 +27,7 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -537,13 +538,13 @@ async function upsertArticles(
 // ── Chain call helper ──────────────────────────────────────────────────────────
 
 function fireAndForget(url: string, body: Record<string, unknown>): void {
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const internalToken = Deno.env.get('INTERNAL_AUTH_TOKEN')!;
   // Fire-and-forget: don't await
   fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${serviceRoleKey}`,
+      'Authorization': `Bearer ${internalToken}`,
     },
     body: JSON.stringify(body),
   }).catch(err => console.error('Chain call failed:', err));
@@ -552,6 +553,8 @@ function fireAndForget(url: string, body: Record<string, unknown>): void {
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {

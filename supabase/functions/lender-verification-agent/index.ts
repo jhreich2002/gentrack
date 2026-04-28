@@ -29,6 +29,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { scoreHeuristic } from '../lender-currency-agent/heuristics.ts';
 import type { CandidateLender, PlantInfo, LoanStatus, SyndicateRole } from '../lender-identification-agent/index.ts';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -503,6 +504,8 @@ async function writeEvidenceRows(
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {

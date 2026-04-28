@@ -22,6 +22,7 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -280,6 +281,8 @@ Return [] if nothing is found. Only include entries with actual article/URL evid
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request): Promise<Response> => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
   if (req.method !== 'POST')    return new Response('Method not allowed', { status: 405 });
 

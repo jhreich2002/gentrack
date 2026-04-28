@@ -24,6 +24,8 @@
  *   SUPABASE_SERVICE_ROLE_KEY (auto-injected)
  */
 
+import { checkInternalAuth } from '../_shared/auth.ts';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const PERPLEXITY_URL   = 'https://api.perplexity.ai/chat/completions';
@@ -666,6 +668,8 @@ function mergeCandidates(
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {

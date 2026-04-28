@@ -17,6 +17,7 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 const UPSERT_BATCH = 200;
 
@@ -28,7 +29,9 @@ interface ArticleRow {
   topics: string[];
 }
 
-Deno.serve(async (_req) => {
+Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   try {
     const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -167,7 +170,7 @@ Deno.serve(async (_req) => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+            'Authorization': `Bearer ${Deno.env.get('INTERNAL_AUTH_TOKEN')}`,
           },
           body: '{}',
         });

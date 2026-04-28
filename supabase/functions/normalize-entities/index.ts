@@ -16,6 +16,7 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 const GEMINI_URL   = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const BATCH_SIZE   = 150;  // max names per Gemini call to stay within context
@@ -132,6 +133,8 @@ RULES:
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*' } });
   }
@@ -334,7 +337,7 @@ Deno.serve(async (req: Request) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+          'Authorization': `Bearer ${Deno.env.get('INTERNAL_AUTH_TOKEN')}`,
         },
         body: '{}',
       });

@@ -34,6 +34,7 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -101,8 +102,9 @@ async function invokeWorker(
 ): Promise<WorkerResponse> {
   const url = `${supabaseUrl()}/functions/v1/${functionName}`;
   try {
-    // Use EDGE_FUNCTION_KEY for function-to-function auth (SUPABASE_SERVICE_ROLE_KEY is reserved)
-    const authKey = Deno.env.get('EDGE_FUNCTION_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    // Inter-function auth: use INTERNAL_AUTH_TOKEN (set via supabase secrets set).
+    // verify_jwt is disabled in config.toml; each function validates this token via _shared/auth.ts.
+    const authKey = Deno.env.get('INTERNAL_AUTH_TOKEN') ?? '';
     const resp = await fetch(url, {
       method:  'POST',
       headers: {
@@ -463,6 +465,8 @@ async function runPlant(
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request): Promise<Response> => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
   if (req.method !== 'POST')    return new Response('Method not allowed', { status: 405 });
 

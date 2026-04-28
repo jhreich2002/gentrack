@@ -18,6 +18,7 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 const NEWS_LOOKBACK_DAYS = 90;
 const PAGE_SIZE          = 1000;
@@ -82,6 +83,8 @@ async function upsertBatch(
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*' } });
   }

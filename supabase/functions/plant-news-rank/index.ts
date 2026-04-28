@@ -25,6 +25,7 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -508,6 +509,8 @@ async function rankPlant(
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   // CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, {
@@ -575,13 +578,13 @@ Deno.serve(async (req: Request) => {
       // Chain to embed-articles if any articles were included for embedding
       if (totalIncluded > 0) {
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-        const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+        const internalToken = Deno.env.get('INTERNAL_AUTH_TOKEN')!;
         console.log(`Chaining to embed-articles (${totalIncluded} articles included for embedding)`);
         fetch(`${supabaseUrl}/functions/v1/embed-articles`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${serviceRoleKey}`,
+            'Authorization': `Bearer ${internalToken}`,
           },
           body: JSON.stringify({}),
         }).catch(err => console.error('Chain to embed-articles failed:', err));

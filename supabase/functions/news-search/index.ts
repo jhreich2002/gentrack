@@ -24,6 +24,7 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -267,7 +268,7 @@ async function saveResults(
 // ── Chain call helper ──────────────────────────────────────────────────────────
 
 function fireAndForget(url: string, body: Record<string, unknown>): void {
-  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const key = Deno.env.get('INTERNAL_AUTH_TOKEN')!;
   const p = fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
@@ -279,6 +280,8 @@ function fireAndForget(url: string, body: Record<string, unknown>): void {
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {

@@ -18,6 +18,7 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
 
@@ -107,7 +108,7 @@ async function runOnePlant(
     method:  'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${supabaseKey}`,
+      'Authorization': `Bearer ${Deno.env.get('INTERNAL_AUTH_TOKEN') ?? supabaseKey}`,
     },
     body: JSON.stringify({ mode: 'single', plant_code: plantCode }),
     signal: AbortSignal.timeout(120_000),
@@ -157,6 +158,8 @@ async function runOnePlant(
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
   if (req.method !== 'POST')    return new Response('Method not allowed', { status: 405 });
 

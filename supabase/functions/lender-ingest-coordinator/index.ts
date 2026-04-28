@@ -29,6 +29,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import type { PlantInfo, CandidateLender } from '../lender-identification-agent/index.ts';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -71,7 +72,7 @@ function log(tag: string, msg: string): void {
 // ── fireAndForget helper ──────────────────────────────────────────────────────
 
 function fireAndForget(url: string, body: Record<string, unknown>): void {
-  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const key = Deno.env.get('INTERNAL_AUTH_TOKEN')!;
   const p = fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}`, 'apikey': key },
@@ -206,7 +207,7 @@ async function callIdentificationAgent(
   plant:       PlantRow,
   runLogId:    string | null,
 ): Promise<{ candidates: CandidateLender[]; costUsd: number }> {
-  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const key = Deno.env.get('INTERNAL_AUTH_TOKEN')!;
 
   const res = await fetch(`${supabaseUrl}/functions/v1/lender-identification-agent`, {
     method:  'POST',
@@ -238,7 +239,7 @@ async function callVerificationAgent(
   candidates:  CandidateLender[],
   runLogId:    string | null,
 ): Promise<{ upserted: number; costUsd: number }> {
-  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const key = Deno.env.get('INTERNAL_AUTH_TOKEN')!;
 
   const res = await fetch(`${supabaseUrl}/functions/v1/lender-verification-agent`, {
     method:  'POST',
@@ -268,6 +269,8 @@ async function callVerificationAgent(
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {

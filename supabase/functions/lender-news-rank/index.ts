@@ -19,6 +19,7 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -512,6 +513,8 @@ async function rankPlant(
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {
@@ -575,6 +578,7 @@ Deno.serve(async (req: Request) => {
 
       const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
       const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const internalToken = Deno.env.get('INTERNAL_AUTH_TOKEN')!;
 
       // Chain to embed-articles if any articles were included for embedding
       if (totalIncluded > 0) {
@@ -583,7 +587,7 @@ Deno.serve(async (req: Request) => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${serviceRoleKey}`,
+            'Authorization': `Bearer ${internalToken}`,
           },
           body: JSON.stringify({}),
         }).catch(err => console.error('Chain to embed-articles failed:', err));
@@ -595,7 +599,7 @@ Deno.serve(async (req: Request) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${serviceRoleKey}`,
+          'Authorization': `Bearer ${internalToken}`,
         },
         body: JSON.stringify({}),
       }).catch(err => console.error('Chain to lender-extract failed:', err));

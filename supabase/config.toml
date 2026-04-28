@@ -34,3 +34,72 @@ enable_signup = true
 
 [edge_runtime]
 enabled = true
+
+# === verify_jwt disabled — auth handled in-function via _shared/auth.ts (INTERNAL_AUTH_TOKEN) ===
+
+[functions.company-analyze]
+verify_jwt = false
+[functions.company-stats-refresh]
+verify_jwt = false
+[functions.compute-ratings]
+verify_jwt = false
+[functions.embed-articles]
+verify_jwt = false
+[functions.lender-analyze]
+verify_jwt = false
+[functions.lender-currency-agent]
+verify_jwt = false
+[functions.lender-extract]
+verify_jwt = false
+[functions.lender-identification-agent]
+verify_jwt = false
+[functions.lender-ingest]
+verify_jwt = false
+[functions.lender-ingest-coordinator]
+verify_jwt = false
+[functions.lender-news-rank]
+verify_jwt = false
+[functions.lender-search]
+verify_jwt = false
+[functions.lender-trigger-monitor]
+verify_jwt = false
+[functions.lender-verification-agent]
+verify_jwt = false
+[functions.news-ingest]
+verify_jwt = false
+[functions.news-search]
+verify_jwt = false
+[functions.normalize-entities]
+verify_jwt = false
+[functions.plant-news-rank]
+verify_jwt = false
+[functions.plant-news-summarize]
+verify_jwt = false
+[functions.refresh-entity-stats]
+verify_jwt = false
+[functions.tax-equity-analyze]
+verify_jwt = false
+[functions.ucc-county-worker]
+verify_jwt = false
+[functions.ucc-doe-lpo-worker]
+verify_jwt = false
+[functions.ucc-edgar-worker]
+verify_jwt = false
+[functions.ucc-entity-worker]
+verify_jwt = false
+[functions.ucc-ferc-worker]
+verify_jwt = false
+[functions.ucc-news-fallback-worker]
+verify_jwt = false
+[functions.ucc-records-worker]
+verify_jwt = false
+[functions.ucc-reviewer]
+verify_jwt = false
+[functions.ucc-smoke-runner]
+verify_jwt = false
+[functions.ucc-supervisor]
+verify_jwt = false
+[functions.ucc-supplement-worker]
+verify_jwt = false
+[functions.ucc-test-runner]
+verify_jwt = false

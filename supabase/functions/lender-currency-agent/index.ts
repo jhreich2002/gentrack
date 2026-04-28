@@ -30,6 +30,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { scoreHeuristic } from './heuristics.ts';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -143,7 +144,7 @@ function estimateCost(model: string, inputTokens: number, outputTokens: number):
 // ── Fire-and-forget helper ────────────────────────────────────────────────────
 
 function fireAndForget(url: string, body: Record<string, unknown>): void {
-  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const key = Deno.env.get('INTERNAL_AUTH_TOKEN')!;
   const p = fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
@@ -515,6 +516,8 @@ async function updateRunLog(
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {

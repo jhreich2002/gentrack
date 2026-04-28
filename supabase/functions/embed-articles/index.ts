@@ -18,6 +18,7 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { checkInternalAuth } from '../_shared/auth.ts';
 
 const GEMINI_EMBED_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents';
@@ -64,7 +65,9 @@ async function batchEmbed(texts: string[], apiKey: string): Promise<number[][]> 
   return data.embeddings.map(e => e.values);
 }
 
-Deno.serve(async (_req) => {
+Deno.serve(async (req: Request) => {
+  const __authDenied = checkInternalAuth(req);
+  if (__authDenied) return __authDenied;
   try {
     const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -162,7 +165,7 @@ Deno.serve(async (_req) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${serviceRoleKey}`,
+          'Authorization': `Bearer ${Deno.env.get('INTERNAL_AUTH_TOKEN')}`,
         },
         body: JSON.stringify({}),
       }).catch(err => console.error('Chain to compute-ratings failed:', err));
