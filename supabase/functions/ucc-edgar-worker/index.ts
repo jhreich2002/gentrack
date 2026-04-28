@@ -28,6 +28,12 @@ const EDGAR_SUBMIT_API  = 'https://data.sec.gov/submissions';
 const TIMEOUT_MS        = 15_000;
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
 
+// ── Resource budget guards (Supabase Edge Functions ~150s wall-clock cap) ────
+const WALL_CLOCK_BUDGET_MS = 110_000;  // stop processing new queries past this
+const MAX_FILINGS_PROCESSED = 60;      // hard ceiling across CIK + keyword paths (heavy plants need >25)
+const MAX_DOC_TEXT_BYTES   = 1_500_000; // per-filing accumulated text cap (8-K exhibits can be 1-3MB)
+const MAX_EXHIBITS_PER_FILING = 6;     // exhibits beyond the index — credit agreements often in EX-10.x
+
 // Lender indicator keywords found near entity names in credit agreements
 const LENDER_ROLE_PATTERNS = [
   /administrative agent/i,
@@ -93,6 +99,7 @@ interface WorkerOutput {
   llm_fallback_used:     false;
   duration_ms:           number;
   queries_attempted:     Array<{ source: string; query: string; hit_count: number; url: string | null }>;
+  partial_due_to_budget: boolean;  // true when wall-clock or filing-cap stopped processing
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -215,11 +222,14 @@ async function fetchAndExtractLenders(
       else if (!href.startsWith('http')) exhibitUrls.push(`${baseUrl}/${href}`);
     }
 
-    // Scan index + up to 3 exhibit files for credit-agreement language
-    const urlsToScan = exhibitUrls.slice(0, 4);
+    // Scan index + up to MAX_EXHIBITS_PER_FILING exhibit files for credit-agreement language.
+    // Stop accumulating once docText exceeds MAX_DOC_TEXT_BYTES to bound memory/CPU per filing.
+    const urlsToScan = exhibitUrls.slice(0, 1 + MAX_EXHIBITS_PER_FILING);
     docText = indexHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    if (docText.length > MAX_DOC_TEXT_BYTES) docText = docText.slice(0, MAX_DOC_TEXT_BYTES);
 
     for (const url of urlsToScan.slice(1)) {
+      if (docText.length >= MAX_DOC_TEXT_BYTES) break;
       try {
         const r = await fetch(url, {
           headers: { 'User-Agent': 'GenTrack-LenderResearch/1.0 compliance@example.com' },
@@ -227,7 +237,9 @@ async function fetchAndExtractLenders(
         });
         if (r.ok) {
           const text = await r.text();
-          docText += ' ' + text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+          const stripped = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+          const remaining = MAX_DOC_TEXT_BYTES - docText.length;
+          docText += ' ' + (stripped.length > remaining ? stripped.slice(0, remaining) : stripped);
         }
       } catch { /* skip unreadable exhibits */ }
     }
@@ -507,8 +519,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const startMs = Date.now();
 
   try {
-    const { plant_code, run_id, plant_name, sponsor_name, state, spv_aliases = [] }:
-      { plant_code: string; run_id: string; plant_name: string; sponsor_name: string | null; state: string; spv_aliases: SpvAlias[] } =
+    const { plant_code, run_id, plant_name, sponsor_name, state, spv_aliases = [], discovered_lender_hints = [] }:
+      { plant_code: string; run_id: string; plant_name: string; sponsor_name: string | null; state: string; spv_aliases: SpvAlias[]; discovered_lender_hints?: string[] } =
       await req.json();
 
     if (!plant_code || !plant_name) {
@@ -540,10 +552,32 @@ Deno.serve(async (req: Request): Promise<Response> => {
       queries.push(`"${sponsor_name}" "${plant_name}"`);
     }
 
+    // Targeted queries from news-discovered lender hints (cap at 3 to limit search load)
+    for (const hint of (discovered_lender_hints ?? []).slice(0, 3)) {
+      queries.push(`"${plant_name}" "${hint}"`);
+      if (sponsor_name) queries.push(`"${sponsor_name}" "${hint}"`);
+    }
+
     const allHits: EdgarHit[] = [];
     const sourceUrls: string[] = [];
     const snippets:   string[] = [];
     const queriesAttempted: Array<{ source: string; query: string; hit_count: number; url: string | null }> = [];
+    let   partialDueToBudget = false;
+    let   filingsProcessed   = 0;
+
+    const budgetExceeded = (): boolean => {
+      if (Date.now() - startMs > WALL_CLOCK_BUDGET_MS) {
+        if (!partialDueToBudget) log(plant_code, `Wall-clock budget ${WALL_CLOCK_BUDGET_MS}ms exceeded — stopping`);
+        partialDueToBudget = true;
+        return true;
+      }
+      if (filingsProcessed >= MAX_FILINGS_PROCESSED) {
+        if (!partialDueToBudget) log(plant_code, `Filing cap ${MAX_FILINGS_PROCESSED} reached — stopping`);
+        partialDueToBudget = true;
+        return true;
+      }
+      return false;
+    };
 
     // ── CIK lookup: use sponsor/SPV name to get direct filing index ──────────
     let sponsorCik: string | null = null;
@@ -560,10 +594,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       log(plant_code, `CIK ${sponsorCik}: ${cikFilings.length} filings from submissions API`);
 
       for (const result of cikFilings) {
+        if (budgetExceeded()) break;
         if (sourceUrls.includes(result.file_url)) continue;
         const lenders = await fetchAndExtractLenders(result.file_url, result.adsh_nodash, result.cik, result.entity_name, plant_name);
         allHits.push({ ...result, lenders, doc_url: result.file_url });
         sourceUrls.push(result.file_url);
+        filingsProcessed++;
         snippets.push(`CIK ${result.filing_type} | ${result.entity_name} | ${result.filed_at} | Lenders: ${lenders.map(l => l.name).join(', ') || 'none extracted'}`);
         await persistEdgarLenders(supabase, plant_code, run_id, state, lenders, result);
       }
@@ -572,12 +608,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     log(plant_code, `Running ${queries.length} EDGAR keyword queries`);
 
     for (const query of queries) {
+      if (budgetExceeded()) break;
       await sleep(300);
       const results = await edgarSearch(query);
       queriesAttempted.push({ source: 'edgar_efts', query, hit_count: results.length, url: `https://efts.sec.gov/LATEST/search-index?q=${encodeURIComponent(query)}` });
       log(plant_code, `  Query "${query.slice(0, 50)}" → ${results.length} hits`);
 
       for (const result of results) {
+        if (budgetExceeded()) break;
         if (sourceUrls.includes(result.file_url)) continue; // deduplicate
 
         // Fetch and extract lender names from document text
@@ -591,6 +629,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
         allHits.push({ ...result, lenders, doc_url: result.file_url });
         sourceUrls.push(result.file_url);
+        filingsProcessed++;
         snippets.push(`${result.filing_type} | ${result.entity_name} | ${result.filed_at} | Lenders: ${lenders.map(l => l.name).join(', ') || 'none extracted'}`);
         await persistEdgarLenders(supabase, plant_code, run_id, state, lenders, result);
       }
@@ -610,20 +649,24 @@ Deno.serve(async (req: Request): Promise<Response> => {
     if (allHits.length === 0) {
       openQuestions.push('No EDGAR filings found — sponsor may be private or plant not material enough for 8-K disclosure');
     }
+    if (partialDueToBudget) {
+      openQuestions.push(`Stopped early at ${filingsProcessed} filings due to wall-clock or filing-cap budget — results are partial`);
+    }
 
     const output: WorkerOutput = {
-      task_status:           'success',
+      task_status:           partialDueToBudget ? 'partial' : 'success',
       completion_score:      completionScore,
       evidence_found:        totalLenders > 0,
       structured_results:    allHits,
       source_urls:           sourceUrls,
       raw_evidence_snippets: snippets.slice(0, 10),
       open_questions:        openQuestions,
-      retry_recommendation:  null,
+      retry_recommendation:  partialDueToBudget ? 'Worker hit resource budget — retry with narrower SPV alias set may help' : null,
       cost_usd:              0,
       llm_fallback_used:     false,
       duration_ms:           Date.now() - startMs,
       queries_attempted:     queriesAttempted,
+      partial_due_to_budget: partialDueToBudget,
     };
 
     // Note: supervisor calls recordTask() after invokeWorker — no self-insert needed.
@@ -639,6 +682,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       structured_results: [], source_urls: [], raw_evidence_snippets: [],
       open_questions: [msg], retry_recommendation: 'Unexpected error — check logs',
       cost_usd: 0, llm_fallback_used: false, duration_ms: 0, queries_attempted: [],
+      partial_due_to_budget: false,
     }), { status: 500, headers: CORS });
   }
 });

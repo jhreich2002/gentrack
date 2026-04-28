@@ -84,6 +84,7 @@ interface TaskRecord {
   task_status:      string;
   completion_score: number;
   evidence_found:   boolean;
+  output_json?:     Record<string, unknown> | null;
 }
 
 interface LenderCandidate {
@@ -272,7 +273,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     const { data: taskRows } = await supabase
       .from('ucc_agent_tasks')
-      .select('agent_type, task_status, completion_score, evidence_found')
+      .select('agent_type, task_status, completion_score, evidence_found, output_json')
       .eq('run_id', run_id);
 
     const evidence: EvidenceRecord[] = (evidenceRows ?? []) as EvidenceRecord[];
@@ -305,7 +306,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const retryMessages: string[] = failedWorkers.map(t =>
       `${t.agent_type} scored ${t.completion_score} — retry needed`
     );
-
+    // ── Categorise worker outcomes (infrastructure failure vs clean zero) ─────
+    // A 'failed' worker with completion_score=0 indicates an HTTP error / timeout /
+    // resource limit — NOT that the source legitimately had no evidence. The supervisor
+    // and downstream consumers must be able to distinguish these cases so a 50-plant
+    // cohort doesn't silently report "no evidence" for plants that actually crashed.
+    const hardFailedWorkers = tasks.filter(t => t.task_status === 'failed');
+    const partialWorkers    = tasks.filter(t =>
+      t.task_status === 'partial' || (t.output_json && (t.output_json as Record<string, unknown>).partial_due_to_budget === true)
+    );
+    const workerStatusSummary = `workers: ${tasks.length} total, ${hardFailedWorkers.length} failed, ${partialWorkers.length} partial`;
     // Group evidence by lender entity ID
     const byEntity = new Map<number, EvidenceRecord[]>();
     for (const ev of evidence) {
@@ -579,6 +589,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
     } else if (candidates.length > 0 && !hasConfirmed && candidates.some(c => c.needs_review)) {
       escalateToReview = true;
       escalationReason = candidates.find(c => c.needs_review)?.review_reason ?? 'Manual review flagged';
+    } else if (candidates.length === 0 && (hardFailedWorkers.length > 0 || partialWorkers.length > 0)) {
+      // Zero candidates AND at least one worker did not run cleanly — this is an
+      // infrastructure issue, not a true "no evidence" outcome. Force escalation
+      // so the cohort summary distinguishes it from plants that legitimately have
+      // no public lender evidence.
+      escalateToReview = true;
+      const failedNames  = hardFailedWorkers.map(w => w.agent_type).join(', ');
+      const partialNames = partialWorkers.map(w => w.agent_type).join(', ');
+      escalationReason   = `worker_failures: ${[
+        hardFailedWorkers.length ? `failed=[${failedNames}]` : null,
+        partialWorkers.length    ? `partial=[${partialNames}]` : null,
+      ].filter(Boolean).join(' ')}`;
     }
 
     // ── Write lender links — route by citation status ─────────────────────
@@ -658,7 +680,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const openQuestions: string[] = [];
     if (retryMessages.length) openQuestions.push(...retryMessages);
     if (escalationReason)     openQuestions.push(escalationReason);
-    if (candidates.length === 0) openQuestions.push('No lender evidence found in any worker output for this run');
+    if (candidates.length === 0) {
+      openQuestions.push('No lender evidence found in any worker output for this run');
+    }
+    // Always emit a per-worker status block so cohort summaries can show which
+    // workers ran cleanly vs failed/partial without re-querying ucc_agent_tasks.
+    openQuestions.push(workerStatusSummary);
+    if (hardFailedWorkers.length) {
+      openQuestions.push(`failed_workers: ${hardFailedWorkers.map(w => `${w.agent_type}(${w.completion_score})`).join(', ')}`);
+    }
+    if (partialWorkers.length) {
+      openQuestions.push(`partial_workers: ${partialWorkers.map(w => w.agent_type).join(', ')}`);
+    }
 
     const output: ReviewerOutput = {
       task_status:           retryMessages.length > 0 ? 'partial' : 'success',
