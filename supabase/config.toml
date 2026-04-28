@@ -103,3 +103,8 @@ verify_jwt = false
 verify_jwt = false
 [functions.ucc-test-runner]
 verify_jwt = false
+
+# === verify_jwt enabled — caller is end-user browser; function checks profile.role = 'admin' ===
+
+[functions.admin-trigger-workflow]
+verify_jwt = true

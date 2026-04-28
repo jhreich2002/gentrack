@@ -7,6 +7,7 @@ import {
   fetchAdminIngestionFreshness,
   fetchUnsearchedCurtailedPlants,
   fetchAllCurtailedPlants,
+  getSession,
   AdminDailyActivityRow,
   AdminUserDailyActivityRow,
   AdminMonthlyCostLine,
@@ -255,17 +256,25 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
     return sortedUserActivity.filter((r) => r.day === selectedDay);
   }, [sortedUserActivity, selectedDay]);
 
-  // Poll GitHub Actions for workflow status after a trigger
+  // Poll Edge Function (which proxies to GitHub) for workflow status
   const pollWorkflowStatus = useCallback(async () => {
-    const pat = import.meta.env.VITE_GITHUB_ADMIN_PAT as string;
-    if (!pat) return;
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    if (!sbUrl) return;
     try {
-      const res = await fetch(
-        'https://api.github.com/repos/jhreich2002/gentrack/actions/workflows/monthly-update.yml/runs?per_page=1',
-        { headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github+json' } }
-      );
+      const session = await getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) return;
+      const res = await fetch(`${sbUrl}/functions/v1/admin-trigger-workflow`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ action: 'status' }),
+      });
+      if (!res.ok) return;
       const json = await res.json();
-      const run = json.workflow_runs?.[0];
+      const run = json.run;
       if (!run) return;
 
       if (run.status === 'completed') {
@@ -339,8 +348,11 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
   }, [workflowStatus, pollWorkflowStatus]);
 
   const triggerFetch = async () => {
-    const pat = import.meta.env.VITE_GITHUB_ADMIN_PAT as string;
-    if (!pat) { alert('VITE_GITHUB_ADMIN_PAT is not configured.'); return; }
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    if (!sbUrl) { alert('Supabase URL not configured.'); return; }
+    const session = await getSession();
+    const accessToken = session?.access_token;
+    if (!accessToken) { alert('Not signed in.'); return; }
     try {
       const freshness = await fetchAdminIngestionFreshness();
       setPreRunLatestMonth(freshness.latestGenerationMonth);
@@ -353,18 +365,20 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
     setWorkflowStatus('triggering');
     try {
       const res = await fetch(
-        'https://api.github.com/repos/jhreich2002/gentrack/actions/workflows/monthly-update.yml/dispatches',
+        `${sbUrl}/functions/v1/admin-trigger-workflow`,
         {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${pat}`,
-            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ ref: 'main' }),
+          body: JSON.stringify({ action: 'trigger', ref: 'main' }),
         }
       );
-      if (!res.ok) throw new Error(`GitHub API error ${res.status}`);
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`Trigger failed (${res.status}): ${detail.slice(0, 200)}`);
+      }
       setWorkflowStatus('queued');
       setTimeout(pollWorkflowStatus, 5_000);
     } catch (err: any) {
