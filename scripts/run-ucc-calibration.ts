@@ -66,6 +66,7 @@ const COHORT_SIZE  = parseInt(getArg('--cohort-size', '10'), 10);
 const MAX_SPEND    = parseFloat(getArg('--max-spend', '3.00'));
 const PER_BATCH    = parseInt(getArg('--per-batch', '5'), 10);
 const SLEEP_MS     = parseInt(getArg('--sleep-ms', '30000'), 10);
+const MIN_MW       = parseFloat(getArg('--min-mw', '0'));
 const RESUME_DIR   = getArg('--resume', '');
 
 if (isNaN(COHORT_SIZE) || isNaN(MAX_SPEND) || isNaN(PER_BATCH)) {
@@ -185,6 +186,7 @@ async function invokeSupervisor(maxPlants: number, budgetPerBatch: number): Prom
       filters: {
         prioritize_curtailed: true,
         max_plants: maxPlants,
+        ...(MIN_MW > 0 ? { min_mw: MIN_MW } : {}),
       },
       budget_usd: budgetPerBatch,
     }),

@@ -69,10 +69,12 @@ def select_trial_plants(
     sb,
     limit: int = 200,
     min_month: str = "2025-10",
+    min_mw: float = 0.0,
 ) -> list[dict]:
     """
     Return up to `limit` plants ordered by curtailment_score DESC, MW DESC,
     filtered to those with verified generation data >= min_month.
+    Pass min_mw > 0 to exclude plants smaller than that nameplate capacity.
 
     We do a two-step query because the Supabase Python client doesn't support
     subquery joins directly — so we first get plant IDs that have Oct-25+ data,
@@ -116,10 +118,14 @@ def select_trial_plants(
     all_curtailed = resp2.data or []
     print(f"         → {len(all_curtailed):,} curtailed plants meet base criteria")
 
-    # Step 3: intersect with eligible IDs
+    # Step 3: intersect with eligible IDs, apply MW floor
     print(f"[3/3] Intersecting with {min_month}+ data requirement...")
     filtered = [p for p in all_curtailed if p["id"] in eligible_ids]
     print(f"         → {len(filtered):,} plants have both conditions")
+
+    if min_mw > 0:
+        filtered = [p for p in filtered if (p.get("nameplate_capacity_mw") or 0) >= min_mw]
+        print(f"         → {len(filtered):,} plants after ≥{min_mw:.0f} MW filter")
 
     return filtered[:limit]
 
@@ -218,9 +224,16 @@ def main() -> None:
         help="Minimum month for generation data requirement (default: 2025-10)",
     )
     parser.add_argument(
+        "--min-mw",
+        type=float,
+        default=0.0,
+        metavar="MW",
+        help="Exclude plants smaller than this nameplate capacity (default: 0 = no filter)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print table but do not write trial_200_plant_codes.txt",
+        help="Print table but do not write codes file",
     )
     parser.add_argument(
         "--out",
@@ -232,7 +245,7 @@ def main() -> None:
 
     sb = _get_supabase()
 
-    plants = select_trial_plants(sb, limit=args.limit, min_month=args.min_month)
+    plants = select_trial_plants(sb, limit=args.limit, min_month=args.min_month, min_mw=args.min_mw)
 
     if not plants:
         print("No plants selected — exiting.")

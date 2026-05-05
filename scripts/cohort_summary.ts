@@ -117,7 +117,14 @@ async function summarisePlant(code: string): Promise<PlantSummary> {
   const realFailedWorkers  = failedWorkers.filter(w => !w.startsWith('reviewer'));
   const realPartialWorkers = partialWorkers.filter(w => w !== 'reviewer');
 
-  const silentZero = linksCount === 0
+  // A plant with a deliberate supervisor verdict (workflow_status set) and
+  // non-zero cost ran the full pipeline end-to-end.  That is a genuine
+  // "no evidence found" result, not a silent infrastructure failure.
+  const costUsd = (research?.total_cost_usd as number | undefined) ?? 0;
+  const hadActiveRun = !!research?.workflow_status && costUsd > 0;
+
+  const silentZero = !hadActiveRun
+    && linksCount === 0
     && leadsCount === 0
     && realFailedWorkers.length === 0
     && realPartialWorkers.length === 0;

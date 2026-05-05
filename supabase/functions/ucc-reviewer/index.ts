@@ -42,6 +42,7 @@ const CORS = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/
 
 type ConfidenceClass = 'confirmed' | 'high_confidence' | 'highly_likely' | 'possible';
 type EvidenceType    = 'direct' | 'inferred';
+type RoleTag         = 'debt_lender' | 'tax_equity' | 'offtaker' | 'utility_counterparty' | 'gov_loan_guarantee' | 'unknown';
 
 // Source types whose evidence is allowed to land in ucc_lender_links
 // (the citation-backed table). Everything else routes to
@@ -88,18 +89,22 @@ interface TaskRecord {
   output_json?:     Record<string, unknown> | null;
 }
 
+type LoanStatus = 'active' | 'likely_matured' | 'unknown';
+
 interface LenderCandidate {
-  entity_id:         number;
-  entity_name:       string;
-  normalized_name:   string;
-  confidence_class:  ConfidenceClass;
-  evidence_type:     EvidenceType;
-  evidence_summary:  string;
-  source_url:        string | null;
-  supporting_count:  number;
+  entity_id:              number;
+  entity_name:            string;
+  normalized_name:        string;
+  confidence_class:       ConfidenceClass;
+  evidence_type:          EvidenceType;
+  evidence_summary:       string;
+  source_url:             string | null;
+  supporting_count:       number;
+  estimated_loan_status:  LoanStatus;
   source_types:      string[];
   needs_review:      boolean;
   review_reason:     string | null;
+  role_tag:          RoleTag;
 }
 
 interface ReviewerOutput {
@@ -132,6 +137,70 @@ function normalizeName(name: string): string {
     .replace(/[^a-z0-9\s]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+// ── Lender-name cleaner (shared with ucc-edgar-worker) ────────────────────────
+// Rejects boilerplate phrases and strips role suffixes so dirty entity names
+// written by non-EDGAR workers never reach ucc_lender_links.
+// Returns null when the string is clearly not a usable entity name.
+
+const _REJECT_NAME_RE  = /nothing contained|by and among|\bamong\b|lenders party thereto|the lenders listed|party hereto|hereby agree|pursuant to this|\bentered into\b|Company entered|the Company entered|we entered|signed a|is a party|as set forth|Credit Agreement|Loan Agreement|Note Purchase|Security Agreement|Indenture|Amendment No\.|\bAmendment\b.*\bAgreement\b/i;
+const _ROLE_SUFFIX_RE  = /[,\s]+as\s+(?:(?:joint|lead|administrative|collateral|book(?:running)?|co-?)\s+)*(?:agent|arranger|lender|manager|trustee|bookrunner|borrower|obligor|guarantor)\b.*/i;
+const _LEADING_PREP_RE = /^(?:with|by|from|and|the|each|any|a)\s+/i;
+const _PURE_SUFFIX_RE  = /^(?:INC\.?|PLC\.?|Corp\.?|Corporation|LLC\.?|L\.L\.C\.?|N\.A\.?|Ltd\.?|Limited|LP|LLP)\s*[,;.]?\s*$/i;
+const _FIN_ENTITY_RE   = /\b(?:Bank(?:\s+(?:N\.?A\.?|PLC|AG|SA|Corp\.?|Limited))?|N\.A\.|PLC|AG|LLC|L\.L\.C\.|LP|LLP|Inc\.?|Corp\.?|Ltd\.?|Limited|Capital(?:\s+(?:Group|Markets|Partners))?|Financial(?:\s+(?:Group|Corp))?|Securities(?:\s+LLC)?|Trust(?:\s+Company)?|Bancorp|Banque)\b/gi;
+
+function cleanLenderName(raw: string): string | null {
+  let name = raw.trim();
+
+  // 1. Strip leading partial-word fragment (lowercase-leading = mid-word window slice)
+  if (/^[a-z]/.test(name)) {
+    const sp = name.indexOf(' ');
+    if (sp === -1) return null;
+    name = name.slice(sp + 1).trim();
+  }
+
+  // 2. Strip leading prepositions
+  name = name.replace(_LEADING_PREP_RE, '').trim();
+
+  // 3. Reject if still lowercase-leading
+  if (/^[a-z]/.test(name)) return null;
+
+  // 4. Hard-reject non-entity boilerplate
+  if (_REJECT_NAME_RE.test(name)) return null;
+
+  // 5. Strip trailing " as [role]..." fragments
+  name = name.replace(_ROLE_SUFFIX_RE, '').trim();
+  name = name.replace(/[,;.\s]+$/, '').trim();
+
+  // 5b. Reject pure corporate-suffix leftovers
+  if (_PURE_SUFFIX_RE.test(name)) return null;
+
+  // 6. Short and plausible
+  if (name.length >= 3 && name.length <= 65 && /^[A-Z]/.test(name)) {
+    return name;
+  }
+
+  // 7. Long string — extract last clean entity ending at a financial suffix
+  const suffixHits = [...name.matchAll(new RegExp(_FIN_ENTITY_RE.source, 'gi'))];
+  if (suffixHits.length === 0) return null;
+
+  const last   = suffixHits[suffixHits.length - 1];
+  const endPos = (last.index ?? 0) + last[0].length;
+
+  const before = name.slice(0, last.index ?? 0);
+  const parts  = before
+    .split(/,\s*|\s+and\s+|\s*;\s*|\s+listed\s+|\s+named\s+|\s+therein\s*/)
+    .filter(p => /[A-Z]/.test(p));
+  const seg       = (parts[parts.length - 1] ?? '').trim();
+  const candidate = (seg ? seg + ' ' : '') + name.slice(last.index ?? 0, endPos);
+  const clean     = candidate.replace(/\s+/g, ' ').replace(/[,;.\s]+$/, '').trim();
+
+  if (clean.length < 3 || clean.length > 80) return null;
+  if (/^[^A-Z]/.test(clean))                 return null;
+  if (_REJECT_NAME_RE.test(clean))            return null;
+
+  return clean;
 }
 
 function assignConfidence(
@@ -180,6 +249,61 @@ function extractDomain(url: string | null): string | null {
 
 function estimateCost(inputTokens: number, outputTokens: number): number {
   return (inputTokens / 1_000_000) * 3.5 + (outputTokens / 1_000_000) * 10.5;
+}
+
+// ── Role-tag inference ────────────────────────────────────────────────────────
+// Classifies each lender candidate by functional role so the Leads tab can
+// separate debt lenders from tax-equity investors, offtakers, and utilities.
+// This prevents utilities (Xcel, SDG&E) and PPA offtakers (Google) from
+// appearing on the debt-lender pitch list.
+
+function inferRoleTag(
+  entityName:  string,
+  sourceTypes: string[],
+  evList:      EvidenceRecord[],
+): RoleTag {
+  const name = entityName.toLowerCase();
+
+  // DOE Loan Programs Office → government loan guarantee
+  if (sourceTypes.includes('doe_lpo')) return 'gov_loan_guarantee';
+
+  // Scan extracted_fields from each evidence record (EDGAR populates role + facility_type)
+  for (const ev of evList) {
+    const f            = ev.extracted_fields ?? {};
+    const role         = String(f.role         ?? '').toLowerCase();
+    const facilityType = String(f.facility_type ?? '').toLowerCase();
+
+    if (facilityType === 'tax_equity' || role === 'equity_investor') return 'tax_equity';
+    if (role.includes('agent') || role.includes('arranger') || role.includes('lender')) return 'debt_lender';
+  }
+
+  // Scan evidence text for disambiguating phrases
+  for (const ev of evList) {
+    const text = (ev.excerpt ?? '').toLowerCase() + ' ' + JSON.stringify(ev.extracted_fields ?? {}).toLowerCase();
+    if (/tax equity|equity invest|equity partner|equity financ/.test(text))     return 'tax_equity';
+    if (/power purchase agreement|offtake agreement|\bppa\b/.test(text))        return 'offtaker';
+    if (/admin(?:istrative)?\s+agent|collateral\s+agent|lead\s+arranger|construction\s+loan|term\s+loan|project\s+financ/.test(text)) {
+      return 'debt_lender';
+    }
+  }
+
+  // Name-based heuristics — utilities / grid operators
+  if (/\b(?:electric|utility|utilities|power company|energy company|light\s+and\s+power|public\s+service|ercot|caiso|miso|pjm|isone|spp)\b/.test(name) &&
+      !/bank|capital|financial|credit|lend/.test(name)) {
+    return 'utility_counterparty';
+  }
+
+  // Well-known tech / retail offtakers
+  if (/\b(?:google|alphabet|amazon|microsoft|apple|meta|facebook|walmart|target|costco)\b/.test(name)) {
+    return 'offtaker';
+  }
+
+  // Name contains financial institution keywords → likely debt lender
+  if (/\b(?:bank|bancorp|capital(?:\s+group)?|financial|credit\b|lending|morgan|sachs|citi(?:bank|group)?|chase|wells\s+fargo|barclays|hsbc|deutsche|bnp|mufg|keybank|cobank|rabobank|santander|bbva|natixis|ing\b)\b/.test(name)) {
+    return 'debt_lender';
+  }
+
+  return 'unknown';
 }
 
 // ── Gemini disambiguation (only for near-duplicate names) ─────────────────────
@@ -242,8 +366,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const startMs = Date.now();
 
   try {
-    const { plant_code, run_id, capacity_mw = null }:
-      { plant_code: string; run_id: string; capacity_mw?: number | null } =
+    const { plant_code, run_id, capacity_mw = null, sponsor_name = null }:
+      { plant_code: string; run_id: string; capacity_mw?: number | null; sponsor_name?: string | null } =
       await req.json();
 
     if (!plant_code || !run_id) {
@@ -330,16 +454,51 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     log(plant_code, `${byEntity.size} unique lender entities referenced`);
 
-    // ── Fetch entity names ─────────────────────────────────────────────────
+    // ── Fetch entity names + canonical resolution ──────────────────────────
+    // P1a: Also fetch canonical_entity_id so variant entity rows (e.g.
+    // "JPMORGAN CHASE BANK, N.A." and "JPMorgan Chase Bank") can be merged
+    // onto a single canonical entity before building candidates.
     const entityIds = [...byEntity.keys()];
     const { data: entityRows } = await supabase
       .from('ucc_entities')
-      .select('id, entity_name, normalized_name')
+      .select('id, entity_name, normalized_name, canonical_entity_id')
       .in('id', entityIds);
 
+    // Build id → canonical_id mapping; collect any canonical IDs not already loaded
+    const canonicalIdMap = new Map<number, number>(); // variant → canonical (or self)
+    const extraCanonicalIds: number[] = [];
+    for (const e of (entityRows ?? [])) {
+      const cid = (e.canonical_entity_id as number | null) ?? (e.id as number);
+      canonicalIdMap.set(e.id as number, cid);
+      if (cid !== (e.id as number) && !entityIds.includes(cid)) {
+        extraCanonicalIds.push(cid);
+      }
+    }
+
+    let allEntityRows = [...(entityRows ?? [])];
+    if (extraCanonicalIds.length > 0) {
+      const { data: extraRows } = await supabase
+        .from('ucc_entities')
+        .select('id, entity_name, normalized_name, canonical_entity_id')
+        .in('id', extraCanonicalIds);
+      allEntityRows = [...allEntityRows, ...(extraRows ?? [])];
+    }
+
     const entityMap = new Map<number, { entity_name: string; normalized_name: string }>(
-      (entityRows ?? []).map(e => [e.id as number, { entity_name: e.entity_name as string, normalized_name: e.normalized_name as string }])
+      allEntityRows.map(e => [e.id as number, { entity_name: e.entity_name as string, normalized_name: e.normalized_name as string }])
     );
+
+    // Remap byEntity: collapse variant entity IDs onto their canonical IDs
+    const mergedByEntity = new Map<number, EvidenceRecord[]>();
+    for (const [variantId, evList] of byEntity) {
+      const canonicalId = canonicalIdMap.get(variantId) ?? variantId;
+      const existing    = mergedByEntity.get(canonicalId) ?? [];
+      mergedByEntity.set(canonicalId, [...existing, ...evList]);
+    }
+    if (canonicalIdMap.size > 0) {
+      const merged = byEntity.size - mergedByEntity.size;
+      if (merged > 0) log(plant_code, `Canonical resolution merged ${merged} variant entity row(s)`);
+    }
 
     // ── Check for near-duplicate entity names (may need Gemini) ───────────
     const entityList = [...entityMap.values()];
@@ -368,23 +527,64 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const candidates: LenderCandidate[] = [];
     const sourceUrls:  string[] = [];
     const snippets:    string[] = [];
+    const MATURITY_CUTOFF_YEAR = new Date().getFullYear() - 8;
 
-    for (const [entityId, evList] of byEntity) {
+    for (const [entityId, evList] of mergedByEntity) {
       const entity = entityMap.get(entityId);
       if (!entity) continue;
+
+      // P1b: Apply name cleaning to all workers' output — reject dirty names
+      // (multi-entity captures, boilerplate phrases) before writing to DB.
+      const cleanedName = cleanLenderName(entity.entity_name);
+      if (cleanedName === null) {
+        log(plant_code, `  Rejected dirty entity name: "${entity.entity_name}"`);
+        continue;
+      }
 
       const sourceTypes  = [...new Set(evList.map(e => e.source_type))];
       const bestUrl      = evList.find(e => e.source_url)?.source_url ?? null;
       const hasUrl       = !!bestUrl;
       const hasTrustedUrl = isTrustedUrl(bestUrl);
 
-      const canonicalName = canonicalOverrides.get(normalizeName(entity.entity_name)) ?? entity.entity_name;
+      const canonicalName = canonicalOverrides.get(normalizeName(cleanedName)) ?? cleanedName;
       let   confidence    = assignConfidence(sourceTypes, hasUrl, hasTrustedUrl);
 
       // Hard rule: confirmed without trusted URL → downgrade
       if (confidence === 'confirmed' && (!hasUrl || !hasTrustedUrl)) {
         confidence = 'possible';
         log(plant_code, `  Downgraded ${canonicalName}: confirmed label but URL not on trusted whitelist`);
+      }
+
+      // Infer role tag
+      const roleTag = inferRoleTag(canonicalName, sourceTypes, evList);
+
+      // Role-based confidence cap:
+      // Utilities and offtakers should not appear as confirmed debt lenders.
+      // Tax-equity is valuable intel but keeps its own confidence level.
+      if (confidence === 'confirmed' && (roleTag === 'utility_counterparty' || roleTag === 'offtaker')) {
+        confidence = 'possible';
+        log(plant_code, `  Capped ${canonicalName} to possible: role_tag=${roleTag} (not a debt lender)`);
+      }
+
+      // P1c: Loan vintage — infer estimated_loan_status from EDGAR filing dates.
+      // If ALL edgar evidence pre-dates the 8-year maturity cutoff, the loan
+      // is likely matured / refinanced and should be flagged accordingly.
+      let estimatedLoanStatus: LoanStatus = 'unknown';
+      const edgarEvList = evList.filter(e => e.source_type === 'edgar');
+      if (edgarEvList.length > 0) {
+        const filingYears = edgarEvList
+          .map(e => {
+            const d = String((e.extracted_fields ?? {}).filed_date ?? '');
+            return d ? new Date(d).getFullYear() : 0;
+          })
+          .filter(y => y > 2000);
+        if (filingYears.length > 0) {
+          const mostRecentYear = Math.max(...filingYears);
+          estimatedLoanStatus  = mostRecentYear >= MATURITY_CUTOFF_YEAR ? 'active' : 'likely_matured';
+          if (estimatedLoanStatus === 'likely_matured') {
+            log(plant_code, `  ${canonicalName}: most recent EDGAR filing ${mostRecentYear} — likely_matured`);
+          }
+        }
       }
 
       // Determine evidence type
@@ -412,6 +612,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
         (SOURCE_WEIGHT[b.source_type] ?? 0) - (SOURCE_WEIGHT[a.source_type] ?? 0)
       )[0]?.excerpt ?? '';
 
+      const vintageSuffix = estimatedLoanStatus === 'likely_matured'
+        ? ` [⚠ filing >8 yr old — loan may have matured]`
+        : '';
+
       // Needs review?
       const needsReview =
         confidence === 'possible' ||
@@ -425,20 +629,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
           : null;
 
       if (bestUrl && !sourceUrls.includes(bestUrl)) sourceUrls.push(bestUrl);
-      snippets.push(`${canonicalName} | ${confidence} | ${sourceDesc}`);
+      snippets.push(`${canonicalName} | ${confidence} | ${sourceDesc}${estimatedLoanStatus !== 'unknown' ? ` | ${estimatedLoanStatus}` : ''}`);
 
       candidates.push({
-        entity_id:        entityId,
-        entity_name:      canonicalName,
-        normalized_name:  normalizeName(canonicalName),
-        confidence_class: confidence,
-        evidence_type:    evidenceType,
-        evidence_summary: `${sourceDesc}: ${topExcerpt.slice(0, 200)}`,
-        source_url:       bestUrl,
-        supporting_count: evList.length,
-        source_types:     sourceTypes,
-        needs_review:     needsReview,
+        entity_id:             entityId,
+        entity_name:           canonicalName,
+        normalized_name:       normalizeName(canonicalName),
+        confidence_class:      confidence,
+        evidence_type:         evidenceType,
+        evidence_summary:      `${sourceDesc}: ${topExcerpt.slice(0, 200)}${vintageSuffix}`,
+        source_url:            bestUrl,
+        supporting_count:      evList.length,
+        estimated_loan_status: estimatedLoanStatus,
+        source_types:          sourceTypes,
+        needs_review:          needsReview,
         review_reason:    reviewReason,
+        role_tag:         roleTag,
       });
     }
 
@@ -552,6 +758,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         source_types:     ['news_validated'],
         needs_review:     false,
         review_reason:    null,
+        role_tag:         inferRoleTag(lead.lender_name, ['news_validated'], []),
       });
       newsValidatedAdded++;
       if (lead.source_url && !sourceUrls.includes(lead.source_url)) sourceUrls.push(lead.source_url);
@@ -606,6 +813,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
       ].filter(Boolean).join(' ')}`;
     }
 
+    // ── Filter out sponsor/borrower self-references ───────────────────────
+    // Occasionally the edgar/UCC workers capture the plant's own sponsor as a
+    // "lender" because they appear together in credit-agreement boilerplate
+    // (e.g., "AES Corporation as Borrower"). Discard any candidate whose
+    // normalized name contains the sponsor's normalised token.
+    if (sponsor_name) {
+      const sponsorToken = sponsor_name.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+      const filteredOut = candidates.filter(c => {
+        const norm = c.normalized_name.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+        return sponsorToken.length >= 4 && (norm.includes(sponsorToken) || sponsorToken.includes(norm));
+      });
+      if (filteredOut.length > 0) {
+        log(plant_code, `Filtered ${filteredOut.length} sponsor self-reference(s): ${filteredOut.map(c => c.entity_name).join(', ')}`);
+        candidates.splice(0, candidates.length, ...candidates.filter(c => !filteredOut.includes(c)));
+      }
+    }
+
     // ── Write lender links — route by citation status ─────────────────────
     // Citation-backed table (ucc_lender_links) requires:
     //   1. evidence includes a CITATION_SOURCE_TYPES source_type, AND
@@ -634,8 +858,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
           evidence_type:    candidate.evidence_type,
           evidence_summary: candidate.evidence_summary,
           source_url:       candidate.source_url,
-          human_approved:   false,
+          human_approved:          false,
           run_id,
+          role_tag:                  candidate.role_tag,
+          estimated_loan_status:     candidate.estimated_loan_status,
         }, { onConflict: 'plant_code,lender_entity_id', ignoreDuplicates: false });
         verifiedWritten++;
       } else {
@@ -663,9 +889,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
           evidence_summary: candidate.evidence_summary,
           source_url:       candidate.source_url,
           source_types:     candidate.source_types,
-          llm_model:        llmModel,
-          llm_prompt_hash:  llmPromptHash,
+          llm_model:             llmModel,
+          llm_prompt_hash:       llmPromptHash,
           run_id,
+          role_tag:              candidate.role_tag,
+          estimated_loan_status: candidate.estimated_loan_status,
         }, { onConflict: 'plant_code,lender_entity_id', ignoreDuplicates: false });
         unverifiedWritten++;
       }

@@ -41,9 +41,11 @@ export interface UCCLenderLink {
   pitch_ready_by:   string | null;
   pitch_ready_at:   string | null;
   pitch_ready_note: string | null;
+  role_tag:              string;
+  estimated_loan_status: 'active' | 'likely_matured' | 'unknown';
   // Joined
-  lender_name:      string;
-  lender_normalized:string;
+  lender_name:           string;
+  lender_normalized:     string;
 }
 
 export interface UCCUnverifiedLead {
@@ -59,9 +61,10 @@ export interface UCCUnverifiedLead {
   source_types:      string[];
   llm_model:         string | null;
   llm_prompt_hash:   string | null;
-  run_id:            string | null;
-  human_approved:    boolean;
-  created_at:        string;
+  run_id:               string | null;
+  human_approved:       boolean;
+  created_at:           string;
+  estimated_loan_status:'active' | 'likely_matured' | 'unknown';
 }
 
 export interface UCCPitchReadyLead {
@@ -277,6 +280,7 @@ export async function fetchLenderLinks(plantCode: string): Promise<UCCLenderLink
       id, plant_code, lender_entity_id, confidence_class,
       evidence_type, evidence_summary, source_url, human_approved, run_id,
       pitch_ready, pitch_ready_by, pitch_ready_at, pitch_ready_note,
+      role_tag, estimated_loan_status,
       ucc_entities!lender_entity_id (
         entity_name, normalized_name
       )
@@ -302,8 +306,10 @@ export async function fetchLenderLinks(plantCode: string): Promise<UCCLenderLink
       pitch_ready_by:   row.pitch_ready_by ? String(row.pitch_ready_by) : null,
       pitch_ready_at:   row.pitch_ready_at ? String(row.pitch_ready_at) : null,
       pitch_ready_note: row.pitch_ready_note ? String(row.pitch_ready_note) : null,
-      lender_name:      String(entity.entity_name ?? ''),
-      lender_normalized:String(entity.normalized_name ?? ''),
+      lender_name:           String(entity.entity_name ?? ''),
+      lender_normalized:     String(entity.normalized_name ?? ''),
+      role_tag:              String(row.role_tag ?? 'unknown'),
+      estimated_loan_status: (row.estimated_loan_status ?? 'unknown') as 'active' | 'likely_matured' | 'unknown',
     };
   });
 }
@@ -313,7 +319,7 @@ export async function fetchLenderLinks(plantCode: string): Promise<UCCLenderLink
 export async function fetchUnverifiedLeads(plantCode?: string): Promise<UCCUnverifiedLead[]> {
   let query = supabase
     .from('ucc_lender_leads_unverified')
-    .select('id, plant_code, lender_entity_id, lender_name, lender_normalized, confidence_class, evidence_type, evidence_summary, source_url, source_types, llm_model, llm_prompt_hash, run_id, human_approved, created_at')
+    .select('id, plant_code, lender_entity_id, lender_name, lender_normalized, confidence_class, evidence_type, evidence_summary, source_url, source_types, llm_model, llm_prompt_hash, run_id, human_approved, created_at, estimated_loan_status')
     .order('created_at', { ascending: false })
     .limit(500);
 
@@ -335,9 +341,10 @@ export async function fetchUnverifiedLeads(plantCode?: string): Promise<UCCUnver
     source_types:      Array.isArray(r.source_types) ? r.source_types as string[] : [],
     llm_model:         r.llm_model ? String(r.llm_model) : null,
     llm_prompt_hash:   r.llm_prompt_hash ? String(r.llm_prompt_hash) : null,
-    run_id:            r.run_id ? String(r.run_id) : null,
-    human_approved:    Boolean(r.human_approved),
-    created_at:        String(r.created_at ?? ''),
+    run_id:               r.run_id ? String(r.run_id) : null,
+    human_approved:       Boolean(r.human_approved),
+    created_at:           String(r.created_at ?? ''),
+    estimated_loan_status:(r.estimated_loan_status ?? 'unknown') as 'active' | 'likely_matured' | 'unknown',
   }));
 }
 

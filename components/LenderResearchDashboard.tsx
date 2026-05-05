@@ -688,6 +688,11 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-400 uppercase tracking-wide">
                             {item.evidence_type.replace(/_/g, ' ')}
                           </span>
+                          {item.estimated_loan_status === 'likely_matured' && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide bg-amber-900/40 text-amber-300 border border-amber-700/40">
+                              Likely Matured
+                            </span>
+                          )}
                           {item.llm_model && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-900/40 text-amber-300 uppercase tracking-wide">
                               {item.llm_model}

@@ -365,6 +365,7 @@ async function runPlant(
     plant_code,
     run_id:      runId,
     capacity_mw,
+    sponsor_name: sponsor_name ?? null,
   });
   totalCost += reviewerResult.cost_usd;
   await recordTask(supabase, runId, plant_code, 'ucc-reviewer', 1, reviewerResult);
@@ -463,8 +464,16 @@ async function runPlant(
   } else {
     const unmet = Object.entries(criteria).filter(([, v]) => !v).map(([k]) => k);
     log(plant_code, `Criteria not met: ${unmet.join(', ')}`);
-    workflowStatus = 'unresolved';
-    finalOutcome   = `no_evidence: tried ${spvAliases.length} aliases across UCC, county, EDGAR, DOE LPO, FERC; unmet: ${unmet.join(', ')} (cost $${totalCost.toFixed(4)})`;
+    // If we have ≥3 lender candidates despite unmet criteria (typically edgar_completed=false
+    // for plants like 1355/8223/62164 that have substantive non-EDGAR evidence),
+    // confirmed_partial is a more accurate outcome than unresolved.
+    if (lenderCount >= 3) {
+      workflowStatus = 'confirmed_partial';
+      finalOutcome   = `confirmed_partial: ${lenderCount} lender(s) found; unmet criteria: ${unmet.join(', ')} (cost $${totalCost.toFixed(4)})`;
+    } else {
+      workflowStatus = 'unresolved';
+      finalOutcome   = `no_evidence: tried ${spvAliases.length} aliases across UCC, county, EDGAR, DOE LPO, FERC; unmet: ${unmet.join(', ')} (cost $${totalCost.toFixed(4)})`;
+    }
   }
 
   await supabase.from('ucc_research_plants').update({
@@ -542,10 +551,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       if (filters?.prioritize_curtailed) {
         // ── Prioritized curtailed-plant queue (capacity DESC, distress DESC) ──
         // Reads from ucc_research_queue view which already excludes complete/running.
-        const { data: queueRows } = await supabase
+        let queueQuery = supabase
           .from('ucc_research_queue')
-          .select('plant_code, plant_name, state, county, sponsor_name, capacity_mw')
-          .limit(limit);
+          .select('plant_code, plant_name, state, county, sponsor_name, capacity_mw');
+
+        if (filters?.min_mw) queueQuery = queueQuery.gte('capacity_mw', filters.min_mw);
+
+        const { data: queueRows } = await queueQuery.limit(limit);
 
         // ucc_research_queue already has the right column names — map directly
         plants = (queueRows ?? []).map((r: Record<string, unknown>) => ({
@@ -602,6 +614,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
         log('BATCH', `Budget exhausted — stopping after ${results.length} plants`);
         break;
       }
+
+      // Purge stale lender records from previous runs so dirty/outdated names
+      // don't accumulate. Each fresh run starts with a clean slate.
+      await supabase.from('ucc_lender_links').delete().eq('plant_code', plant.plant_code);
+      await supabase.from('ucc_lender_leads_unverified').delete().eq('plant_code', plant.plant_code);
+      log(plant.plant_code, `Purged stale lender_links and leads for fresh run`);
 
       // Create or update research plant record
       await supabase.from('ucc_research_plants').upsert({

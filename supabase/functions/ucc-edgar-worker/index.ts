@@ -119,6 +119,79 @@ function normalizeName(name: string): string {
     .trim();
 }
 
+// ── Lender-name cleaner ───────────────────────────────────────────────────────
+// Post-processes raw regex match[1] output to strip window-slice artefacts:
+//   • leading partial-word fragments when the context window started mid-word
+//   • leading prepositions ("with Fortis Capital" → "Fortis Capital")
+//   • trailing " as [role]..." captured by the greedy trailing `[A-Za-z\s,\.&]*`
+//   • obvious non-entity boilerplate phrases
+//   • over-long multi-entity captures (extracts the last clean entity segment)
+// Returns null when the input is clearly not a usable entity name.
+
+const _REJECT_NAME_RE  = /nothing contained|by and among|\bamong\b|lenders party thereto|the lenders listed|party hereto|hereby agree|pursuant to this|\bentered into\b|Company entered|the Company entered|we entered|signed a|is a party|as set forth|Credit Agreement|Loan Agreement|Note Purchase|Security Agreement|Indenture|Amendment No\.|\bAmendment\b.*\bAgreement\b/i;
+// Role suffix: strip "as [modifier] agent/arranger/lender/borrower/..."
+// Uses (?:modifier\s+)* to handle "as administrative agent", "as joint lead arranger", etc.
+const _ROLE_SUFFIX_RE  = /[,\s]+as\s+(?:(?:joint|lead|administrative|collateral|book(?:running)?|co-?)\s+)*(?:agent|arranger|lender|manager|trustee|bookrunner|borrower|obligor|guarantor)\b.*/i;
+const _LEADING_PREP_RE = /^(?:with|by|from|and|the|each|any|a)\s+/i;
+// Pure corporate-suffix fragments left after role-strip: "INC.", "PLC", "Corp.", etc.
+const _PURE_SUFFIX_RE  = /^(?:INC\.?|PLC\.?|Corp\.?|Corporation|LLC\.?|L\.L\.C\.?|N\.A\.?|Ltd\.?|Limited|LP|LLP)\s*[,;.]?\s*$/i;
+// Financial-entity suffix that marks the rightmost end of a proper name
+const _FIN_ENTITY_RE   = /\b(?:Bank(?:\s+(?:N\.?A\.?|PLC|AG|SA|Corp\.?|Limited))?|N\.A\.|PLC|AG|LLC|L\.L\.C\.|LP|LLP|Inc\.?|Corp\.?|Ltd\.?|Limited|Capital(?:\s+(?:Group|Markets|Partners))?|Financial(?:\s+(?:Group|Corp))?|Securities(?:\s+LLC)?|Trust(?:\s+Company)?|Bancorp|Banque)\b/gi;
+
+function cleanLenderName(raw: string): string | null {
+  let name = raw.trim();
+
+  // 1. Strip leading partial-word fragment (window slice started mid-word → lowercase)
+  if (/^[a-z]/.test(name)) {
+    const sp = name.indexOf(' ');
+    if (sp === -1) return null;
+    name = name.slice(sp + 1).trim();
+  }
+
+  // 2. Strip leading prepositions ("with Fortis Capital" → "Fortis Capital")
+  name = name.replace(_LEADING_PREP_RE, '').trim();
+
+  // 3. Reject if still lowercase-leading
+  if (/^[a-z]/.test(name)) return null;
+
+  // 4. Hard-reject non-entity boilerplate
+  if (_REJECT_NAME_RE.test(name)) return null;
+
+  // 5. Strip trailing " as [role]..." fragments captured by the greedy regex
+  name = name.replace(_ROLE_SUFFIX_RE, '').trim();
+  name = name.replace(/[,;.\s]+$/, '').trim();
+
+  // 5b. Reject pure corporate-suffix leftovers (e.g. "INC.", "PLC" after strip)
+  if (_PURE_SUFFIX_RE.test(name)) return null;
+
+  // 6. Short and plausible — return as-is (tightened to ≤65 to catch multi-entity strings)
+  if (name.length >= 3 && name.length <= 65 && /^[A-Z]/.test(name)) {
+    return name;
+  }
+
+  // 7. Long string (multi-entity capture) — extract last clean entity ending at
+  //    a financial suffix by splitting on hard delimiters between entities.
+  const suffixHits = [...name.matchAll(new RegExp(_FIN_ENTITY_RE.source, 'gi'))];
+  if (suffixHits.length === 0) return null;
+
+  const last   = suffixHits[suffixHits.length - 1];
+  const endPos = (last.index ?? 0) + last[0].length;
+
+  const before = name.slice(0, last.index ?? 0);
+  const parts  = before
+    .split(/,\s*|\s+and\s+|\s*;\s*|\s+listed\s+|\s+named\s+|\s+therein\s*/)
+    .filter(p => /[A-Z]/.test(p));
+  const seg       = (parts[parts.length - 1] ?? '').trim();
+  const candidate = (seg ? seg + ' ' : '') + name.slice(last.index ?? 0, endPos);
+  const clean     = candidate.replace(/\s+/g, ' ').replace(/[,;.\s]+$/, '').trim();
+
+  if (clean.length < 3 || clean.length > 80) return null;
+  if (/^[^A-Z]/.test(clean))  return null;
+  if (_REJECT_NAME_RE.test(clean)) return null;
+
+  return clean;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
@@ -283,9 +356,11 @@ async function fetchAndExtractLenders(
         pattern.lastIndex = 0;
         let match;
         while ((match = pattern.exec(window)) !== null) {
-          const lenderName = match[1].trim().replace(/^[,\s]+|[,\s]+$/g, '');
-          const role       = match[2]?.trim() ?? 'lender';
-          if (lenderName.length < 3 || lenderName.length > 100) continue;
+          const rawName    = match[1].trim().replace(/^[,\s]+|[,\s]+$/g, '');
+          const lenderName = cleanLenderName(rawName);
+          if (!lenderName) continue;
+
+          const role = match[2]?.trim() ?? 'lender';
 
           const facilityType = FACILITY_PATTERNS.find(p => p.regex.test(window))?.type ?? null;
           lenders.push({
@@ -345,7 +420,8 @@ function maybeExtractFilingEntityAsLender(
              : 'lender';
 
   // Clean the entity name — strip stock tickers and CIK annotation
-  const cleanName = entityName.replace(/\s*\(CIK[^)]+\)/i, '').replace(/\s*\([A-Z,\s]+\)\s*$/, '').trim();
+  const rawEntityName = entityName.replace(/\s*\(CIK[^)]+\)/i, '').replace(/\s*\([A-Z,\s]+\)\s*$/, '').trim();
+  const cleanName = cleanLenderName(rawEntityName) ?? rawEntityName;
 
   return {
     name:          cleanName,

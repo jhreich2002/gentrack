@@ -33,6 +33,45 @@ const CONF_LABELS: Record<ConfidenceClass, string> = {
   possible:      'POSSIBLE',
 };
 
+// ── Role-tag chip ─────────────────────────────────────────────────────────────
+
+const ROLE_TAG_LABELS: Record<string, string> = {
+  debt_lender:          'Debt',
+  tax_equity:           'Tax Equity',
+  offtaker:             'Offtaker',
+  utility_counterparty: 'Utility',
+  gov_loan_guarantee:   'DOE Loan',
+  unknown:              '',
+};
+
+const ROLE_TAG_STYLES: Record<string, string> = {
+  debt_lender:          'bg-blue-900/40 text-blue-300',
+  tax_equity:           'bg-violet-900/40 text-violet-300',
+  offtaker:             'bg-teal-900/40 text-teal-300',
+  utility_counterparty: 'bg-slate-700 text-slate-400',
+  gov_loan_guarantee:   'bg-sky-900/40 text-sky-300',
+  unknown:              '',
+};
+
+function RoleTagChip({ tag }: { tag: string }) {
+  const label = ROLE_TAG_LABELS[tag] ?? '';
+  if (!label) return null;
+  return (
+    <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide ${ROLE_TAG_STYLES[tag] ?? 'bg-slate-700 text-slate-400'}`}>
+      {label}
+    </span>
+  );
+}
+
+function LoanStatusChip({ status }: { status: 'active' | 'likely_matured' | 'unknown' }) {
+  if (status !== 'likely_matured') return null;
+  return (
+    <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide bg-amber-900/40 text-amber-300 border border-amber-700/40">
+      Likely Matured
+    </span>
+  );
+}
+
 const SOURCE_ICONS: Record<string, string> = {
   ucc_scrape:     '📋',
   county_scrape:  '🏛',
@@ -262,9 +301,13 @@ const UCCPlantDetail: React.FC<Props> = ({ plant, onBack, onRun, onRunWithBudget
                             >
                               <div className="flex items-center justify-between">
                                 <span className="font-medium text-white text-sm">{link.lender_name}</span>
-                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${CONF_STYLES[group.cls]}`}>
-                                  {CONF_LABELS[group.cls]}
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <LoanStatusChip status={link.estimated_loan_status} />
+                                  <RoleTagChip tag={link.role_tag} />
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${CONF_STYLES[group.cls]}`}>
+                                    {CONF_LABELS[group.cls]}
+                                  </span>
+                                </div>
                               </div>
                               <p className="text-xs text-slate-400 mt-1 line-clamp-2">{link.evidence_summary}</p>
                               <div className="flex items-center gap-2 mt-1.5 text-xs text-slate-500">
