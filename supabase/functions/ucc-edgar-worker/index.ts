@@ -164,6 +164,15 @@ function cleanLenderName(raw: string): string | null {
   // 5b. Reject pure corporate-suffix leftovers (e.g. "INC.", "PLC" after strip)
   if (_PURE_SUFFIX_RE.test(name)) return null;
 
+  // 5c. Reject multi-entity strings where a complete company name (ending in a
+  //     corporate suffix or descriptor word) is joined by " and " to another
+  //     entity (e.g. "Edison International and JPMorgan Chase Bank, N.A",
+  //     "Inc., and Wells Fargo Bank, N.A"). Does NOT reject single entities
+  //     whose legal name contains " and " (e.g. "Credit Agricole Corporate and
+  //     Investment Bank") because those lack a corporate-suffix before "and".
+  const _MULTI_ENTITY_RE = /(?:Inc\.?|LLC|Ltd\.?|Limited|International|Corporation|Corp\.?|Company|Co\.?|Electric|Energy|Solar|Holdings|Group|Services|Power|N\.A\.?|PLC|AG|Agents|Issuers|Arrangers|Lenders|Participants|Borrowers)\s*(?:,\s+and\s+|\s+and\s+)[A-Z][A-Za-z\s\.&,]+/i;
+  if (_MULTI_ENTITY_RE.test(name)) return null;
+
   // 6. Short and plausible — return as-is (tightened to ≤65 to catch multi-entity strings)
   if (name.length >= 3 && name.length <= 65 && /^[A-Z]/.test(name)) {
     return name;
