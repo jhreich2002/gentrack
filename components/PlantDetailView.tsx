@@ -7,6 +7,7 @@ import { fetchPlantOwnership } from '../services/ownershipService';
 import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, callPlantSummarize, PlantSummaryResponse, semanticSearchPlantNews, SemanticSearchResult } from '../services/newsIntelService';
 import { fetchPlantFinancingSummary, PlantFinancingSummary, PlantLenderRow } from '../services/lenderService';
 import { getGlobalLatestMonth } from '../services/dataService';
+import LenderChatPanel from './lender-validation/LenderChatPanel';
 
 interface Props {
   plant: PowerPlant;
@@ -1041,6 +1042,12 @@ const PlantDetailView: React.FC<Props> = ({
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Financing & Lender Intelligence</h3>
               <p className="text-[10px] text-slate-600 mt-1">Sourced from Perplexity sonar-pro web search</p>
             </div>
+
+            <LenderChatPanel
+              scope="plant"
+              plantCode={plant.eiaPlantCode}
+              contextLabel={`${plant.name} (${plant.eiaPlantCode})`}
+            />
 
             {/* Loading state */}
             {loadingFinancing && (

@@ -45,7 +45,15 @@ verify_jwt = false
 verify_jwt = false
 [functions.embed-articles]
 verify_jwt = false
+[functions.embed-evidence]
+verify_jwt = false
 [functions.lender-analyze]
+verify_jwt = false
+[functions.lender-chat]
+verify_jwt = false
+[functions.lender-claim-agent]
+verify_jwt = false
+[functions.lender-claim-coordinator]
 verify_jwt = false
 [functions.lender-currency-agent]
 verify_jwt = false

@@ -14,7 +14,6 @@ import CoverPage from './components/CoverPage';
 import AdminPage from './components/AdminPage';
 import EntityDetailView from './components/EntityDetailView';
 import PlantPursuitsDashboard from './components/PlantPursuitsDashboard';
-import LenderPursuitsDashboard from './components/LenderPursuitsDashboard';
 import TaxEquityPursuitsDashboard from './components/TaxEquityPursuitsDashboard';
 import ArchivedPursuitsDashboard from './components/ArchivedPursuitsDashboard';
 import PipelineTourModal from './components/PipelineTourModal';
@@ -524,18 +523,8 @@ const App: React.FC = () => {
             {!sidebarCollapsed && <span className={`text-[10px] px-1.5 py-0.5 rounded ${activeTab === 'Watchlist' ? 'bg-amber-900/40 text-amber-100' : 'bg-slate-800 text-slate-500'}`}>{watchlist.length}</span>}
           </button>
           
-          <button
-            onClick={() => setView('lenders')}
-            title={sidebarCollapsed ? 'Lender Pursuits' : undefined}
-            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
-              view === 'lenders' || (view === 'entity' && selectedEntity?.type === 'lender')
-                ? 'bg-cyan-700 text-white shadow-lg shadow-cyan-900/20'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-            }`}
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" /></svg>
-            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Lender Pursuits</span>}
-          </button>
+          {/* Legacy "Lender Pursuits" entry removed — superseded by Pursuits sub-tab inside Lender Research.
+              Deep links to view='lenders' now redirect to view='lender-research'. */}
 
           <button
             onClick={() => setView('lender-research')}
@@ -910,10 +899,8 @@ const App: React.FC = () => {
         ) : (
           view === 'company' && selectedUltParent
             ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} onPlantClick={handlePlantClickFromCompany} initialTab={companyActiveTab} onTabChange={setCompanyActiveTab} />
-            : view === 'lender-research'
+            : view === 'lender-research' || view === 'lenders'
             ? <LenderResearchDashboard userRole={userRole} />
-            : view === 'lenders'
-            ? <LenderPursuitsDashboard onLenderClick={handleLenderClick} watchlist={watchlist} onToggleWatch={toggleWatch} />
             : view === 'taxequity'
             ? <TaxEquityPursuitsDashboard onInvestorClick={handleTaxEquityClick} watchlist={watchlist} onToggleWatch={toggleWatch} />
             : view === 'pursuits'
@@ -921,7 +908,7 @@ const App: React.FC = () => {
             : view === 'archived'
             ? <ArchivedPursuitsDashboard />
             : view === 'entity' && selectedEntity
-            ? <EntityDetailView entityName={selectedEntity.name} entityType={selectedEntity.type} onBack={() => setView(selectedEntity.type === 'lender' ? 'lenders' : 'taxequity')} onPlantClick={handlePlantClickFromEntity} />
+            ? <EntityDetailView entityName={selectedEntity.name} entityType={selectedEntity.type} onBack={() => setView(selectedEntity.type === 'lender' ? 'lender-research' : 'taxequity')} onPlantClick={handlePlantClickFromEntity} />
             : view === 'developers'
             ? <DeveloperListView onDeveloperClick={handleDeveloperClick} />
             : view === 'developer-detail' && selectedDeveloper
