@@ -352,7 +352,13 @@ const ToValidateTab: React.FC<Props> = ({ refreshKey = 0, onRefresh }) => {
                 {evidence.length === 0 ? (
                   <div className="text-sm text-slate-500 italic">No evidence on file for this plant + lender.</div>
                 ) : (
-                  evidence.map(ev => <EvidenceCard key={ev.id} evidence={ev} />)
+                  evidence.map(ev => (
+                    <EvidenceCard
+                      key={ev.id}
+                      evidence={ev}
+                      plantCode={selectedPlantCode ?? undefined}
+                    />
+                  ))
                 )}
               </div>
             </div>
