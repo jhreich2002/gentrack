@@ -118,6 +118,32 @@ export interface LenderEntitySuggestion {
   normalizedName: string;
 }
 
+function firstHttpUrlDeep(value: unknown): string | null {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const s = value.trim();
+    return /^https?:\/\//i.test(s) ? s : null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = firstHttpUrlDeep(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (/url|link|source/i.test(k) && typeof v === 'string') {
+        const s = v.trim();
+        if (/^https?:\/\//i.test(s)) return s;
+      }
+      const found = firstHttpUrlDeep(v);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Queue (To Validate tab)
 // ──────────────────────────────────────────────────────────────────────────────
@@ -256,7 +282,7 @@ export async function fetchPlantEvidenceForLender(
     return [];
   }
 
-  return (data as any[]).map(r => ({
+  const rows: PlantEvidenceRow[] = (data as any[]).map(r => ({
     id:                   Number(r.id),
     leadStatus:           r.lead_status as LeadStatus,
     evidenceType:         r.evidence_type as EvidenceType,
@@ -269,6 +295,79 @@ export async function fetchPlantEvidenceForLender(
     createdAt:            String(r.created_at ?? ''),
     legacyPlantLenderId:  r.legacy_plant_lender_id != null ? Number(r.legacy_plant_lender_id) : null,
   }));
+
+  const pairKey = `${plantCode}::${lenderNormalized}`;
+  const pairUrl = rows.find(r => !!r.sourceUrl)?.sourceUrl ?? null;
+
+  // Resolve missing links from related evidence stores so the UI surfaces
+  // source URLs automatically whenever we can prove one.
+  const missing = rows.filter(r => !r.sourceUrl);
+  if (missing.length === 0) return rows;
+
+  const legacyIds = Array.from(new Set(
+    missing.map(r => r.legacyPlantLenderId).filter((id): id is number => typeof id === 'number')
+  ));
+
+  const [
+    linksRes,
+    claimsRes,
+    docsRes,
+    legacyRes,
+  ] = await Promise.all([
+    supabase
+      .from('ucc_lender_links')
+      .select('source_url, created_at')
+      .eq('plant_code', plantCode)
+      .eq('lender_normalized', lenderNormalized)
+      .not('source_url', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1),
+    supabase
+      .from('lender_evidence_claims')
+      .select('source_url, created_at')
+      .eq('plant_code', plantCode)
+      .eq('lender_normalized', lenderNormalized)
+      .not('source_url', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1),
+    supabase
+      .from('lender_evidence_documents')
+      .select('url, created_at')
+      .eq('plant_code', plantCode)
+      .eq('lender_normalized', lenderNormalized)
+      .not('url', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1),
+    legacyIds.length > 0
+      ? supabase
+          .from('plant_lenders')
+          .select('id, source_url, source_evidence')
+          .in('id', legacyIds)
+      : Promise.resolve({ data: [], error: null } as any),
+  ]);
+
+  const linkUrl = (linksRes.data?.[0] as any)?.source_url as string | undefined;
+  const claimUrl = (claimsRes.data?.[0] as any)?.source_url as string | undefined;
+  const docUrl = (docsRes.data?.[0] as any)?.url as string | undefined;
+
+  const legacyMap = new Map<number, string>();
+  for (const row of (legacyRes.data ?? []) as any[]) {
+    const direct = typeof row.source_url === 'string' ? row.source_url : null;
+    const deep = firstHttpUrlDeep(row.source_evidence);
+    const resolved = direct || deep;
+    if (resolved) legacyMap.set(Number(row.id), resolved);
+  }
+
+  const resolvedForPair = pairUrl || linkUrl || claimUrl || docUrl || null;
+
+  return rows.map(r => {
+    if (r.sourceUrl) return r;
+    const legacyUrl = r.legacyPlantLenderId ? legacyMap.get(r.legacyPlantLenderId) : null;
+    return {
+      ...r,
+      sourceUrl: resolvedForPair || legacyUrl || null,
+    };
+  });
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

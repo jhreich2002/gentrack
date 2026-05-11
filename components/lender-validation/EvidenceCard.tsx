@@ -57,14 +57,11 @@ function safeHostname(url: string | null): string | null {
 
 interface Props {
   evidence: PlantEvidenceRow;
-  plantCode?: string;
 }
 
-const EvidenceCard: React.FC<Props> = ({ evidence, plantCode }) => {
+const EvidenceCard: React.FC<Props> = ({ evidence }) => {
   const ev = evidence;
   const host = safeHostname(ev.sourceUrl);
-  const fallbackQuery = [ev.lenderName, plantCode, 'project finance loan'].filter(Boolean).join(' ');
-  const fallbackUrl = `https://www.google.com/search?q=${encodeURIComponent(fallbackQuery)}`;
   return (
     <div className={`border rounded-lg p-3 ${EVIDENCE_COLORS[ev.evidenceType] ?? 'bg-slate-800/30 border-slate-700/30'}`}>
       <div className="flex items-center justify-between mb-2 gap-2">
@@ -95,18 +92,7 @@ const EvidenceCard: React.FC<Props> = ({ evidence, plantCode }) => {
           <span>{host ?? ev.sourceUrl}</span>
         </a>
       ) : (
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-slate-500 italic">No source URL recorded</span>
-          <a
-            href={fallbackUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-amber-300 hover:text-amber-200 underline"
-            title="Search public sources for this lender + plant"
-          >
-            Find source
-          </a>
-        </div>
+        <span className="text-xs text-slate-500 italic">No source URL recorded</span>
       )}
 
       {ev.leadStatus !== 'pending' && (
