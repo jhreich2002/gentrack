@@ -25,7 +25,7 @@ import AssetRegistryDetailView from './components/AssetRegistryDetailView';
 import type { DeveloperMapViewport } from './components/DeveloperAssetMap';
 import { fetchDevelopers, DeveloperRow } from './services/developerService';
 
-type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lenders' | 'lender-research' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail' | 'archived';
+type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lender-research' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail' | 'archived';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor' | 'data';
 
@@ -523,8 +523,7 @@ const App: React.FC = () => {
             {!sidebarCollapsed && <span className={`text-[10px] px-1.5 py-0.5 rounded ${activeTab === 'Watchlist' ? 'bg-amber-900/40 text-amber-100' : 'bg-slate-800 text-slate-500'}`}>{watchlist.length}</span>}
           </button>
           
-          {/* Legacy "Lender Pursuits" entry removed — superseded by Pursuits sub-tab inside Lender Research.
-              Deep links to view='lenders' now redirect to view='lender-research'. */}
+            {/* Legacy "Lender Pursuits" entry removed — superseded by Pursuits sub-tab inside Lender Research. */}
 
           <button
             onClick={() => setView('lender-research')}
@@ -539,31 +538,8 @@ const App: React.FC = () => {
             {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Lender Research</span>}
           </button>
 
-          <button
-            onClick={() => setView('taxequity')}
-            title={sidebarCollapsed ? 'Tax Equity Pursuits' : undefined}
-            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
-              view === 'taxequity' || (view === 'entity' && selectedEntity?.type === 'tax_equity')
-                ? 'bg-violet-700 text-white shadow-lg shadow-violet-900/20'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-            }`}
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Tax Equity Pursuits</span>}
-          </button>
-
-          <button
-            onClick={() => setView('pursuits')}
-            title={sidebarCollapsed ? 'Plant Pursuits' : undefined}
-            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
-              view === 'pursuits'
-                ? 'bg-emerald-700 text-white shadow-lg shadow-emerald-900/20'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-            }`}
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Plant Pursuits</span>}
-          </button>
+          {/* Tax Equity Pursuits — hidden */}
+          {/* Plant Pursuits — hidden */}
 
           <button
             onClick={() => setView('archived')}
@@ -580,18 +556,7 @@ const App: React.FC = () => {
             {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Archived Pursuits</span>}
           </button>
 
-          <button
-            onClick={() => setView('developers')}
-            title={sidebarCollapsed ? 'Developer Registry' : undefined}
-            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
-              view === 'developers' || view === 'developer-detail' || view === 'asset-detail'
-                ? 'bg-orange-700 text-white shadow-lg shadow-orange-900/20'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-            }`}
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
-            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Developer Registry</span>}
-          </button>
+          {/* Developer Registry — hidden */}
 
           <button
             onClick={() => { setActiveTab('Overview'); setView('dashboard'); }}
@@ -899,7 +864,7 @@ const App: React.FC = () => {
         ) : (
           view === 'company' && selectedUltParent
             ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} onPlantClick={handlePlantClickFromCompany} initialTab={companyActiveTab} onTabChange={setCompanyActiveTab} />
-            : view === 'lender-research' || view === 'lenders'
+            : view === 'lender-research'
             ? <LenderResearchDashboard userRole={userRole} />
             : view === 'taxequity'
             ? <TaxEquityPursuitsDashboard onInvestorClick={handleTaxEquityClick} watchlist={watchlist} onToggleWatch={toggleWatch} />

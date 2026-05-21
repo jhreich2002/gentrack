@@ -4,6 +4,7 @@ import {
   fetchValidatedPortfolio,
   fetchValidationAudit,
   setLenderPursuitTier,
+  revertLenderLink,
   ValidatedLender,
   ValidatedPortfolioRow,
   ValidationAuditEntry,
@@ -171,6 +172,7 @@ const LenderDetailDrawer: React.FC<DrawerProps> = ({ lender, onClose, onChanged 
   const [notes, setNotes] = useState(lender.notes ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reverting, setReverting] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -198,6 +200,15 @@ const LenderDetailDrawer: React.FC<DrawerProps> = ({ lender, onClose, onChanged 
     setSaving(false);
     if (!res.success) { setError(res.error ?? 'Failed'); return; }
     setTier(next);
+    onChanged();
+  }
+
+  async function handleRevert(linkId: number) {
+    setReverting(linkId);
+    const res = await revertLenderLink(linkId);
+    setReverting(null);
+    if (!res.success) { setError(res.error ?? 'Revert failed'); return; }
+    setPortfolio(prev => prev.filter(p => p.linkId !== linkId));
     onChanged();
   }
 
@@ -299,10 +310,19 @@ const LenderDetailDrawer: React.FC<DrawerProps> = ({ lender, onClose, onChanged 
                       {row.sourceUrl}
                     </a>
                   )}
-                  <div className="text-[10px] text-slate-500 italic">
-                    {latest
-                      ? <>Validated by {latest.reviewerEmail ?? 'unknown'} · {timeAgo(latest.timestamp)}</>
-                      : <>Validated {timeAgo(row.validatedAt)}</>}
+                  <div className="flex items-center justify-between mt-1.5">
+                    <div className="text-[10px] text-slate-500 italic">
+                      {latest
+                        ? <>Validated by {latest.reviewerEmail ?? 'unknown'} · {timeAgo(latest.timestamp)}</>
+                        : <>Validated {timeAgo(row.validatedAt)}</>}
+                    </div>
+                    <button
+                      onClick={() => handleRevert(row.linkId)}
+                      disabled={reverting === row.linkId}
+                      className="text-[10px] px-2 py-0.5 rounded border border-slate-600 text-slate-400 hover:border-amber-500 hover:text-amber-400 disabled:opacity-40 transition-colors"
+                    >
+                      {reverting === row.linkId ? 'Reverting…' : 'Revert to pending'}
+                    </button>
                   </div>
                 </div>
               );

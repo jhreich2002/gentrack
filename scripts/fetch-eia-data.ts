@@ -937,31 +937,8 @@ async function main() {
     console.log(`  ✓ Supabase sync complete`);
     console.log(`  ✓ Supabase max month advanced: ${beforeMaxMonth ?? 'none'} → ${afterMaxMonth}`);
 
-    // ── Trigger lender currency check (fire-and-forget) ──────────────────
-    // Runs after each successful EIA ingest to re-verify lender currency
-    // for any newly scored or changed plants. Non-fatal if it fails.
-    if (SUPABASE_URL && SUPABASE_KEY) {
-      const edgeUrl = `${SUPABASE_URL}/functions/v1/lender-currency-agent`;
-      try {
-        await fetch(edgeUrl, {
-          method:  'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            'Authorization': `Bearer ${SUPABASE_KEY}`,
-          },
-          body: JSON.stringify({
-            mode:          'eia_trigger',
-            offset:        0,
-            limit:         10,
-            budget_limit:  12.00,
-            force_recheck: false,
-          }),
-        });
-        console.log('  ✓ Triggered lender-currency-agent (EIA trigger)');
-      } catch (err) {
-        console.warn('  ⚠ lender-currency-agent trigger failed (non-fatal):', String(err));
-      }
-    }
+    // Legacy lender-currency-agent was retired in Phase 7.
+    // No follow-on lender trigger is executed from this script.
   } else {
     console.log('  ℹ Supabase credentials not set — skipping DB upsert (JSON only)');
   }

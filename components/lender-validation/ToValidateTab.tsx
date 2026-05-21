@@ -47,9 +47,9 @@ const ToValidateTab: React.FC<Props> = ({ refreshKey = 0, onRefresh }) => {
   const [queue, setQueue] = useState<ValidationQueueRow[]>([]);
   const [loadingQueue, setLoadingQueue] = useState(true);
   const [search, setSearch] = useState('');
-  const [minPlants, setMinPlants] = useState(2);
+  const [minPlants, setMinPlants] = useState(1);
   const [sort, setSort] = useState<'curtailed_mw' | 'pending_count' | 'name'>('curtailed_mw');
-  const [curtailedOnly, setCurtailedOnly] = useState(true);
+  const [curtailedOnly, setCurtailedOnly] = useState(false);
 
   // Selection
   const [selectedLender, setSelectedLender] = useState<ValidationQueueRow | null>(null);

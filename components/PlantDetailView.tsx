@@ -1057,8 +1057,8 @@ const PlantDetailView: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Not yet searched */}
-            {financingFetched && !financing && !loadingFinancing && (
+            {/* Not yet searched — only when no v4 lenders exist either */}
+            {financingFetched && !financing && financingLenders.length === 0 && !loadingFinancing && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center">
                 <p className="text-slate-500 text-sm font-semibold">Not yet searched</p>
                 <p className="text-slate-600 text-xs mt-1">This plant has not been processed by the lender-search pipeline yet.</p>
@@ -1076,7 +1076,61 @@ const PlantDetailView: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Lenders found */}
+            {/* v4 pipeline lenders — show whenever present, regardless of AI summary */}
+            {financingFetched && financingLenders.length > 0 && !loadingFinancing && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div className="px-5 py-3 border-b border-slate-800">
+                  <h4 className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Pipeline Lender Evidence</h4>
+                  <p className="text-[10px] text-slate-600 mt-0.5">From the v4 ingestion pipeline — pending human validation</p>
+                </div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-800/60">
+                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Party</th>
+                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Role</th>
+                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Confidence</th>
+                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {financingLenders.map((l, i) => (
+                      <tr key={i} className="border-b border-slate-800/30 last:border-b-0 hover:bg-slate-800/30 transition-colors">
+                        <td className="px-5 py-3">
+                          {l.sourceUrl ? (
+                            <a href={l.sourceUrl} target="_blank" rel="noopener noreferrer" onClick={(e: React.MouseEvent) => e.stopPropagation()} className="text-slate-200 font-semibold hover:text-blue-400 underline underline-offset-2 decoration-slate-600 hover:decoration-blue-400 transition-colors cursor-pointer">{l.lenderName}</a>
+                          ) : (
+                            <div className="text-slate-200 font-semibold">{l.lenderName}</div>
+                          )}
+                          {l.notes && <div className="text-[10px] text-slate-500 mt-0.5 leading-snug max-w-xs truncate" title={l.notes}>{l.notes.length > 80 ? l.notes.slice(0, 80) + '…' : l.notes}</div>}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-widest ${
+                            l.role === 'tax_equity'   ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
+                            l.role === 'lender'       ? 'text-sky-400 bg-sky-900/20 border-sky-700/30' :
+                            l.role === 'sponsor'      ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
+                            'text-slate-400 bg-slate-800/40 border-slate-700/30'
+                          }`}>{l.role.replace(/_/g, ' ')}</span>
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className={`text-[9px] font-bold uppercase ${
+                            l.confidence === 'high' ? 'text-green-400' : l.confidence === 'medium' ? 'text-amber-400' : 'text-slate-500'
+                          }`}>{l.confidence}</span>
+                        </td>
+                        <td className="px-5 py-3">
+                          {l.validationStatus === 'validated' || l.validationStatus === 'manual' ? (
+                            <span className="text-[9px] font-bold uppercase text-emerald-400">Confirmed</span>
+                          ) : (
+                            <span className="text-[9px] font-bold uppercase text-amber-400">Pending review</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Lenders found (AI summary) */}
             {financingFetched && financing?.lendersFound && !loadingFinancing && (
               <>
                 {/* AI Summary */}
@@ -1087,74 +1141,7 @@ const PlantDetailView: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* Financing Parties Table */}
-                {financingLenders.length > 0 && (
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                    <div className="px-5 py-3 border-b border-slate-800">
-                      <h4 className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Financing Parties</h4>
-                      {financingLenders.some(l => l.sourceUrl ?? financing.citations[0]?.url) && (
-                        <p className="text-[10px] text-slate-600 mt-0.5">Click a party name to view the supporting source</p>
-                      )}
-                    </div>
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-slate-800/60">
-                          <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Party</th>
-                          <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Role</th>
-                          <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Type</th>
-                          <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Confidence</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {financingLenders.map((l, i) => {
-                          // Use the per-lender source URL stored at ingest time;
-                          // fall back to the first summary citation if absent (older rows).
-                          const citationUrl = l.sourceUrl ?? financing.citations[0]?.url ?? null;
 
-                          return (
-                            <tr key={i} className="border-b border-slate-800/30 last:border-b-0 hover:bg-slate-800/30 transition-colors">
-                              <td className="px-5 py-3">
-                                {citationUrl ? (
-                                  <a
-                                    href={citationUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                                    className="text-slate-200 font-semibold hover:text-blue-400 underline underline-offset-2 decoration-slate-600 hover:decoration-blue-400 transition-colors cursor-pointer"
-                                  >
-                                    {l.lenderName}
-                                  </a>
-                                ) : (
-                                  <div className="text-slate-200 font-semibold">{l.lenderName}</div>
-                                )}
-                                {l.notes && <div className="text-[10px] text-slate-500 mt-0.5 leading-snug max-w-xs">{l.notes}</div>}
-                              </td>
-                              <td className="px-5 py-3">
-                                <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-widest ${
-                                  l.role === 'tax_equity'   ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
-                                  l.role === 'lender'       ? 'text-sky-400 bg-sky-900/20 border-sky-700/30' :
-                                  l.role === 'sponsor'      ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
-                                  l.role === 'co-investor'  ? 'text-amber-400 bg-amber-900/20 border-amber-700/30' :
-                                  'text-slate-400 bg-slate-800/40 border-slate-700/30'
-                                }`}>
-                                  {l.role.replace(/_/g, ' ')}
-                                </span>
-                              </td>
-                              <td className="px-5 py-3 text-slate-400 text-xs">{l.facilityType.replace(/_/g, ' ')}</td>
-                              <td className="px-5 py-3">
-                                <span className={`text-[9px] font-bold uppercase ${
-                                  l.confidence === 'high'   ? 'text-green-400' :
-                                  l.confidence === 'medium' ? 'text-amber-400' :
-                                  'text-slate-500'
-                                }`}>{l.confidence}</span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
 
                 {/* Citations — card style */}
                 {financing.citations.length > 0 && (

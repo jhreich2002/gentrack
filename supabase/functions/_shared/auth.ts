@@ -13,6 +13,8 @@
  * read the same value.
  */
 
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -53,6 +55,84 @@ export function checkInternalAuth(req: Request): Response | null {
       { status: 401, headers: { ...CORS, 'Content-Type': 'application/json' } },
     );
   }
+  return null;
+}
+
+function isJwtLike(token: string): boolean {
+  const parts = token.split('.');
+  return parts.length === 3;
+}
+
+/**
+ * Authorizes requests from either:
+ * 1) trusted server callers using INTERNAL_AUTH_TOKEN, or
+ * 2) browser callers using a Supabase user JWT where profiles.role = 'admin'.
+ */
+export async function checkInternalOrAdminAuth(req: Request): Promise<Response | null> {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: CORS });
+  }
+
+  const header = req.headers.get('Authorization') ?? '';
+  const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!presented) {
+    return new Response(
+      JSON.stringify({ error: 'unauthorized' }),
+      { status: 401, headers: { ...CORS, 'Content-Type': 'application/json' } },
+    );
+  }
+
+  const expected = Deno.env.get('INTERNAL_AUTH_TOKEN') ?? '';
+  if (expected && timingSafeEqual(presented, expected)) {
+    return null;
+  }
+
+  if (!isJwtLike(presented)) {
+    return new Response(
+      JSON.stringify({ error: 'unauthorized' }),
+      { status: 401, headers: { ...CORS, 'Content-Type': 'application/json' } },
+    );
+  }
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+  if (!supabaseUrl || !serviceRoleKey) {
+    return new Response(
+      JSON.stringify({ error: 'server_misconfigured', detail: 'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set' }),
+      { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } },
+    );
+  }
+
+  const sb = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
+
+  const { data: userData, error: userErr } = await sb.auth.getUser(presented);
+  if (userErr || !userData?.user) {
+    return new Response(
+      JSON.stringify({ error: 'unauthorized' }),
+      { status: 401, headers: { ...CORS, 'Content-Type': 'application/json' } },
+    );
+  }
+
+  const { data: profile, error: profileErr } = await sb
+    .from('profiles')
+    .select('role')
+    .eq('id', userData.user.id)
+    .single();
+
+  if (profileErr || !profile) {
+    return new Response(
+      JSON.stringify({ error: 'no_profile' }),
+      { status: 403, headers: { ...CORS, 'Content-Type': 'application/json' } },
+    );
+  }
+
+  if ((profile as { role?: string }).role !== 'admin') {
+    return new Response(
+      JSON.stringify({ error: 'not_admin' }),
+      { status: 403, headers: { ...CORS, 'Content-Type': 'application/json' } },
+    );
+  }
+
   return null;
 }
 

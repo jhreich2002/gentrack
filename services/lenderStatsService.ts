@@ -9,7 +9,7 @@
  *   fetchLenderStats      — single lender_stats row for EntityDetailView
  *   fetchLenderPlants     — plants financed by a given lender (from plant_lenders + plants)
  *   fetchEntityNews       — news articles matching an entity name (shared for lender + tax equity)
- *   callLenderAnalyze     — on-demand Gemini advisory briefing via lender-analyze edge function
+ *   callLenderAnalyze     — retired in v4 (returns null; briefing must come from cached stats)
  */
 
 import { supabase } from './supabaseClient';
@@ -92,28 +92,45 @@ export interface LenderPlant extends CompanyPlant {
 }
 
 export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant[]> {
-  const { data: lenderRows, error: lenderErr } = await supabase
-    .from('plant_lenders')
-    .select('eia_plant_code, facility_type, loan_amount_usd, interest_rate_text, maturity_text, maturity_date, loan_status')
-    .eq('lender_name', lenderName)
-    .in('confidence', ['high', 'medium']);
+  // v4: resolve canonical lender id by name
+  const { data: lender, error: lenderLookupErr } = await supabase
+    .from('lenders_canonical')
+    .select('id')
+    .eq('name', lenderName)
+    .maybeSingle();
 
-  if (lenderErr || !lenderRows || lenderRows.length === 0) {
-    console.error('fetchLenderPlants lender error:', lenderErr?.message);
+  if (lenderLookupErr) {
+    console.error('fetchLenderPlants lender lookup error:', lenderLookupErr.message);
+    return [];
+  }
+  if (!lender) return [];
+
+  // v4: validated lender_links for this canonical lender
+  const { data: linkRows, error: linkErr } = await supabase
+    .from('lender_links')
+    .select('plant_id')
+    .eq('canonical_lender_id', (lender as Record<string, unknown>).id)
+    .eq('validation_status', 'validated');
+
+  if (linkErr || !linkRows || linkRows.length === 0) {
+    if (linkErr) console.error('fetchLenderPlants links error:', linkErr.message);
     return [];
   }
 
-  const plantCodes = [...new Set(lenderRows.map(r => r.eia_plant_code))];
+  const plantIds = [...new Set((linkRows as { plant_id: string }[]).map(r => r.plant_id))];
 
   const [plantsResult, genResult] = await Promise.all([
     supabase
       .from('plants')
-      .select('eia_plant_code, name, state, region, nameplate_capacity_mw, ttm_avg_factor, curtailment_score, is_likely_curtailed, owner, fuel_source')
-      .in('eia_plant_code', plantCodes),
+      .select('id, eia_plant_code, name, state, nameplate_capacity_mw, ttm_avg_factor, curtailment_score, is_likely_curtailed, owner, fuel_source')
+      .in('id', plantIds),
     supabase
       .from('monthly_generation')
       .select('plant_id, month, mwh')
-      .in('plant_id', plantCodes)
+      .in('plant_id', plantIds.map(id => {
+        // monthly_generation uses eia_plant_code; derive it from plant id (EIA-XXXXX → XXXXX)
+        return String(id).replace(/^EIA-/i, '');
+      }))
       .gte('month', (() => {
         const d = new Date();
         d.setMonth(d.getMonth() - 3);
@@ -127,7 +144,7 @@ export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant
   }
 
   const plantMap = new Map<string, Record<string, unknown>>();
-  for (const p of plantsResult.data ?? []) plantMap.set(p.eia_plant_code, p);
+  for (const p of plantsResult.data ?? []) plantMap.set((p as Record<string, unknown>).id as string, p);
 
   // Build recent-generation map for cfTrend computation
   const genByPlant = new Map<string, { totalMwh: number; months: number }>();
@@ -139,27 +156,28 @@ export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant
     genByPlant.set(r.plant_id, entry);
   }
 
-  // One row per lender-plant relationship (may have multiple facilities per plant)
-  return lenderRows.map(r => {
-    const p = plantMap.get(r.eia_plant_code);
+  // One row per validated lender_link → plant
+  return linkRows.map((r: { plant_id: string }) => {
+    const p = plantMap.get(r.plant_id);
     const nameplateMw   = Number(p?.nameplate_capacity_mw) || 0;
     const ttmAvgFactor  = Number(p?.ttm_avg_factor) || 0;
+    const eiaCode       = (p?.eia_plant_code as string) ?? String(r.plant_id).replace(/^EIA-/i, '');
 
     // Compute cfTrend: positive = recent CF below TTM avg (degrading)
     let cfTrend: number | null = null;
-    const gen = genByPlant.get(r.eia_plant_code);
+    const gen = genByPlant.get(eiaCode);
     if (gen && gen.months > 0 && nameplateMw > 0 && ttmAvgFactor > 0) {
       const recentCf = (gen.totalMwh / gen.months) / (nameplateMw * 730);
       cfTrend = (ttmAvgFactor - recentCf) / ttmAvgFactor;
     }
 
     return {
-      eiaPlantCode:      r.eia_plant_code,
-      plantName:         (p?.name as string) ?? r.eia_plant_code,
+      eiaPlantCode:      eiaCode,
+      plantName:         (p?.name as string) ?? r.plant_id,
       plantKey:          null,
       techType:          null,
       state:             (p?.state as string) ?? null,
-      region:            (p?.region as string) ?? null,
+      region:            null,
       nameplateMw,
       ttmAvgFactor,
       curtailmentScore:  Number(p?.curtailment_score) || 0,
@@ -168,12 +186,12 @@ export async function fetchLenderPlants(lenderName: string): Promise<LenderPlant
       ownStatus:         null,
       ppaCounterparty:   null,
       ppaExpirationDate: null,
-      facilityType:      r.facility_type,
-      loanAmountUsd:     r.loan_amount_usd != null ? Number(r.loan_amount_usd) : null,
-      interestRateText:  r.interest_rate_text ?? null,
-      maturityText:      r.maturity_text ?? null,
-      loanStatus:        (r.loan_status as import('../types').LoanStatus | null) ?? null,
-      maturityDate:      r.maturity_date ?? null,
+      facilityType:      'term_loan',
+      loanAmountUsd:     null,
+      interestRateText:  null,
+      maturityText:      null,
+      loanStatus:        null,
+      maturityDate:      null,
       ownerName:         (p?.owner as string) ?? null,
       fuelSource:        (p?.fuel_source as string) ?? null,
       cfTrend,
@@ -199,25 +217,39 @@ export async function fetchCoLenders(
 ): Promise<CoLender[]> {
   if (plantCodes.length === 0) return [];
 
+  // v4: resolve plant_ids from eia_plant_codes
+  const { data: plantIdRows, error: pidErr } = await supabase
+    .from('plants')
+    .select('id')
+    .in('eia_plant_code', plantCodes);
+
+  if (pidErr || !plantIdRows || plantIdRows.length === 0) {
+    if (pidErr) console.error('fetchCoLenders plant id lookup error:', pidErr.message);
+    return [];
+  }
+
+  const plantIds = (plantIdRows as { id: string }[]).map(p => p.id);
+
+  // v4: find all validated links for these plants, joined to canonical lender name
   const { data, error } = await supabase
-    .from('plant_lenders')
-    .select('lender_name, eia_plant_code, syndicate_role')
-    .in('eia_plant_code', plantCodes)
-    .neq('lender_name', lenderName)
-    .in('confidence', ['high', 'medium']);
+    .from('lender_links')
+    .select('plant_id, lenders_canonical!canonical_lender_id(name)')
+    .in('plant_id', plantIds)
+    .eq('validation_status', 'validated');
 
   if (error || !data) {
     console.error('fetchCoLenders error:', error?.message);
     return [];
   }
 
-  // Aggregate by lender_name
+  // Aggregate by canonical lender name
   const map = new Map<string, { plants: Set<string>; roles: Set<string> }>();
-  for (const row of data) {
-    const entry = map.get(row.lender_name) ?? { plants: new Set(), roles: new Set() };
-    entry.plants.add(row.eia_plant_code);
-    if (row.syndicate_role) entry.roles.add(row.syndicate_role);
-    map.set(row.lender_name, entry);
+  for (const row of data as Array<Record<string, unknown>>) {
+    const name = (row.lenders_canonical as Record<string, unknown>)?.name as string | undefined;
+    if (!name || name === lenderName) continue;
+    const entry = map.get(name) ?? { plants: new Set(), roles: new Set() };
+    entry.plants.add(row.plant_id as string);
+    map.set(name, entry);
   }
 
   return Array.from(map.entries())
@@ -277,29 +309,6 @@ export async function fetchEntityNews(
 export async function callLenderAnalyze(
   lenderName: string,
 ): Promise<EntityAnalysisResponse | null> {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-  const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-  if (!supabaseUrl) {
-    console.warn('callLenderAnalyze: VITE_SUPABASE_URL not set');
-    return null;
-  }
-
-  try {
-    const resp = await fetch(`${supabaseUrl}/functions/v1/lender-analyze`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(anonKey ? { Authorization: `Bearer ${anonKey}`, apikey: anonKey } : {}),
-      },
-      body: JSON.stringify({ lender_name: lenderName }),
-    });
-    if (!resp.ok) {
-      console.error('callLenderAnalyze HTTP', resp.status, await resp.text());
-      return null;
-    }
-    return (await resp.json()) as EntityAnalysisResponse;
-  } catch (err) {
-    console.error('callLenderAnalyze fetch error:', err);
-    return null;
-  }
+  console.warn(`callLenderAnalyze: retired endpoint (lender-analyze) for lender '${lenderName}'`);
+  return null;
 }

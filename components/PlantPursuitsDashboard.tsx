@@ -443,7 +443,7 @@ const PlantPursuitsDashboard: React.FC<Props> = ({ onPlantClick }) => {
             </p>
             <p className="text-sm mt-1">
               {plants.length === 0
-                ? 'Run the lender-search sweep to populate confirmed financing data.'
+                ? 'Run lender research from the Lender Research dashboard to populate confirmed financing data.'
                 : 'Adjust the search or filter criteria.'}
             </p>
           </div>

@@ -1,19 +1,23 @@
 import React, { useState } from 'react';
 import ToValidateTab from './lender-validation/ToValidateTab';
 import ValidatedTab from './lender-validation/ValidatedTab';
+import AdminResearchPanel from './lender-validation/AdminResearchPanel';
+import NotIdentifiedTab from './lender-validation/NotIdentifiedTab';
 
-type SubTab = 'to_validate' | 'validated';
+type SubTab = 'to_validate' | 'validated' | 'not_identified' | 'research';
 
 interface Props {
   userRole: 'admin' | 'analyst' | 'viewer';
 }
 
 const TABS: { id: SubTab; label: string; description: string }[] = [
-  { id: 'to_validate', label: 'To Validate',       description: 'Lenders with candidate plant evidence awaiting human review' },
-  { id: 'validated',   label: 'Validated Lenders', description: 'Confirmed lender → plant portfolios; tier HOT / WARM / COLD' },
+  { id: 'to_validate',    label: 'To Validate',       description: 'Lenders with candidate plant evidence awaiting human review' },
+  { id: 'validated',      label: 'Validated Lenders', description: 'Confirmed lender → plant portfolios; tier HOT / WARM / COLD' },
+  { id: 'not_identified', label: 'Not Identified',    description: 'Plants where no lender was found — add a manually researched lender' },
+  { id: 'research',       label: 'Research',           description: 'Trigger lender research runs, monitor costs, re-run budget-exceeded plants' },
 ];
 
-const LenderResearchDashboard: React.FC<Props> = ({ userRole: _userRole }) => {
+const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
   const [tab, setTab] = useState<SubTab>('to_validate');
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -56,6 +60,12 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole: _userRole }) => {
         )}
         {tab === 'validated' && (
           <ValidatedTab refreshKey={refreshKey} onRefresh={triggerRefresh} />
+        )}
+        {tab === 'not_identified' && (
+          <NotIdentifiedTab refreshKey={refreshKey} onRefresh={triggerRefresh} />
+        )}
+        {tab === 'research' && (
+          <AdminResearchPanel onRefresh={triggerRefresh} />
         )}
       </div>
     </div>

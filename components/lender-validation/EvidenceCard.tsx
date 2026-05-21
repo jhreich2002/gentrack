@@ -8,6 +8,7 @@ import {
 const EVIDENCE_LABELS: Record<EvidenceType, string> = {
   edgar_loan:      'SEC EDGAR (loan)',
   edgar:           'SEC EDGAR',
+  edgar_filing:    'SEC EDGAR Filing',
   direct_filing:   'UCC State Filing',
   county_record:   'County Recorder',
   sponsor_pattern: 'Sponsor Pattern',
@@ -25,6 +26,7 @@ const EVIDENCE_LABELS: Record<EvidenceType, string> = {
 const EVIDENCE_COLORS: Record<EvidenceType, string> = {
   edgar_loan:      'bg-blue-900/30 text-blue-300 border-blue-700/40',
   edgar:           'bg-blue-900/30 text-blue-300 border-blue-700/40',
+  edgar_filing:    'bg-blue-900/30 text-blue-300 border-blue-700/40',
   direct_filing:   'bg-emerald-900/30 text-emerald-300 border-emerald-700/40',
   county_record:   'bg-emerald-900/30 text-emerald-300 border-emerald-700/40',
   sponsor_pattern: 'bg-amber-900/30 text-amber-300 border-amber-700/40',
@@ -54,6 +56,17 @@ function safeHostname(url: string | null): string | null {
     return null;
   }
 }
+
+/** For SEC EDGAR sources, returns "SEC EDGAR · YYYY" using the filing date. */
+function edgarLinkLabel(evidenceDate: string | null): string {
+  if (evidenceDate) {
+    const year = evidenceDate.slice(0, 4);
+    if (/^\d{4}$/.test(year)) return `SEC EDGAR \u00b7 ${year}`;
+  }
+  return 'SEC EDGAR';
+}
+
+const EDGAR_TYPES = new Set<EvidenceType>(['edgar', 'edgar_loan', 'edgar_filing']);
 
 interface Props {
   evidence: PlantEvidenceRow;
@@ -89,7 +102,11 @@ const EvidenceCard: React.FC<Props> = ({ evidence }) => {
           <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>
-          <span>{host ?? ev.sourceUrl}</span>
+          <span>
+            {EDGAR_TYPES.has(ev.evidenceType)
+              ? edgarLinkLabel(ev.evidenceDate)
+              : (host ?? ev.sourceUrl)}
+          </span>
         </a>
       ) : (
         <span className="text-xs text-slate-500 italic">No source URL recorded</span>

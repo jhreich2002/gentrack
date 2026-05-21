@@ -4,7 +4,7 @@
  * Fetches financing/lender articles from news_articles (pipeline = 'financing')
  * and generates AI financing summaries. Populated by the lender-ingest edge function.
  *
- * Also fetches Perplexity-sourced financing data from plant_financing_summary + plant_lenders.
+ * Also fetches validated lender data from the v4 lender pipeline (v_plant_financing).
  */
 
 import { supabase } from './supabaseClient';
@@ -24,6 +24,7 @@ export interface PlantLenderRow {
   confidence:          string;
   notes:               string | null;
   loanStatus:          'active' | 'matured' | 'refinanced' | 'unknown' | null;
+  validationStatus:    'pending' | 'validated' | 'manual' | 'rejected';  // v4 pipeline status
   currencyConfidence:  number | null;
   currencyReasoning:   string | null;
   currencyCheckedAt:   string | null;
@@ -44,27 +45,49 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
   financing: PlantFinancingSummary | null;
   lenders:   PlantLenderRow[];
 }> {
-  const [summaryRes, lendersRes] = await Promise.all([
+  // v4: resolve plant_id from eia_plant_code
+  const plantIdRes = await supabase
+    .from('plants')
+    .select('id')
+    .eq('eia_plant_code', eiaPlantCode)
+    .single();
+  const plantId = plantIdRes.data ? String((plantIdRes.data as any).id) : null;
+
+  // Step 1: fetch summary + raw links in parallel
+  const [summaryRes, linksRes] = await Promise.all([
     supabase
       .from('plant_financing_summary')
       .select('summary, citations, lenders_found, searched_at')
       .eq('eia_plant_code', eiaPlantCode)
       .maybeSingle(),
-    supabase
-      .from('plant_lenders')
-      .select(`
-        lender_name, role, facility_type, confidence, notes,
-        loan_status, currency_confidence, currency_reasoning,
-        currency_checked_at, currency_source,
-        maturity_date, financial_close_date, refinanced_at,
-        syndicate_role, pitch_angle, pitch_angle_reasoning,
-        pitch_urgency_score, source_count, source_url
-      `)
-      .eq('eia_plant_code', eiaPlantCode)
-      .in('confidence', ['high', 'medium'])
-      .order('loan_status', { ascending: true, nullsFirst: false })
-      .order('confidence', { ascending: true }),
+    plantId
+      ? supabase
+          .from('lender_links')
+          .select('canonical_lender_id, primary_claim_id, validation_status, validated_at')
+          .eq('plant_id', plantId)
+          .neq('validation_status', 'rejected')
+      : Promise.resolve({ data: [], error: null }),
   ]);
+
+  const rawLinks: any[] = (linksRes as any).data ?? [];
+
+  // Step 2: resolve canonical names + claims in parallel
+  const canonicalIds = Array.from(new Set(rawLinks.map((l: any) => l.canonical_lender_id).filter(Boolean)));
+  const claimIds     = Array.from(new Set(rawLinks.map((l: any) => l.primary_claim_id).filter(Boolean)));
+
+  const [canonicalRes, claimsRes] = await Promise.all([
+    canonicalIds.length > 0
+      ? supabase.from('lenders_canonical').select('id, name').in('id', canonicalIds)
+      : Promise.resolve({ data: [], error: null }),
+    claimIds.length > 0
+      ? supabase.from('lender_research_claims').select('id, loan_status, role_tag, source_url, quote, confidence').in('id', claimIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  const canonicalMap = new Map<string, string>();
+  for (const c of (canonicalRes as any).data ?? []) canonicalMap.set(String(c.id), String(c.name ?? ''));
+  const claimMap = new Map<number, any>();
+  for (const c of (claimsRes as any).data ?? []) claimMap.set(Number(c.id), c);
 
   const row = summaryRes.data;
   const financing: PlantFinancingSummary | null = row ? {
@@ -74,27 +97,34 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
     searchedAt:   row.searched_at ?? null,
   } : null;
 
-  const lenders: PlantLenderRow[] = (lendersRes.data ?? []).map((r: Record<string, unknown>) => ({
-    lenderName:          r.lender_name as string,
-    role:                r.role as string,
-    facilityType:        r.facility_type as string,
-    confidence:          r.confidence as string,
-    notes:               (r.notes as string | null) ?? null,
-    loanStatus:          (r.loan_status as PlantLenderRow['loanStatus']) ?? null,
-    currencyConfidence:  r.currency_confidence != null ? Number(r.currency_confidence) : null,
-    currencyReasoning:   (r.currency_reasoning as string | null) ?? null,
-    currencyCheckedAt:   (r.currency_checked_at as string | null) ?? null,
-    currencySource:      (r.currency_source as string | null) ?? null,
-    maturityDate:        (r.maturity_date as string | null) ?? null,
-    financialCloseDate:  (r.financial_close_date as string | null) ?? null,
-    refinancedAt:        (r.refinanced_at as string | null) ?? null,
-    syndicateRole:       (r.syndicate_role as string | null) ?? null,
-    pitchAngle:          (r.pitch_angle as string | null) ?? null,
-    pitchAngleReasoning: (r.pitch_angle_reasoning as string | null) ?? null,
-    pitchUrgencyScore:   r.pitch_urgency_score != null ? Number(r.pitch_urgency_score) : null,
-    sourceCount:         r.source_count != null ? Number(r.source_count) : null,
-    sourceUrl:           (r.source_url as string | null) ?? null,
-  }));
+  const lenders: PlantLenderRow[] = rawLinks.map((r: any) => {
+    const claim = claimMap.get(Number(r.primary_claim_id)) ?? {};
+    const name  = canonicalMap.get(String(r.canonical_lender_id)) ?? '';
+    const vs    = String(r.validation_status ?? 'pending') as PlantLenderRow['validationStatus'];
+    const conf  = Number(claim.confidence ?? 0.7);
+    return {
+      lenderName:          name,
+      role:                String(claim.role_tag ?? 'debt_lender'),
+      facilityType:        'term_loan',
+      confidence:          conf >= 0.75 ? 'high' : 'medium',
+      notes:               (claim.quote as string | null) ?? null,
+      loanStatus:          (claim.loan_status as PlantLenderRow['loanStatus']) ?? null,
+      validationStatus:    vs,
+      currencyConfidence:  null,
+      currencyReasoning:   null,
+      currencyCheckedAt:   null,
+      currencySource:      null,
+      maturityDate:        null,
+      financialCloseDate:  null,
+      refinancedAt:        null,
+      syndicateRole:       null,
+      pitchAngle:          null,
+      pitchAngleReasoning: null,
+      pitchUrgencyScore:   null,
+      sourceCount:         1,
+      sourceUrl:           (claim.source_url as string | null) ?? null,
+    };
+  });
 
   return { financing, lenders };
 }
@@ -144,35 +174,17 @@ export async function fetchPlantFinancingArticles(eiaPlantCode: string): Promise
   }));
 }
 
-export async function fetchLenderCurrencyStatus(lenderName: string): Promise<{
-  activePlants:   string[];
-  maturedPlants:  string[];
+/** @deprecated plant_lenders table was removed in v4. Returns empty placeholder. */
+export async function fetchLenderCurrencyStatus(_lenderName: string): Promise<{
+  activePlants:    string[];
+  maturedPlants:   string[];
   refinancedPlants: string[];
-  unknownPlants:  string[];
-  lastChecked:    string | null;
-  avgConfidence:  number | null;
+  unknownPlants:   string[];
+  lastChecked:     string | null;
+  avgConfidence:   number | null;
 }> {
-  const { data, error } = await supabase
-    .from('plant_lenders')
-    .select('eia_plant_code, loan_status, currency_confidence, currency_checked_at')
-    .eq('lender_name', lenderName)
-    .in('confidence', ['high', 'medium']);
-
-  const empty = { activePlants: [], maturedPlants: [], refinancedPlants: [], unknownPlants: [], lastChecked: null, avgConfidence: null };
-  if (error || !data) return empty;
-
-  const rows = data as { eia_plant_code: string; loan_status: string | null; currency_confidence: number | null; currency_checked_at: string | null }[];
-  const confidences = rows.map(r => r.currency_confidence).filter((c): c is number => c != null);
-  const checkedDates = rows.map(r => r.currency_checked_at).filter((d): d is string => d != null).sort().reverse();
-
-  return {
-    activePlants:    rows.filter(r => r.loan_status === 'active').map(r => r.eia_plant_code),
-    maturedPlants:   rows.filter(r => r.loan_status === 'matured').map(r => r.eia_plant_code),
-    refinancedPlants: rows.filter(r => r.loan_status === 'refinanced').map(r => r.eia_plant_code),
-    unknownPlants:   rows.filter(r => !r.loan_status || r.loan_status === 'unknown').map(r => r.eia_plant_code),
-    lastChecked:     checkedDates[0] ?? null,
-    avgConfidence:   confidences.length > 0 ? confidences.reduce((a, b) => a + b, 0) / confidences.length : null,
-  };
+  console.warn('fetchLenderCurrencyStatus: plant_lenders removed in v4 — returning empty');
+  return { activePlants: [], maturedPlants: [], refinancedPlants: [], unknownPlants: [], lastChecked: null, avgConfidence: null };
 }
 
 export async function callFinancingSummarize(

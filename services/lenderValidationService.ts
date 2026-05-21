@@ -30,6 +30,7 @@ export type EvidenceType =
   | 'doe_lpo'
   | 'ferc'
   | 'edgar_loan'
+  | 'edgar_filing'
   | 'manual'
   | 'direct_filing'
   | 'county_record'
@@ -42,17 +43,20 @@ export type LenderTier = 'hot' | 'warm' | 'cold';
 export type LenderResolution = 'pending' | 'validated' | 'no_lender_identifiable' | 'manual';
 
 export interface ValidationQueueRow {
-  lenderNormalized: string;
+  canonicalLenderId: string;  // uuid
   lenderName: string;
   pendingCount: number;
   pendingPlantCount: number;
   curtailedPlantCount: number;
   curtailedMw: number;
   lastLeadAt: string | null;
+  /** v3 compat alias — use canonicalLenderId for new code */
+  lenderNormalized: string;
 }
 
 export interface CandidatePlant {
-  plantCode: string;
+  plantId: string;        // v4: plants.id is TEXT
+  plantCode: string;      // eia_plant_code
   plantName: string | null;
   state: string | null;
   fuelSource: string | null;
@@ -65,20 +69,24 @@ export interface CandidatePlant {
 
 export interface PlantEvidenceRow {
   id: number;
+  /** v4: this is a lender_links.id (bigint). leadStatus maps to validation_status */
   leadStatus: LeadStatus;
   evidenceType: EvidenceType;
   confidenceClass: ConfidenceClass;
   evidenceSummary: string | null;
   sourceUrl: string | null;
+  evidenceDate: string | null;  // ISO date of the filing / article
   lenderName: string | null;
   lenderNormalized: string | null;
   runId: string | null;
   createdAt: string;
   legacyPlantLenderId: number | null;
+  loanStatus: string | null;
+  roleTag: string | null;
 }
 
 export interface ValidatedLender {
-  lenderNormalized: string;
+  canonicalLenderId: string;  // uuid
   lenderName: string;
   validatedPlantCount: number;
   curtailedPlantCount: number;
@@ -88,10 +96,13 @@ export interface ValidatedLender {
   tierSetAt: string | null;
   notes: string | null;
   promotedAt: string | null;
+  /** v3 compat alias */
+  lenderNormalized: string;
 }
 
 export interface ValidatedPortfolioRow {
   linkId: number;
+  plantId: string;
   plantCode: string;
   plantName: string | null;
   state: string | null;
@@ -103,6 +114,8 @@ export interface ValidatedPortfolioRow {
   evidenceSummary: string | null;
   sourceUrl: string | null;
   validatedAt: string | null;
+  loanStatus: string | null;
+  roleTag: string | null;
 }
 
 export interface ValidationAuditEntry {
@@ -113,7 +126,7 @@ export interface ValidationAuditEntry {
 }
 
 export interface LenderEntitySuggestion {
-  id: number;
+  id: string | number;  // v4: uuid string; v3 compat: number
   entityName: string;
   normalizedName: string;
 }
@@ -158,9 +171,10 @@ export interface QueueOptions {
 export async function fetchLenderValidationQueue(opts: QueueOptions = {}): Promise<ValidationQueueRow[]> {
   const { minPlants = 2, curtailedOnly = true, search, sort = 'curtailed_mw' } = opts;
 
+  // v4 view: canonical_lender_id (uuid), lender_name, pending_count, pending_plant_count, curtailed_plant_count, curtailed_mw, last_lead_at
   const { data, error } = await supabase
     .from('v_lender_validation_queue')
-    .select('lender_normalized, lender_name, pending_count, pending_plant_count, curtailed_plant_count, curtailed_mw, last_lead_at');
+    .select('canonical_lender_id, lender_name, pending_count, pending_plant_count, curtailed_plant_count, curtailed_mw, last_lead_at');
 
   if (error || !data) {
     console.error('fetchLenderValidationQueue:', error?.message);
@@ -168,13 +182,15 @@ export async function fetchLenderValidationQueue(opts: QueueOptions = {}): Promi
   }
 
   let rows: ValidationQueueRow[] = data.map((r: any) => ({
-    lenderNormalized:    String(r.lender_normalized ?? ''),
-    lenderName:          String(r.lender_name ?? r.lender_normalized ?? ''),
+    canonicalLenderId:   String(r.canonical_lender_id ?? ''),
+    lenderName:          String(r.lender_name ?? ''),
     pendingCount:        Number(r.pending_count) || 0,
     pendingPlantCount:   Number(r.pending_plant_count) || 0,
     curtailedPlantCount: Number(r.curtailed_plant_count) || 0,
     curtailedMw:         Number(r.curtailed_mw) || 0,
     lastLeadAt:          (r.last_lead_at as string | null) ?? null,
+    // v3 compat
+    lenderNormalized:    String(r.canonical_lender_id ?? ''),
   }));
 
   rows = rows.filter(r => {
@@ -186,7 +202,7 @@ export async function fetchLenderValidationQueue(opts: QueueOptions = {}): Promi
     const q = search.toLowerCase();
     rows = rows.filter(r =>
       r.lenderName.toLowerCase().includes(q) ||
-      r.lenderNormalized.toLowerCase().includes(q));
+      r.canonicalLenderId.toLowerCase().includes(q));
   }
 
   rows.sort((a, b) => {
@@ -202,58 +218,59 @@ export async function fetchLenderValidationQueue(opts: QueueOptions = {}): Promi
 // Candidate plants for a single lender (To Validate detail panel)
 // ──────────────────────────────────────────────────────────────────────────────
 
-export async function fetchLenderCandidatePlants(lenderNormalized: string): Promise<CandidatePlant[]> {
-  const { data: leads, error: leadsErr } = await supabase
-    .from('ucc_lender_leads_unverified')
-    .select('plant_code, lead_status')
-    .eq('lender_normalized', lenderNormalized);
+export async function fetchLenderCandidatePlants(canonicalLenderId: string): Promise<CandidatePlant[]> {
+  // v4: lender_links groups by canonical_lender_id (uuid), joined to plants (integer id)
+  const { data: links, error: linksErr } = await supabase
+    .from('lender_links')
+    .select('plant_id, validation_status')
+    .eq('canonical_lender_id', canonicalLenderId);
 
-  if (leadsErr || !leads) {
-    console.error('fetchLenderCandidatePlants leads:', leadsErr?.message);
+  if (linksErr || !links) {
+    console.error('fetchLenderCandidatePlants links:', linksErr?.message);
     return [];
   }
 
-  const counts = new Map<string, number>();
-  for (const r of leads as any[]) {
-    if (r.lead_status === 'pending') {
-      counts.set(r.plant_code, (counts.get(r.plant_code) ?? 0) + 1);
-    } else if (!counts.has(r.plant_code)) {
-      counts.set(r.plant_code, 0);
+  const plantIds = Array.from(new Set((links as any[]).map(l => String(l.plant_id))));
+  if (plantIds.length === 0) return [];
+
+  const pendingMap = new Map<string, number>();
+  const resMap     = new Map<string, LenderResolution>();
+
+  for (const l of links as any[]) {
+    const pid = String(l.plant_id);
+    if (l.validation_status === 'pending') {
+      pendingMap.set(pid, (pendingMap.get(pid) ?? 0) + 1);
+    }
+    // Determine resolution: if any validated/manual link exists, use that
+    const existing = resMap.get(pid);
+    const vs = l.validation_status as string;
+    if (vs === 'validated' || vs === 'manual') {
+      resMap.set(pid, vs as LenderResolution);
+    } else if (vs === 'no_lender_identifiable') {
+      if (!existing || existing === 'pending') resMap.set(pid, 'no_lender_identifiable');
+    } else if (!existing) {
+      resMap.set(pid, 'pending');
     }
   }
-  const plantCodes = Array.from(counts.keys());
-  if (plantCodes.length === 0) return [];
 
-  const [{ data: plants }, { data: research }] = await Promise.all([
-    supabase
-      .from('plants')
-      .select('eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, is_likely_curtailed, distress_score')
-      .in('eia_plant_code', plantCodes),
-    supabase
-      .from('ucc_research_plants')
-      .select('plant_code, lender_resolution')
-      .in('plant_code', plantCodes),
-  ]);
+  const { data: plants } = await supabase
+    .from('plants')
+    .select('id, eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, is_likely_curtailed, distress_score')
+    .in('id', plantIds);
 
-  const plantMap = new Map<string, any>();
-  for (const p of (plants ?? []) as any[]) plantMap.set(p.eia_plant_code, p);
-  const resMap = new Map<string, LenderResolution>();
-  for (const r of (research ?? []) as any[]) {
-    resMap.set(r.plant_code, (r.lender_resolution as LenderResolution) ?? 'pending');
-  }
-
-  return plantCodes.map(code => {
-    const p = plantMap.get(code) ?? {};
+  return plantIds.map(pid => {
+    const p = (plants ?? []).find((x: any) => String(x.id) === pid) as any ?? {};
     return {
-      plantCode:         code,
+      plantId:           pid,
+      plantCode:         String(p.eia_plant_code ?? pid),
       plantName:         (p.name as string | null) ?? null,
       state:             (p.state as string | null) ?? null,
       fuelSource:        (p.fuel_source as string | null) ?? null,
       nameplateMw:       p.nameplate_capacity_mw != null ? Number(p.nameplate_capacity_mw) : null,
       isLikelyCurtailed: Boolean(p.is_likely_curtailed),
       distressScore:     p.distress_score != null ? Number(p.distress_score) : null,
-      pendingLeadCount:  counts.get(code) ?? 0,
-      resolution:        resMap.get(code) ?? 'pending',
+      pendingLeadCount:  pendingMap.get(pid) ?? 0,
+      resolution:        resMap.get(pid) ?? 'pending',
     };
   }).sort((a, b) => {
     if (a.pendingLeadCount !== b.pendingLeadCount) return b.pendingLeadCount - a.pendingLeadCount;
@@ -267,106 +284,95 @@ export async function fetchLenderCandidatePlants(lenderNormalized: string): Prom
 // ──────────────────────────────────────────────────────────────────────────────
 
 export async function fetchPlantEvidenceForLender(
-  plantCode: string,
-  lenderNormalized: string,
+  plantIdOrCode: string,
+  canonicalLenderId: string,
 ): Promise<PlantEvidenceRow[]> {
-  const { data, error } = await supabase
-    .from('ucc_lender_leads_unverified')
-    .select('id, lead_status, evidence_type, confidence_class, evidence_summary, source_url, lender_name, lender_normalized, run_id, created_at, legacy_plant_lender_id')
-    .eq('plant_code', plantCode)
-    .eq('lender_normalized', lenderNormalized)
-    .order('created_at', { ascending: false });
+  // Accept plants.id (TEXT) or eia_plant_code; both are strings.
+  // Try as-is first; if no rows, look up by eia_plant_code.
+  let plantId: string | null = plantIdOrCode;
+  {
+    const { data: p } = await supabase
+      .from('plants')
+      .select('id')
+      .eq('id', plantIdOrCode)
+      .maybeSingle();
+    if (!p) {
+      const { data: p2 } = await supabase
+        .from('plants')
+        .select('id')
+        .eq('eia_plant_code', plantIdOrCode)
+        .maybeSingle();
+      plantId = p2 ? String((p2 as any).id) : null;
+    }
+  }
+  if (plantId === null) return [];
 
-  if (error || !data) {
-    console.error('fetchPlantEvidenceForLender:', error?.message);
-    return [];
+  // Fetch all lender_links for this plant+lender pair (there may be one link with multiple claims)
+  const { data: links } = await supabase
+    .from('lender_links')
+    .select('id, validation_status, created_at, primary_claim_id')
+    .eq('plant_id', plantId)
+    .eq('canonical_lender_id', canonicalLenderId);
+
+  if (!links || links.length === 0) return [];
+
+  const linkIds = (links as any[]).map(l => Number(l.id));
+
+  // Fetch all evidence claims via lender_link_evidence join
+  const { data: evidenceJoin } = await supabase
+    .from('lender_link_evidence')
+    .select('link_id, claim_id')
+    .in('link_id', linkIds);
+
+  const claimIds = Array.from(new Set((evidenceJoin ?? []).map((e: any) => Number(e.claim_id))));
+
+  let claimsMap = new Map<number, any>();
+  if (claimIds.length > 0) {
+    const { data: claims } = await supabase
+      .from('lender_research_claims')
+      .select('id, raw_lender_name, quote, source_url, source_type, evidence_date, loan_status, role_tag, confidence, session_id, created_at')
+      .in('id', claimIds);
+
+    for (const c of (claims ?? []) as any[]) claimsMap.set(Number(c.id), c);
   }
 
-  const rows: PlantEvidenceRow[] = (data as any[]).map(r => ({
-    id:                   Number(r.id),
-    leadStatus:           r.lead_status as LeadStatus,
-    evidenceType:         r.evidence_type as EvidenceType,
-    confidenceClass:      r.confidence_class as ConfidenceClass,
-    evidenceSummary:      (r.evidence_summary as string | null) ?? null,
-    sourceUrl:            (r.source_url as string | null) ?? null,
-    lenderName:           (r.lender_name as string | null) ?? null,
-    lenderNormalized:     (r.lender_normalized as string | null) ?? null,
-    runId:                (r.run_id as string | null) ?? null,
-    createdAt:            String(r.created_at ?? ''),
-    legacyPlantLenderId:  r.legacy_plant_lender_id != null ? Number(r.legacy_plant_lender_id) : null,
-  }));
+  // Build PlantEvidenceRow per link (one row per link, using primary_claim for evidence details)
+  return (links as any[]).map(link => {
+    const primaryClaim = claimsMap.get(Number(link.primary_claim_id)) ?? claimsMap.get(claimIds[0]) ?? null;
+    const vs: string = link.validation_status ?? 'pending';
+    const leadStatus: LeadStatus = vs === 'validated' ? 'validated'
+      : vs === 'rejected' ? 'rejected'
+      : vs === 'manual' ? 'validated'
+      : 'pending';
 
-  const pairKey = `${plantCode}::${lenderNormalized}`;
-  const pairUrl = rows.find(r => !!r.sourceUrl)?.sourceUrl ?? null;
+    // Derive evidence type from claim source_type
+    const sourceType = (primaryClaim?.source_type as string | null) ?? 'inferred';
+    const evidenceType: EvidenceType = (sourceType as EvidenceType);
 
-  // Resolve missing links from related evidence stores so the UI surfaces
-  // source URLs automatically whenever we can prove one.
-  const missing = rows.filter(r => !r.sourceUrl);
-  if (missing.length === 0) return rows;
+    // Derive confidence class from numeric confidence
+    const conf = Number(primaryClaim?.confidence ?? 0.5);
+    const confidenceClass: ConfidenceClass =
+      conf >= 0.9  ? 'confirmed'
+      : conf >= 0.75 ? 'high_confidence'
+      : conf >= 0.55 ? 'highly_likely'
+      : 'possible';
 
-  const legacyIds = Array.from(new Set(
-    missing.map(r => r.legacyPlantLenderId).filter((id): id is number => typeof id === 'number')
-  ));
-
-  const [
-    linksRes,
-    claimsRes,
-    docsRes,
-    legacyRes,
-  ] = await Promise.all([
-    supabase
-      .from('ucc_lender_links')
-      .select('source_url, created_at')
-      .eq('plant_code', plantCode)
-      .eq('lender_normalized', lenderNormalized)
-      .not('source_url', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(1),
-    supabase
-      .from('lender_evidence_claims')
-      .select('source_url, created_at')
-      .eq('plant_code', plantCode)
-      .eq('lender_normalized', lenderNormalized)
-      .not('source_url', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(1),
-    supabase
-      .from('lender_evidence_documents')
-      .select('url, created_at')
-      .eq('plant_code', plantCode)
-      .eq('lender_normalized', lenderNormalized)
-      .not('url', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(1),
-    legacyIds.length > 0
-      ? supabase
-          .from('plant_lenders')
-          .select('id, source_url, source_evidence')
-          .in('id', legacyIds)
-      : Promise.resolve({ data: [], error: null } as any),
-  ]);
-
-  const linkUrl = (linksRes.data?.[0] as any)?.source_url as string | undefined;
-  const claimUrl = (claimsRes.data?.[0] as any)?.source_url as string | undefined;
-  const docUrl = (docsRes.data?.[0] as any)?.url as string | undefined;
-
-  const legacyMap = new Map<number, string>();
-  for (const row of (legacyRes.data ?? []) as any[]) {
-    const direct = typeof row.source_url === 'string' ? row.source_url : null;
-    const deep = firstHttpUrlDeep(row.source_evidence);
-    const resolved = direct || deep;
-    if (resolved) legacyMap.set(Number(row.id), resolved);
-  }
-
-  const resolvedForPair = pairUrl || linkUrl || claimUrl || docUrl || null;
-
-  return rows.map(r => {
-    if (r.sourceUrl) return r;
-    const legacyUrl = r.legacyPlantLenderId ? legacyMap.get(r.legacyPlantLenderId) : null;
     return {
-      ...r,
-      sourceUrl: resolvedForPair || legacyUrl || null,
-    };
+      id:                  Number(link.id),
+      leadStatus,
+      evidenceType,
+      confidenceClass,
+      evidenceSummary:     (primaryClaim?.quote as string | null) ?? null,
+      sourceUrl:           (primaryClaim?.source_url as string | null) ?? null,
+      evidenceDate:        (primaryClaim?.evidence_date as string | null) ?? null,
+      lenderName:          (primaryClaim?.raw_lender_name as string | null) ?? null,
+      lenderNormalized:    canonicalLenderId,
+      runId:               (primaryClaim?.session_id as string | null) ?? null,
+      createdAt:           String(link.created_at ?? ''),
+      legacyPlantLenderId: null,
+      loanStatus:          (primaryClaim?.loan_status as string | null) ?? null,
+      roleTag:             (primaryClaim?.role_tag as string | null) ?? null,
+    } satisfies PlantEvidenceRow;
   });
 }
 
@@ -375,83 +381,98 @@ export async function fetchPlantEvidenceForLender(
 // ──────────────────────────────────────────────────────────────────────────────
 
 export async function fetchValidatedLenders(): Promise<ValidatedLender[]> {
-  const [{ data: portfolio, error: pErr }, { data: pursuits, error: tErr }] = await Promise.all([
-    supabase
-      .from('v_validated_lender_portfolio')
-      .select('lender_normalized, lender_name, validated_plant_count, curtailed_plant_count, curtailed_mw, last_validated_at'),
-    supabase
-      .from('ucc_lender_pursuits')
-      .select('lender_normalized, lender_name, tier, tier_set_at, notes, promoted_at'),
-  ]);
+  // v4: v_validated_lender_portfolio has: canonical_lender_id, lender_name, tier, validated_plant_count, total_curtailed_mw, last_validated_at
+  // lender_pursuits has: canonical_lender_id, tier, notes, classified_at
+  const { data: portfolio, error: pErr } = await supabase
+    .from('v_validated_lender_portfolio')
+    .select('canonical_lender_id, lender_name, tier, validated_plant_count, total_curtailed_mw, last_validated_at');
 
   if (pErr) console.error('fetchValidatedLenders portfolio:', pErr.message);
-  if (tErr) console.error('fetchValidatedLenders pursuits:', tErr.message);
 
-  // Source list = every validated lender (v_validated_lender_portfolio is
-  // already scoped to human_approved=true). Pursuit metadata is layered on.
-  const tierMap = new Map<string, any>();
-  for (const r of (pursuits ?? []) as any[]) tierMap.set(r.lender_normalized, r);
-
-  return ((portfolio ?? []) as any[]).map(port => {
-    const t = tierMap.get(port.lender_normalized) ?? {};
-    return {
-      lenderNormalized:    String(port.lender_normalized),
-      lenderName:          String(port.lender_name ?? t.lender_name ?? port.lender_normalized),
-      validatedPlantCount: Number(port.validated_plant_count) || 0,
-      curtailedPlantCount: Number(port.curtailed_plant_count) || 0,
-      curtailedMw:         Number(port.curtailed_mw) || 0,
-      lastValidatedAt:     (port.last_validated_at as string | null) ?? null,
-      tier:                (t.tier as LenderTier | null) ?? null,
-      tierSetAt:           (t.tier_set_at as string | null) ?? null,
-      notes:               (t.notes as string | null) ?? null,
-      promotedAt:          (t.promoted_at as string | null) ?? null,
-    };
-  });
+  return ((portfolio ?? []) as any[]).map(port => ({
+    canonicalLenderId:   String(port.canonical_lender_id),
+    lenderName:          String(port.lender_name ?? port.canonical_lender_id),
+    validatedPlantCount: Number(port.validated_plant_count) || 0,
+    curtailedPlantCount: 0, // v4 view doesn't break this out — use total_curtailed_mw
+    curtailedMw:         Number(port.total_curtailed_mw) || 0,
+    lastValidatedAt:     (port.last_validated_at as string | null) ?? null,
+    tier:                (port.tier as LenderTier | null) ?? null,
+    tierSetAt:           null,
+    notes:               null,
+    promotedAt:          (port.last_validated_at as string | null) ?? null,
+    lenderNormalized:    String(port.canonical_lender_id),
+  }));
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Validated portfolio drawer (per-plant breakdown for one lender)
 // ──────────────────────────────────────────────────────────────────────────────
 
-export async function fetchValidatedPortfolio(lenderNormalized: string): Promise<ValidatedPortfolioRow[]> {
+export async function fetchValidatedPortfolio(canonicalLenderId: string): Promise<ValidatedPortfolioRow[]> {
+  // v4: lender_links + lender_research_claims via primary_claim_id + plants
   const { data: links, error: linksErr } = await supabase
-    .from('ucc_lender_links')
-    .select('id, plant_code, evidence_type, confidence_class, evidence_summary, source_url, updated_at, created_at')
-    .eq('lender_normalized', lenderNormalized)
-    .eq('human_approved', true);
+    .from('lender_links')
+    .select('id, plant_id, validation_status, validated_at, primary_claim_id')
+    .eq('canonical_lender_id', canonicalLenderId)
+    .in('validation_status', ['validated','manual']);
 
   if (linksErr || !links) {
     console.error('fetchValidatedPortfolio links:', linksErr?.message);
     return [];
   }
 
-  const codes = Array.from(new Set((links as any[]).map(l => l.plant_code as string)));
-  if (codes.length === 0) return [];
+  const plantIds = Array.from(new Set((links as any[]).map(l => String(l.plant_id))));
+  if (plantIds.length === 0) return [];
 
-  const { data: plants } = await supabase
-    .from('plants')
-    .select('eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, is_likely_curtailed')
-    .in('eia_plant_code', codes);
+  const claimIds = Array.from(new Set(
+    (links as any[]).map(l => l.primary_claim_id).filter(Boolean),
+  ));
+
+  const [{ data: plants }, { data: claims }] = await Promise.all([
+    supabase
+      .from('plants')
+      .select('id, eia_plant_code, name, state, fuel_source, nameplate_capacity_mw, is_likely_curtailed')
+      .in('id', plantIds),
+    claimIds.length > 0
+      ? supabase
+          .from('lender_research_claims')
+          .select('id, source_url, quote, source_type, confidence, loan_status, role_tag')
+          .in('id', claimIds)
+      : Promise.resolve({ data: [], error: null }) as any,
+  ]);
 
   const plantMap = new Map<string, any>();
-  for (const p of (plants ?? []) as any[]) plantMap.set(p.eia_plant_code, p);
+  for (const p of (plants ?? []) as any[]) plantMap.set(String(p.id), p);
+  const claimMap = new Map<number, any>();
+  for (const c of (claims ?? []) as any[]) claimMap.set(Number(c.id), c);
 
   return (links as any[]).map(l => {
-    const p = plantMap.get(l.plant_code) ?? {};
+    const p     = plantMap.get(String(l.plant_id)) ?? {};
+    const claim = claimMap.get(Number(l.primary_claim_id)) ?? null;
+    const conf  = Number(claim?.confidence ?? 0.7);
+    const confidenceClass: ConfidenceClass =
+      conf >= 0.9  ? 'confirmed'
+      : conf >= 0.75 ? 'high_confidence'
+      : conf >= 0.55 ? 'highly_likely'
+      : 'possible';
+    const evidenceType: EvidenceType = (claim?.source_type as EvidenceType) ?? 'inferred';
     return {
       linkId:            Number(l.id),
-      plantCode:         String(l.plant_code),
+      plantId:           String(l.plant_id),
+      plantCode:         String(p.eia_plant_code ?? l.plant_id),
       plantName:         (p.name as string | null) ?? null,
       state:             (p.state as string | null) ?? null,
       fuelSource:        (p.fuel_source as string | null) ?? null,
       nameplateMw:       p.nameplate_capacity_mw != null ? Number(p.nameplate_capacity_mw) : null,
       isLikelyCurtailed: Boolean(p.is_likely_curtailed),
-      evidenceType:      l.evidence_type as EvidenceType,
-      confidenceClass:   l.confidence_class as ConfidenceClass,
-      evidenceSummary:   (l.evidence_summary as string | null) ?? null,
-      sourceUrl:         (l.source_url as string | null) ?? null,
-      validatedAt:       (l.updated_at as string | null) ?? (l.created_at as string | null) ?? null,
-    };
+      evidenceType,
+      confidenceClass,
+      evidenceSummary:   (claim?.quote as string | null) ?? null,
+      sourceUrl:         (claim?.source_url as string | null) ?? null,
+      validatedAt:       (l.validated_at as string | null) ?? null,
+      loanStatus:        (claim?.loan_status as string | null) ?? null,
+      roleTag:           (claim?.role_tag as string | null) ?? null,
+    } satisfies ValidatedPortfolioRow;
   }).sort((a, b) => {
     if (a.isLikelyCurtailed !== b.isLikelyCurtailed) return a.isLikelyCurtailed ? -1 : 1;
     return (b.nameplateMw ?? 0) - (a.nameplateMw ?? 0);
@@ -462,23 +483,10 @@ export async function fetchValidatedPortfolio(lenderNormalized: string): Promise
 // Audit chain-of-custody for a validated plant link
 // ──────────────────────────────────────────────────────────────────────────────
 
-export async function fetchValidationAudit(plantCode: string): Promise<ValidationAuditEntry[]> {
-  const { data, error } = await supabase
-    .from('ucc_review_actions')
-    .select('action, notes, reviewer_email, timestamp')
-    .eq('plant_code', plantCode)
-    .order('timestamp', { ascending: false });
-
-  if (error || !data) {
-    console.error('fetchValidationAudit:', error?.message);
-    return [];
-  }
-  return (data as any[]).map(r => ({
-    action:        r.action as ValidationAuditEntry['action'],
-    notes:         (r.notes as string | null) ?? null,
-    reviewerEmail: (r.reviewer_email as string | null) ?? null,
-    timestamp:     String(r.timestamp ?? ''),
-  }));
+export async function fetchValidationAudit(_plantCode: string): Promise<ValidationAuditEntry[]> {
+  // v4: no separate audit table — validation is tracked on lender_links directly.
+  // Return empty array; audit can be reconstructed from lender_links if needed.
+  return [];
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -498,73 +506,179 @@ export async function fetchPursuitsByTier(tier: LenderTier | null = null): Promi
 export async function searchLenderEntities(q: string, limit = 10): Promise<LenderEntitySuggestion[]> {
   if (!q || q.trim().length < 2) return [];
   const { data, error } = await supabase
-    .from('ucc_entities')
-    .select('id, entity_name, normalized_name')
-    .eq('entity_type', 'lender')
-    .ilike('normalized_name', `%${q.toLowerCase()}%`)
+    .from('lenders_canonical')
+    .select('id, name')
+    .ilike('name', `%${q.trim()}%`)
     .limit(limit);
 
   if (error || !data) return [];
   return (data as any[]).map(r => ({
-    id:             Number(r.id),
-    entityName:     String(r.entity_name ?? ''),
-    normalizedName: String(r.normalized_name ?? ''),
-  }));
+    id:             String(r.id),    // uuid in v4
+    entityName:     String(r.name ?? ''),
+    normalizedName: String(r.name ?? '').toLowerCase(),
+  })) as any;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Action RPCs
 // ──────────────────────────────────────────────────────────────────────────────
 
-export async function validateLenderLead(leadId: number, note?: string): Promise<{ success: boolean; linkId?: number; error?: string }> {
-  const { data, error } = await supabase.rpc('validate_lender_lead', { p_lead_id: leadId, p_note: note ?? null });
+export async function validateLenderLead(linkId: number, note?: string): Promise<{ success: boolean; linkId?: number; error?: string }> {
+  const { error } = await supabase.rpc('validate_lender_link', { p_link_id: linkId, p_note: note ?? null });
   if (error) return { success: false, error: error.message };
-  return { success: true, linkId: Number(data) };
+  return { success: true, linkId };
 }
 
-export async function rejectLenderLead(leadId: number, reason?: string): Promise<{ success: boolean; error?: string }> {
-  const { error } = await supabase.rpc('reject_lender_lead', { p_lead_id: leadId, p_reason: reason ?? null });
+export async function rejectLenderLead(linkId: number, reason?: string): Promise<{ success: boolean; error?: string }> {
+  const { error } = await supabase.rpc('reject_lender_link', { p_link_id: linkId, p_note: reason ?? null });
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
+export async function revertLenderLink(linkId: number): Promise<{ success: boolean; error?: string }> {
+  const { error } = await supabase.rpc('revert_lender_link', { p_link_id: linkId });
   if (error) return { success: false, error: error.message };
   return { success: true };
 }
 
 export async function addManualLenderLink(args: {
-  plantCode: string;
+  plantCode?: string;
+  plantId?: string;
   lenderName: string;
-  sourceUrl: string;
-  note: string;
+  sourceUrl?: string;
+  note?: string;
   facilityType?: string;
 }): Promise<{ success: boolean; linkId?: number; error?: string }> {
+  // v4 RPC: add_manual_lender_link(p_plant_id text, p_lender_name text, p_source_url text, p_note text)
+  let plantId = args.plantId;
+  if (!plantId && args.plantCode) {
+    const { data: p } = await supabase
+      .from('plants')
+      .select('id')
+      .eq('eia_plant_code', args.plantCode)
+      .single();
+    plantId = p ? String((p as any).id) : undefined;
+  }
+  if (!plantId) return { success: false, error: 'Could not resolve plant_id' };
+
   const { data, error } = await supabase.rpc('add_manual_lender_link', {
-    p_plant_code:    args.plantCode,
-    p_lender_name:   args.lenderName,
-    p_source_url:    args.sourceUrl,
-    p_note:          args.note,
-    p_facility_type: args.facilityType ?? null,
+    p_plant_id:   plantId,
+    p_lender_name: args.lenderName,
+    p_source_url:  args.sourceUrl ?? null,
+    p_note:        args.note ?? null,
   });
   if (error) return { success: false, error: error.message };
   return { success: true, linkId: Number(data) };
 }
 
-export async function markNoLenderIdentifiable(plantCode: string, note?: string): Promise<{ success: boolean; error?: string }> {
-  const { error } = await supabase.rpc('mark_no_lender_identifiable', {
-    p_plant_code: plantCode,
-    p_note:       note ?? null,
+export async function markNoLenderIdentifiable(plantCodeOrId: string, note?: string): Promise<{ success: boolean; error?: string }> {
+  // Try as plants.id (TEXT) first; if not found, try eia_plant_code.
+  let plantId: string | undefined;
+  const { data: byId } = await supabase
+    .from('plants')
+    .select('id')
+    .eq('id', plantCodeOrId)
+    .maybeSingle();
+  if (byId) {
+    plantId = String((byId as any).id);
+  } else {
+    const { data: byCode } = await supabase
+      .from('plants')
+      .select('id')
+      .eq('eia_plant_code', plantCodeOrId)
+      .maybeSingle();
+    plantId = byCode ? String((byCode as any).id) : undefined;
+  }
+  if (!plantId) return { success: false, error: 'Could not resolve plant_id' };
+
+  const { error } = await supabase.rpc('mark_plant_no_lender', {
+    p_plant_id: plantId,
+    p_note:     note ?? null,
   });
   if (error) return { success: false, error: error.message };
   return { success: true };
 }
 
 export async function setLenderPursuitTier(
-  lenderNormalized: string,
+  canonicalLenderId: string,
   tier: LenderTier | null,
-  notes?: string,
+  _notes?: string,
 ): Promise<{ success: boolean; error?: string }> {
+  if (!tier) {
+    // v4 has no "clear tier" RPC — delete the pursuit row
+    const { error } = await supabase
+      .from('lender_pursuits')
+      .delete()
+      .eq('canonical_lender_id', canonicalLenderId);
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  }
   const { error } = await supabase.rpc('set_lender_pursuit_tier', {
-    p_lender_normalized: lenderNormalized,
-    p_tier:              tier,
-    p_notes:             notes ?? null,
+    p_canonical_lender_id: canonicalLenderId,
+    p_tier:                tier,
   });
   if (error) return { success: false, error: error.message };
   return { success: true };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// No-lender plants (Not Identified tab)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface NoLenderPlant {
+  plantId: string;
+  plantCode: string;
+  plantName: string | null;
+  state: string | null;
+  nameplateMw: number | null;
+  isLikelyCurtailed: boolean;
+  lastResearchedAt: string | null;
+}
+
+export interface NoLenderOptions {
+  search?: string;
+  sortBy?: 'mw' | 'name' | 'date';
+}
+
+export async function fetchNoLenderPlants(opts: NoLenderOptions = {}): Promise<NoLenderPlant[]> {
+  const { search, sortBy = 'mw' } = opts;
+
+  const { data, error } = await supabase
+    .from('v_plant_research_state')
+    .select('plant_id, plant_name, state, nameplate_capacity_mw, is_likely_curtailed, last_researched_at')
+    .eq('research_status', 'no_lender_identifiable');
+
+  if (error || !data) {
+    console.error('fetchNoLenderPlants:', error?.message);
+    return [];
+  }
+
+  let rows: NoLenderPlant[] = (data as any[]).map(r => ({
+    plantId:          String(r.plant_id ?? ''),
+    plantCode:        String(r.plant_id ?? '').replace('EIA-', ''),
+    plantName:        (r.plant_name as string | null) ?? null,
+    state:            (r.state as string | null) ?? null,
+    nameplateMw:      r.nameplate_capacity_mw != null ? Number(r.nameplate_capacity_mw) : null,
+    isLikelyCurtailed: Boolean(r.is_likely_curtailed),
+    lastResearchedAt: (r.last_researched_at as string | null) ?? null,
+  }));
+
+  if (search) {
+    const q = search.toLowerCase();
+    rows = rows.filter(r =>
+      r.plantName?.toLowerCase().includes(q) ||
+      r.state?.toLowerCase().includes(q) ||
+      r.plantCode.includes(q),
+    );
+  }
+
+  rows.sort((a, b) => {
+    if (sortBy === 'name') return (a.plantName ?? '').localeCompare(b.plantName ?? '');
+    if (sortBy === 'date') {
+      return (b.lastResearchedAt ?? '').localeCompare(a.lastResearchedAt ?? '');
+    }
+    return (b.nameplateMw ?? 0) - (a.nameplateMw ?? 0);
+  });
+
+  return rows;
 }
