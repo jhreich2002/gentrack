@@ -179,3 +179,196 @@ export async function triggerPlantResearch(plantId: string, force: boolean): Pro
     error: out.error_detail ? String(out.error_detail) : undefined,
   };
 }
+
+// ============================================================
+// v5.4 Validation workflow types + functions
+// ============================================================
+
+export interface LenderQueueRow {
+  lenderId: string;
+  lenderName: string;
+  pendingCount: number;
+  validatedCount: number;
+  rejectedCount: number;
+  distinctPlantCount: number;
+  mostRecentLinkAt: string | null;
+}
+
+export interface LenderValidatedRow {
+  lenderId: string;
+  lenderName: string;
+  pursuitLabel: 'hot' | 'warm' | 'cold' | null;
+  pursuitSetAt: string | null;
+  validatedCount: number;
+  distinctValidatedPlantCount: number;
+  mostRecentValidationAt: string | null;
+}
+
+export interface LenderPlantRow {
+  linkId: string;
+  lenderId: string;
+  plantId: string;
+  plantName: string;
+  state: string | null;
+  nameplateMw: number | null;
+  role: string | null;
+  roleSummary: string | null;
+  sourceUrl: string;
+  evidenceQuote: string | null;
+  isManual: boolean;
+  manualNote: string | null;
+  validatedAt: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
+  validationState: 'pending' | 'validated' | 'rejected';
+  lastResearchAt: string | null;
+}
+
+export async function fetchLenderValidationQueue(search?: string): Promise<LenderQueueRow[]> {
+  const { data, error } = await supabase
+    .from('v_lender_validation_queue')
+    .select('lender_id, lender_name, pending_count, validated_count, rejected_count, distinct_plant_count, most_recent_link_at')
+    .order('pending_count', { ascending: false });
+
+  if (error || !data) {
+    console.error('fetchLenderValidationQueue:', error?.message);
+    return [];
+  }
+
+  let rows: LenderQueueRow[] = (data as any[]).map((row) => ({
+    lenderId: String(row.lender_id),
+    lenderName: String(row.lender_name ?? ''),
+    pendingCount: Number(row.pending_count ?? 0),
+    validatedCount: Number(row.validated_count ?? 0),
+    rejectedCount: Number(row.rejected_count ?? 0),
+    distinctPlantCount: Number(row.distinct_plant_count ?? 0),
+    mostRecentLinkAt: row.most_recent_link_at ? String(row.most_recent_link_at) : null,
+  }));
+
+  if (search?.trim()) {
+    const term = search.trim().toLowerCase();
+    rows = rows.filter((r) => r.lenderName.toLowerCase().includes(term));
+  }
+
+  return rows;
+}
+
+export async function fetchLenderValidatedPortfolio(search?: string): Promise<LenderValidatedRow[]> {
+  const { data, error } = await supabase
+    .from('v_lender_validated_portfolio')
+    .select('lender_id, lender_name, pursuit_label, pursuit_set_at, validated_count, distinct_validated_plant_count, most_recent_validation_at')
+    .order('validated_count', { ascending: false });
+
+  if (error || !data) {
+    console.error('fetchLenderValidatedPortfolio:', error?.message);
+    return [];
+  }
+
+  let rows: LenderValidatedRow[] = (data as any[]).map((row) => ({
+    lenderId: String(row.lender_id),
+    lenderName: String(row.lender_name ?? ''),
+    pursuitLabel: row.pursuit_label as LenderValidatedRow['pursuitLabel'] ?? null,
+    pursuitSetAt: row.pursuit_set_at ? String(row.pursuit_set_at) : null,
+    validatedCount: Number(row.validated_count ?? 0),
+    distinctValidatedPlantCount: Number(row.distinct_validated_plant_count ?? 0),
+    mostRecentValidationAt: row.most_recent_validation_at ? String(row.most_recent_validation_at) : null,
+  }));
+
+  if (search?.trim()) {
+    const term = search.trim().toLowerCase();
+    rows = rows.filter((r) => r.lenderName.toLowerCase().includes(term));
+  }
+
+  return rows;
+}
+
+export async function fetchLenderPlants(
+  lenderId: string,
+  scope: 'pending' | 'validated' | 'all',
+): Promise<LenderPlantRow[]> {
+  let query = supabase
+    .from('v_lender_plant_summary')
+    .select('link_id, lender_id, plant_id, plant_name, state, nameplate_capacity_mw, role, role_summary, source_url, evidence_quote, is_manual, manual_note, validated_at, rejected_at, rejection_reason, validation_state, last_research_at')
+    .eq('lender_id', lenderId)
+    .order('plant_name');
+
+  if (scope !== 'all') {
+    query = query.eq('validation_state', scope);
+  }
+
+  const { data, error } = await query;
+  if (error || !data) {
+    console.error('fetchLenderPlants:', error?.message);
+    return [];
+  }
+
+  return (data as any[]).map((row) => ({
+    linkId: String(row.link_id),
+    lenderId: String(row.lender_id),
+    plantId: String(row.plant_id),
+    plantName: String(row.plant_name ?? ''),
+    state: row.state ? String(row.state) : null,
+    nameplateMw: row.nameplate_capacity_mw != null ? Number(row.nameplate_capacity_mw) : null,
+    role: row.role ? String(row.role) : null,
+    roleSummary: row.role_summary ? String(row.role_summary) : null,
+    sourceUrl: String(row.source_url ?? ''),
+    evidenceQuote: row.evidence_quote ? String(row.evidence_quote) : null,
+    isManual: Boolean(row.is_manual),
+    manualNote: row.manual_note ? String(row.manual_note) : null,
+    validatedAt: row.validated_at ? String(row.validated_at) : null,
+    rejectedAt: row.rejected_at ? String(row.rejected_at) : null,
+    rejectionReason: row.rejection_reason ? String(row.rejection_reason) : null,
+    validationState: String(row.validation_state ?? 'pending') as LenderPlantRow['validationState'],
+    lastResearchAt: row.last_research_at ? String(row.last_research_at) : null,
+  }));
+}
+
+export async function validateLink(linkId: string): Promise<void> {
+  const { error } = await supabase
+    .from('plant_lender_links')
+    .update({ validated_at: new Date().toISOString(), rejected_at: null, rejection_reason: null })
+    .eq('id', linkId);
+  if (error) throw new Error(error.message);
+}
+
+export async function rejectLink(linkId: string, reason: string | null): Promise<void> {
+  const { error } = await supabase
+    .from('plant_lender_links')
+    .update({ rejected_at: new Date().toISOString(), validated_at: null, rejection_reason: reason ?? null })
+    .eq('id', linkId);
+  if (error) throw new Error(error.message);
+}
+
+export async function addManualLink(input: {
+  plantId: string;
+  lenderName: string;
+  role: string | null;
+  sourceUrl: string;
+  evidenceQuote: string | null;
+  manualNote: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc('add_manual_lender_link', {
+    p_plant_id: input.plantId,
+    p_lender_name: input.lenderName,
+    p_role: input.role ?? null,
+    p_source_url: input.sourceUrl,
+    p_evidence_quote: input.evidenceQuote ?? null,
+    p_manual_note: input.manualNote ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return String(data);
+}
+
+export async function setLenderPursuit(
+  lenderId: string,
+  label: 'hot' | 'warm' | 'cold' | null,
+): Promise<void> {
+  const { error } = await supabase
+    .from('lenders_canonical')
+    .update({
+      pursuit_label: label,
+      pursuit_set_at: label ? new Date().toISOString() : null,
+    })
+    .eq('id', lenderId);
+  if (error) throw new Error(error.message);
+}

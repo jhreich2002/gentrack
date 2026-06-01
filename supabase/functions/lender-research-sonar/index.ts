@@ -409,12 +409,16 @@ Deno.serve(async (req: Request) => {
   // Delete stale direct links for this plant before inserting fresh ones.
   // Without this, re-runs accumulate links from all historical research runs,
   // causing outdated lenders to appear in the Financing tab.
+  // Skip rows that have been manually rejected (rejected_at IS NOT NULL) so
+  // rejected lenders are not re-surfaced by a new research run.
   await supabase.from('plant_lender_links').delete()
     .eq('plant_id', plantId)
-    .is('inferred_from_sibling_plant_id', null);
+    .is('inferred_from_sibling_plant_id', null)
+    .is('rejected_at', null);
   // Also clean up any old sibling-fanout links where this plant was the source.
   await supabase.from('plant_lender_links').delete()
-    .eq('inferred_from_sibling_plant_id', plantId);
+    .eq('inferred_from_sibling_plant_id', plantId)
+    .is('rejected_at', null);
 
   for (const lender of parsedLenders) {
     const lenderName = (lender.name ?? '').trim();
