@@ -11,41 +11,28 @@ import { supabase } from './supabaseClient';
 import type { FinancingDeal } from '../types';
 
 export interface PlantFinancingSummary {
-  summary:      string;
-  citations:    { url: string; title: string; snippet: string }[];
+  status:       'complete' | 'no_lender_identifiable' | 'error' | 'never';
   lendersFound: boolean;
   searchedAt:   string | null;
 }
 
 export interface PlantLenderRow {
-  lenderName:          string;
-  role:                string;
-  facilityType:        string;
-  confidence:          string;
-  notes:               string | null;
-  loanStatus:          'active' | 'matured' | 'refinanced' | 'unknown' | null;
-  validationStatus:    'pending' | 'validated' | 'manual' | 'rejected';  // v4 pipeline status
-  currencyConfidence:  number | null;
-  currencyReasoning:   string | null;
-  currencyCheckedAt:   string | null;
-  currencySource:      string | null;
-  maturityDate:        string | null;
-  financialCloseDate:  string | null;
-  refinancedAt:        string | null;
-  // Agentic pipeline fields
-  syndicateRole:       string | null;
-  pitchAngle:          string | null;
-  pitchAngleReasoning: string | null;
-  pitchUrgencyScore:   number | null;
-  sourceCount:         number | null;
-  sourceUrl:           string | null;
+  lenderName:                  string;
+  role:                        string | null;
+  roleSummary:                 string | null;
+  sourceUrl:                   string;
+  evidenceQuote:               string | null;
+  inferred:                    boolean;
+  inferredFromSiblingPlantId:  string | null;
+  lastResearchAt:              string | null;
+  researchStatus:              'complete' | 'no_lender_identifiable' | 'error' | 'never';
 }
 
 export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<{
   financing: PlantFinancingSummary | null;
   lenders:   PlantLenderRow[];
 }> {
-  // v4: resolve plant_id from eia_plant_code
+  // v5: resolve plant_id from eia_plant_code and query v_plant_financing
   const plantIdRes = await supabase
     .from('plants')
     .select('id')
@@ -53,78 +40,52 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
     .single();
   const plantId = plantIdRes.data ? String((plantIdRes.data as any).id) : null;
 
-  // Step 1: fetch summary + raw links in parallel
-  const [summaryRes, linksRes] = await Promise.all([
-    supabase
-      .from('plant_financing_summary')
-      .select('summary, citations, lenders_found, searched_at')
-      .eq('eia_plant_code', eiaPlantCode)
-      .maybeSingle(),
-    plantId
-      ? supabase
-          .from('lender_links')
-          .select('canonical_lender_id, primary_claim_id, validation_status, validated_at')
-          .eq('plant_id', plantId)
-          .neq('validation_status', 'rejected')
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-
-  const rawLinks: any[] = (linksRes as any).data ?? [];
-
-  // Step 2: resolve canonical names + claims in parallel
-  const canonicalIds = Array.from(new Set(rawLinks.map((l: any) => l.canonical_lender_id).filter(Boolean)));
-  const claimIds     = Array.from(new Set(rawLinks.map((l: any) => l.primary_claim_id).filter(Boolean)));
-
-  const [canonicalRes, claimsRes] = await Promise.all([
-    canonicalIds.length > 0
-      ? supabase.from('lenders_canonical').select('id, name').in('id', canonicalIds)
-      : Promise.resolve({ data: [], error: null }),
-    claimIds.length > 0
-      ? supabase.from('lender_research_claims').select('id, loan_status, role_tag, source_url, quote, confidence').in('id', claimIds)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-
-  const canonicalMap = new Map<string, string>();
-  for (const c of (canonicalRes as any).data ?? []) canonicalMap.set(String(c.id), String(c.name ?? ''));
-  const claimMap = new Map<number, any>();
-  for (const c of (claimsRes as any).data ?? []) claimMap.set(Number(c.id), c);
-
-  const row = summaryRes.data;
-  const financing: PlantFinancingSummary | null = row ? {
-    summary:      row.summary ?? '',
-    citations:    Array.isArray(row.citations) ? row.citations : [],
-    lendersFound: row.lenders_found ?? false,
-    searchedAt:   row.searched_at ?? null,
-  } : null;
-
-  const lenders: PlantLenderRow[] = rawLinks.map((r: any) => {
-    const claim = claimMap.get(Number(r.primary_claim_id)) ?? {};
-    const name  = canonicalMap.get(String(r.canonical_lender_id)) ?? '';
-    const vs    = String(r.validation_status ?? 'pending') as PlantLenderRow['validationStatus'];
-    const conf  = Number(claim.confidence ?? 0.7);
+  if (!plantId) {
     return {
-      lenderName:          name,
-      role:                String(claim.role_tag ?? 'debt_lender'),
-      facilityType:        'term_loan',
-      confidence:          conf >= 0.75 ? 'high' : 'medium',
-      notes:               (claim.quote as string | null) ?? null,
-      loanStatus:          (claim.loan_status as PlantLenderRow['loanStatus']) ?? null,
-      validationStatus:    vs,
-      currencyConfidence:  null,
-      currencyReasoning:   null,
-      currencyCheckedAt:   null,
-      currencySource:      null,
-      maturityDate:        null,
-      financialCloseDate:  null,
-      refinancedAt:        null,
-      syndicateRole:       null,
-      pitchAngle:          null,
-      pitchAngleReasoning: null,
-      pitchUrgencyScore:   null,
-      sourceCount:         1,
-      sourceUrl:           (claim.source_url as string | null) ?? null,
+      financing: { status: 'never', lendersFound: false, searchedAt: null },
+      lenders: [],
     };
-  });
+  }
+
+  const [linksRes, latestResearchRes] = await Promise.all([
+    supabase
+      .from('v_plant_financing')
+      .select('lender_name, role, role_summary, source_url, evidence_quote, inferred, inferred_from_sibling_plant_id, last_research_at, research_status')
+      .eq('plant_id', plantId),
+    supabase
+      .from('plant_lender_research')
+      .select('status, completed_at')
+      .eq('plant_id', plantId)
+      .order('completed_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  if (linksRes.error) {
+    console.error('fetchPlantFinancingSummary links error:', linksRes.error.message);
+  }
+
+  const lenders: PlantLenderRow[] = ((linksRes.data as any[]) ?? []).map((row: any) => ({
+    lenderName: String(row.lender_name ?? ''),
+    role: row.role ? String(row.role) : null,
+    roleSummary: row.role_summary ? String(row.role_summary) : null,
+    sourceUrl: String(row.source_url ?? ''),
+    evidenceQuote: row.evidence_quote ? String(row.evidence_quote) : null,
+    inferred: Boolean(row.inferred),
+    inferredFromSiblingPlantId: row.inferred_from_sibling_plant_id ? String(row.inferred_from_sibling_plant_id) : null,
+    lastResearchAt: row.last_research_at ? String(row.last_research_at) : null,
+    researchStatus: (String(row.research_status ?? 'never') as PlantLenderRow['researchStatus']),
+  }));
+
+  const latestStatus = latestResearchRes.data?.status
+    ? (String(latestResearchRes.data.status) as PlantFinancingSummary['status'])
+    : 'never';
+
+  const financing: PlantFinancingSummary = {
+    status: latestStatus,
+    lendersFound: lenders.length > 0,
+    searchedAt: latestResearchRes.data?.completed_at ? String(latestResearchRes.data.completed_at) : null,
+  };
 
   return { financing, lenders };
 }

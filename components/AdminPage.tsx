@@ -13,6 +13,13 @@ import {
   AdminUserRow,
   UserRole,
 } from '../services/authService';
+import {
+  type AdminPlantRow,
+  type LastRunBucket,
+  fetchAdminPlantState,
+  fetchMonthlyCost,
+  triggerPlantResearch,
+} from '../services/lenderResearchService';
 
 interface Props {
   currentUserId: string;
@@ -55,6 +62,19 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
   const [preRunLatestPlantUpdateAt, setPreRunLatestPlantUpdateAt] = useState<string | null>(null);
   const [roleLoading, setRoleLoading] = useState<string | null>(null);
 
+  const [lenderRows, setLenderRows] = useState<AdminPlantRow[]>([]);
+  const [lenderLoading, setLenderLoading] = useState(true);
+  const [lenderError, setLenderError] = useState<string | null>(null);
+  const [lenderSearch, setLenderSearch] = useState('');
+  const [lenderCurtailedOnly, setLenderCurtailedOnly] = useState(true);
+  const [lenderLastRunBucket, setLenderLastRunBucket] = useState<LastRunBucket>('any');
+  const [lenderCost, setLenderCost] = useState<{ month: string; calls: number; totalCostUsd: number } | null>(null);
+  const [lenderCostLoading, setLenderCostLoading] = useState(true);
+  const [lenderRefreshingId, setLenderRefreshingId] = useState<string | null>(null);
+  const [lenderBulkRunning, setLenderBulkRunning] = useState(false);
+  const [lenderBulkProgress, setLenderBulkProgress] = useState({ completed: 0, total: 0 });
+  const [forceByPlant, setForceByPlant] = useState<Record<string, boolean>>({});
+
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
     setUsersError(null);
@@ -96,6 +116,40 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
     }
   }, []);
 
+  const loadLenderResearch = useCallback(async () => {
+    setLenderLoading(true);
+    setLenderError(null);
+
+    try {
+      const rows = await fetchAdminPlantState({
+        curtailedOnly: lenderCurtailedOnly,
+        lastRunBucket: lenderLastRunBucket,
+        search: lenderSearch,
+      });
+      setLenderRows(rows);
+
+      setForceByPlant(prev => {
+        const next: Record<string, boolean> = {};
+        for (const row of rows) next[row.plantId] = prev[row.plantId] ?? false;
+        return next;
+      });
+    } catch (err: any) {
+      setLenderError(err?.message ?? 'Failed to load lender research state');
+    } finally {
+      setLenderLoading(false);
+    }
+  }, [lenderCurtailedOnly, lenderLastRunBucket, lenderSearch]);
+
+  const loadLenderCost = useCallback(async () => {
+    setLenderCostLoading(true);
+    try {
+      const cost = await fetchMonthlyCost();
+      setLenderCost(cost);
+    } finally {
+      setLenderCostLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
@@ -110,6 +164,14 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
     const id = setInterval(loadCosts, 24 * 60 * 60 * 1000);
     return () => clearInterval(id);
   }, [loadCosts]);
+
+  useEffect(() => {
+    loadLenderResearch();
+  }, [loadLenderResearch]);
+
+  useEffect(() => {
+    loadLenderCost();
+  }, [loadLenderCost]);
 
   const monthOptions = useMemo(() => {
     const options = new Set<string>();
@@ -340,6 +402,35 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
     } finally {
       setRoleLoading(null);
     }
+  };
+
+  const handleRefreshPlantResearch = async (plantId: string) => {
+    setLenderRefreshingId(plantId);
+    try {
+      const force = Boolean(forceByPlant[plantId]);
+      const result = await triggerPlantResearch(plantId, force);
+      if (!result.ok) {
+        alert(`Research refresh failed: ${result.error ?? 'unknown error'}`);
+      }
+      await Promise.all([loadLenderResearch(), loadLenderCost()]);
+    } finally {
+      setLenderRefreshingId(null);
+    }
+  };
+
+  const handleRefreshAllVisible = async () => {
+    if (lenderRows.length === 0 || lenderBulkRunning) return;
+    setLenderBulkRunning(true);
+    setLenderBulkProgress({ completed: 0, total: lenderRows.length });
+
+    for (let i = 0; i < lenderRows.length; i++) {
+      const row = lenderRows[i];
+      await triggerPlantResearch(row.plantId, Boolean(forceByPlant[row.plantId]));
+      setLenderBulkProgress({ completed: i + 1, total: lenderRows.length });
+    }
+
+    await Promise.all([loadLenderResearch(), loadLenderCost()]);
+    setLenderBulkRunning(false);
   };
 
   const workflowColor: Record<WorkflowStatus, string> = {
@@ -631,6 +722,132 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
               {workflowDetail}
             </p>
           )}
+        </section>
+
+        {/* ── Lender Research Management ───────────────── */}
+        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-lg">
+          <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
+            <div>
+              <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Lender Research Management</h2>
+              <p className="text-xs text-slate-600">Admin-triggered sonar pipeline for curtailed plants</p>
+            </div>
+            <div className="text-xs text-right">
+              {lenderCostLoading ? (
+                <span className="text-slate-500">Loading monthly cost...</span>
+              ) : lenderCost ? (
+                <span className="text-slate-400 font-semibold">
+                  Monthly cost: <span className="text-violet-400 font-black">${lenderCost.totalCostUsd.toFixed(2)}</span>
+                  {' · '}
+                  {lenderCost.calls} calls
+                </span>
+              ) : (
+                <span className="text-slate-500">Monthly cost: $0.00</span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 mb-4 flex-wrap">
+            <input
+              value={lenderSearch}
+              onChange={(e) => setLenderSearch(e.target.value)}
+              placeholder="Search plant"
+              className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-300 min-w-[220px]"
+            />
+            <label className="text-xs text-slate-300 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={lenderCurtailedOnly}
+                onChange={(e) => setLenderCurtailedOnly(e.target.checked)}
+              />
+              curtailed only
+            </label>
+            <select
+              value={lenderLastRunBucket}
+              onChange={(e) => setLenderLastRunBucket(e.target.value as LastRunBucket)}
+              className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-300"
+            >
+              <option value="any">Last run: any</option>
+              <option value="gt7d">Last run: &gt; 7d</option>
+              <option value="gt30d">Last run: &gt; 30d</option>
+              <option value="never">Last run: never</option>
+            </select>
+            <button
+              onClick={loadLenderResearch}
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:bg-slate-700"
+            >
+              Refresh list
+            </button>
+            <button
+              onClick={handleRefreshAllVisible}
+              disabled={lenderBulkRunning || lenderRows.length === 0}
+              className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold disabled:opacity-50"
+            >
+              {lenderBulkRunning
+                ? `Refreshing ${lenderBulkProgress.completed}/${lenderBulkProgress.total}`
+                : 'Refresh all visible'}
+            </button>
+          </div>
+
+          {lenderError && <p className="text-xs text-red-400 mb-3">{lenderError}</p>}
+
+          <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+            {lenderLoading ? (
+              <div className="p-5 text-sm text-slate-500">Loading lender research state...</div>
+            ) : lenderRows.length === 0 ? (
+              <div className="p-5 text-sm text-slate-500">No plants match current filters.</div>
+            ) : (
+              <div className="overflow-x-auto custom-scrollbar">
+                <table className="w-full text-xs min-w-[960px]">
+                  <thead>
+                    <tr className="border-b border-slate-800 bg-slate-900/60 text-[10px] text-slate-500 uppercase tracking-widest">
+                      <th className="text-left px-4 py-3 font-black">Plant</th>
+                      <th className="text-left px-4 py-3 font-black">State</th>
+                      <th className="text-right px-4 py-3 font-black">MW</th>
+                      <th className="text-center px-4 py-3 font-black">Curtailed</th>
+                      <th className="text-left px-4 py-3 font-black">Last Run</th>
+                      <th className="text-left px-4 py-3 font-black">Status</th>
+                      <th className="text-right px-4 py-3 font-black">Lenders</th>
+                      <th className="text-center px-4 py-3 font-black">Force?</th>
+                      <th className="text-right px-4 py-3 font-black">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lenderRows.map((row) => (
+                      <tr key={row.plantId} className="border-b border-slate-800/40 hover:bg-slate-900/40">
+                        <td className="px-4 py-3 text-slate-200 font-semibold">{row.plantName}</td>
+                        <td className="px-4 py-3 text-slate-400">{row.state ?? '—'}</td>
+                        <td className="px-4 py-3 text-right text-slate-300">{row.nameplateMw != null ? row.nameplateMw.toFixed(1) : '—'}</td>
+                        <td className="px-4 py-3 text-center text-slate-300">{row.isLikelyCurtailed ? 'Yes' : 'No'}</td>
+                        <td className="px-4 py-3 text-slate-400">
+                          {row.lastResearchAt
+                            ? new Date(row.lastResearchAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                            : 'Never'}
+                        </td>
+                        <td className="px-4 py-3 text-slate-300">{row.lastStatus ?? 'never'}</td>
+                        <td className="px-4 py-3 text-right text-slate-300">{row.lenderCount}</td>
+                        <td className="px-4 py-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(forceByPlant[row.plantId])}
+                            onChange={(e) => setForceByPlant(prev => ({ ...prev, [row.plantId]: e.target.checked }))}
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            onClick={() => handleRefreshPlantResearch(row.plantId)}
+                            disabled={lenderRefreshingId === row.plantId || lenderBulkRunning}
+                            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold disabled:opacity-60"
+                          >
+                            {lenderRefreshingId === row.plantId ? 'Running...' : 'Refresh'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </section>
 
         {/* ── User Management ───────────────────────────── */}

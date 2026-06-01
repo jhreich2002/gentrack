@@ -6,12 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "vitest",
     "preview": "vite preview",
     "fetch-data": "npx tsx scripts/fetch-eia-data.ts",
     "score:developers": "npx tsx scripts/compute-developer-opportunities.ts",
     "seed-articles": "npx tsx scripts/bulk-seed-articles.ts",
-    "test:preflight:v4": "npx tsx scripts/run-v4-preflight-checks.ts",
-    "test:ingest:curtailed": "npx tsx scripts/run-v4-curtailed-ingestion.ts",
+    "archive:lender:v4": "npx tsx scripts/archive-v4-lender-data.ts",
+    "run:lender:v5": "npx tsx scripts/run-lender-pipeline-v5.ts",
+    "snapshot:lender:v5": "npx tsx scripts/snapshot-lender-pipeline-v5.ts",
+    "test:lender:v5": "npx tsx scripts/test-lender-pipeline-v5.ts",
     "docker:build": "docker build --build-arg VITE_EIA_API_KEY=%VITE_EIA_API_KEY% --build-arg GEMINI_API_KEY=%GEMINI_API_KEY% -t gentrack .",
     "docker:run": "docker run -d -p 3000:80 --name gentrack gentrack"
   },
@@ -30,6 +33,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "vitest": "^4.1.7"
   }
 }

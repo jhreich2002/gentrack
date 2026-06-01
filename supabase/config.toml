@@ -10,7 +10,7 @@ max_rows = 1000
 [db]
 port = 54322
 shadow_port = 54320
-major_version = 15
+major_version = 17
 
 [studio]
 enabled = true
@@ -49,19 +49,7 @@ verify_jwt = false
 verify_jwt = false
 [functions.lender-chat]
 verify_jwt = false
-[functions.lender-research-orchestrator]
-verify_jwt = false
-[functions.lender-resolver]
-verify_jwt = false
-[functions.lender-reviewer]
-verify_jwt = false
-[functions.lender-source-edgar]
-verify_jwt = false
-[functions.lender-source-records]
-verify_jwt = false
-[functions.lender-source-web]
-verify_jwt = false
-[functions.lender-synthesis-agent]
+[functions.lender-research-sonar]
 verify_jwt = false
 [functions.news-ingest]
 verify_jwt = false

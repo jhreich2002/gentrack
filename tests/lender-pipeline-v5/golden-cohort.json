@@ -1,0 +1,42 @@
+[
+  {
+    "plant_id": "EIA-57394",
+    "category": "known_financed"
+  },
+  {
+    "plant_id": "EIA-57439",
+    "category": "known_financed"
+  },
+  {
+    "plant_id": "EIA-56857",
+    "category": "known_financed"
+  },
+  {
+    "plant_id": "EIA-57275",
+    "category": "consortium"
+  },
+  {
+    "plant_id": "EIA-56777",
+    "category": "consortium"
+  },
+  {
+    "plant_id": "EIA-62494",
+    "category": "consortium"
+  },
+  {
+    "plant_id": "EIA-58080",
+    "category": "small_private"
+  },
+  {
+    "plant_id": "EIA-56812",
+    "category": "small_private"
+  },
+  {
+    "plant_id": "EIA-57094",
+    "category": "multi_unit"
+  },
+  {
+    "plant_id": "EIA-62562",
+    "category": "multi_unit"
+  }
+]

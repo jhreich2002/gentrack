@@ -1,204 +1,181 @@
-/**
- * GenTrack — lenderResearchService (v4)
- *
- * Admin-triggered research flows. Calls the lender-research-orchestrator
- * edge function for single and bulk plant research runs.
- *
- * Separate from lenderValidationService which owns the human review RPCs.
- */
-
 import { supabase } from './supabaseClient';
 
-const ORCHESTRATOR_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/lender-research-orchestrator`;
+export type LastRunBucket = 'any' | 'gt7d' | 'gt30d' | 'never';
 
-async function orchHeaders(): Promise<Record<string, string> | null> {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) {
-    console.error('orchHeaders session error:', error.message);
-    return null;
-  }
-  const accessToken = data.session?.access_token;
-  if (!accessToken) return null;
-
-  return {
-    'Content-Type':  'application/json',
-    'Authorization': `Bearer ${accessToken}`,
-  };
+export interface PlantLenderEvidenceRow {
+  plantId: string;
+  lenderName: string;
+  role: string | null;
+  roleSummary: string | null;
+  sourceUrl: string;
+  evidenceQuote: string | null;
+  inferred: boolean;
+  inferredFromSiblingPlantId: string | null;
+  lastResearchAt: string | null;
+  researchStatus: 'complete' | 'no_lender_identifiable' | 'error' | 'never';
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Types
-// ──────────────────────────────────────────────────────────────────────────────
-
-export type ResearchStatus =
-  | 'never'
-  | 'in_progress'
-  | 'complete'
-  | 'budget_exceeded'
-  | 'failed'
-  | 'no_lender_identifiable';
-
-export interface PlantResearchState {
-  plantId:              string;
-  plantName:            string;
-  state:                string | null;
-  nameplateMw:          number | null;
-  isLikelyCurtailed:    boolean;
-  researchStatus:       ResearchStatus;
-  lastResearchedAt:     string | null;
-  validatedCount:       number;
-  pendingCount:         number;
-  lastSessionCostUsd:   number | null;
-  budgetExceeded:       boolean;
+export interface AdminPlantRow {
+  plantId: string;
+  plantName: string;
+  state: string | null;
+  nameplateMw: number | null;
+  isLikelyCurtailed: boolean;
+  lastResearchAt: string | null;
+  lastStatus: 'complete' | 'no_lender_identifiable' | 'error' | 'never';
+  lenderCount: number;
+  daysSinceResearch: number | null;
 }
 
-export interface ResearchCostRow {
-  month:              string;
-  sessions:           number;
-  totalCostUsd:       number;
-  avgCostUsd:         number;
-  budgetExceededCount: number;
+export interface MonthlyCostSummary {
+  month: string;
+  calls: number;
+  totalCostUsd: number;
 }
 
-export interface ResearchRunResult {
-  ok:             boolean;
-  session_id?:    string;
-  status?:        string;
-  links_created?: number;
-  cost_usd?:      number;
-  budget_exceeded?: boolean;
-  error?:         string;
+export interface TriggerResult {
+  ok: boolean;
+  skipped?: boolean;
+  reason?: string;
+  researchId?: string;
+  status?: string;
+  costUsd?: number;
+  lendersInserted?: number;
+  siblingsFannedOutTo?: number;
+  error?: string;
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Fetch plant research state (Admin panel table)
-// ──────────────────────────────────────────────────────────────────────────────
-
-export async function fetchPlantResearchState(opts: {
-  curtailedOnly?: boolean;
-  statusFilter?:  ResearchStatus | 'all';
-  search?:        string;
-} = {}): Promise<PlantResearchState[]> {
-  const { curtailedOnly = false, statusFilter = 'all', search } = opts;
-
-  let q = supabase
-    .from('v_plant_research_state')
-    .select('plant_id, plant_name, state, nameplate_capacity_mw, is_likely_curtailed, research_status, last_researched_at, validated_count, pending_count, last_session_cost_usd, budget_exceeded');
-
-  if (curtailedOnly) q = q.eq('is_likely_curtailed', true);
-  if (statusFilter !== 'all') q = q.eq('research_status', statusFilter);
-
-  const { data, error } = await q.order('plant_name');
+export async function fetchPlantLenderRows(plantId: string): Promise<PlantLenderEvidenceRow[]> {
+  const { data, error } = await supabase
+    .from('v_plant_financing')
+    .select('plant_id, lender_name, role, role_summary, source_url, evidence_quote, inferred, inferred_from_sibling_plant_id, last_research_at, research_status')
+    .eq('plant_id', plantId)
+    .order('lender_name');
 
   if (error || !data) {
-    console.error('fetchPlantResearchState:', error?.message);
+    console.error('fetchPlantLenderRows:', error?.message);
     return [];
   }
 
-  let rows: PlantResearchState[] = (data as any[]).map(r => ({
-    plantId:           String(r.plant_id),
-    plantName:         String(r.plant_name ?? ''),
-    state:             (r.state as string | null) ?? null,
-    nameplateMw:       r.nameplate_capacity_mw != null ? Number(r.nameplate_capacity_mw) : null,
-    isLikelyCurtailed: Boolean(r.is_likely_curtailed),
-    researchStatus:    (r.research_status as ResearchStatus) ?? 'never',
-    lastResearchedAt:  (r.last_researched_at as string | null) ?? null,
-    validatedCount:    Number(r.validated_count) || 0,
-    pendingCount:      Number(r.pending_count) || 0,
-    lastSessionCostUsd: r.last_session_cost_usd != null ? Number(r.last_session_cost_usd) : null,
-    budgetExceeded:    Boolean(r.budget_exceeded),
+  return (data as any[]).map((row) => ({
+    plantId: String(row.plant_id),
+    lenderName: String(row.lender_name ?? ''),
+    role: row.role ? String(row.role) : null,
+    roleSummary: row.role_summary ? String(row.role_summary) : null,
+    sourceUrl: String(row.source_url ?? ''),
+    evidenceQuote: row.evidence_quote ? String(row.evidence_quote) : null,
+    inferred: Boolean(row.inferred),
+    inferredFromSiblingPlantId: row.inferred_from_sibling_plant_id ? String(row.inferred_from_sibling_plant_id) : null,
+    lastResearchAt: row.last_research_at ? String(row.last_research_at) : null,
+    researchStatus: (String(row.research_status ?? 'never') as PlantLenderEvidenceRow['researchStatus']),
+  }));
+}
+
+export async function fetchAdminPlantState(filters: {
+  curtailedOnly: boolean;
+  lastRunBucket: LastRunBucket;
+  search: string;
+}): Promise<AdminPlantRow[]> {
+  let query = supabase
+    .from('v_admin_plant_research_state')
+    .select('plant_id, plant_name, state, nameplate_capacity_mw, is_likely_curtailed, last_research_at, last_status, lender_count, days_since_research')
+    .order('plant_name');
+
+  if (filters.curtailedOnly) {
+    query = query.eq('is_likely_curtailed', true);
+  }
+
+  const { data, error } = await query;
+  if (error || !data) {
+    console.error('fetchAdminPlantState:', error?.message);
+    return [];
+  }
+
+  let rows: AdminPlantRow[] = (data as any[]).map((row) => ({
+    plantId: String(row.plant_id),
+    plantName: String(row.plant_name ?? ''),
+    state: row.state ? String(row.state) : null,
+    nameplateMw: row.nameplate_capacity_mw != null ? Number(row.nameplate_capacity_mw) : null,
+    isLikelyCurtailed: Boolean(row.is_likely_curtailed),
+    lastResearchAt: row.last_research_at ? String(row.last_research_at) : null,
+    lastStatus: (String(row.last_status ?? 'never') as AdminPlantRow['lastStatus']),
+    lenderCount: Number(row.lender_count ?? 0),
+    daysSinceResearch: row.days_since_research != null ? Number(row.days_since_research) : null,
   }));
 
-  if (search) {
-    const q2 = search.toLowerCase();
-    rows = rows.filter(r => r.plantName.toLowerCase().includes(q2));
+  const searchTerm = filters.search.trim().toLowerCase();
+  if (searchTerm) {
+    rows = rows.filter((row) => row.plantName.toLowerCase().includes(searchTerm));
+  }
+
+  if (filters.lastRunBucket === 'never') {
+    rows = rows.filter((row) => row.lastResearchAt === null);
+  } else if (filters.lastRunBucket === 'gt7d') {
+    rows = rows.filter((row) => row.daysSinceResearch != null && row.daysSinceResearch > 7);
+  } else if (filters.lastRunBucket === 'gt30d') {
+    rows = rows.filter((row) => row.daysSinceResearch != null && row.daysSinceResearch > 30);
   }
 
   return rows;
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Fetch cost dashboard (admin-only)
-// ──────────────────────────────────────────────────────────────────────────────
-
-export async function fetchAdminResearchCosts(): Promise<ResearchCostRow[]> {
+export async function fetchMonthlyCost(): Promise<MonthlyCostSummary | null> {
   const { data, error } = await supabase
-    .from('v_admin_research_costs')
-    .select('month, sessions, total_cost_usd, avg_cost_usd, budget_exceeded_count');
+    .from('v_admin_cost_summary')
+    .select('month, calls, total_cost_usd')
+    .order('month', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   if (error || !data) {
-    console.error('fetchAdminResearchCosts:', error?.message);
-    return [];
+    if (error) console.error('fetchMonthlyCost:', error.message);
+    return null;
   }
 
-  return (data as any[]).map(r => ({
-    month:               String(r.month ?? ''),
-    sessions:            Number(r.sessions) || 0,
-    totalCostUsd:        Number(r.total_cost_usd) || 0,
-    avgCostUsd:          Number(r.avg_cost_usd) || 0,
-    budgetExceededCount: Number(r.budget_exceeded_count) || 0,
-  }));
+  return {
+    month: String(data.month),
+    calls: Number((data as any).calls ?? 0),
+    totalCostUsd: Number((data as any).total_cost_usd ?? 0),
+  };
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Trigger research for a single plant
-// ──────────────────────────────────────────────────────────────────────────────
+export async function triggerPlantResearch(plantId: string, force: boolean): Promise<TriggerResult> {
+  const gate = await supabase.rpc('trigger_plant_research', {
+    p_plant_id: plantId,
+    p_force: force,
+  });
 
-export async function triggerPlantResearch(
-  plantId:    string,
-  budgetUsd?: number,
-  trigger?:   'initial' | 'refresh' | 'manual',
-): Promise<ResearchRunResult> {
-  try {
-    const headers = await orchHeaders();
-    if (!headers) {
-      return { ok: false, error: 'Not signed in' };
-    }
-
-    const resp = await fetch(ORCHESTRATOR_URL, {
-      method:  'POST',
-      headers,
-      body: JSON.stringify({
-        plant_id:   plantId,
-        budget_usd: budgetUsd ?? 0.25,
-        trigger:    trigger ?? 'manual',
-      }),
-    });
-
-    if (!resp.ok) {
-      const err = await resp.text();
-      return { ok: false, error: err.slice(0, 200) };
-    }
-
-    return await resp.json() as ResearchRunResult;
-  } catch (e) {
-    return { ok: false, error: String(e) };
-  }
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Trigger research for multiple plants (sequential to control cost)
-// ──────────────────────────────────────────────────────────────────────────────
-
-export async function triggerBulkResearch(
-  plantIds:   string[],
-  budgetUsd?: number,
-  onProgress?: (completed: number, total: number, latest: ResearchRunResult) => void,
-): Promise<{ succeeded: number; failed: number; totalCostUsd: number }> {
-  let succeeded   = 0;
-  let failed      = 0;
-  let totalCost   = 0;
-
-  for (let i = 0; i < plantIds.length; i++) {
-    const result = await triggerPlantResearch(plantIds[i], budgetUsd, 'initial');
-    if (result.ok) {
-      succeeded++;
-      totalCost += result.cost_usd ?? 0;
-    } else {
-      failed++;
-    }
-    onProgress?.(i + 1, plantIds.length, result);
+  if (gate.error) {
+    return { ok: false, error: gate.error.message };
   }
 
-  return { succeeded, failed, totalCostUsd: totalCost };
+  const gateData = (gate.data ?? {}) as Record<string, unknown>;
+  if (gateData.skipped === true) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: String(gateData.reason ?? 'recent_research_exists'),
+      researchId: gateData.research_id ? String(gateData.research_id) : undefined,
+    };
+  }
+
+  const invoked = await supabase.functions.invoke('lender-research-sonar', {
+    body: { plant_id: plantId, force },
+  });
+
+  if (invoked.error || !invoked.data) {
+    return { ok: false, error: invoked.error?.message ?? 'Function invocation failed' };
+  }
+
+  const out = invoked.data as Record<string, unknown>;
+  return {
+    ok: true,
+    skipped: false,
+    researchId: out.research_id ? String(out.research_id) : undefined,
+    status: out.status ? String(out.status) : undefined,
+    costUsd: out.cost_usd != null ? Number(out.cost_usd) : undefined,
+    lendersInserted: out.lenders_inserted != null ? Number(out.lenders_inserted) : undefined,
+    siblingsFannedOutTo: out.siblings_fanned_out_to != null ? Number(out.siblings_fanned_out_to) : undefined,
+    error: out.error_detail ? String(out.error_detail) : undefined,
+  };
 }

@@ -8,6 +8,7 @@ import { fetchPlantNewsArticles, fetchPlantNewsRating, fetchPlantNewsState, call
 import { fetchPlantFinancingSummary, PlantFinancingSummary, PlantLenderRow } from '../services/lenderService';
 import { getGlobalLatestMonth } from '../services/dataService';
 import LenderChatPanel from './lender-validation/LenderChatPanel';
+import LenderEvidenceTable from './lender-validation/LenderEvidenceTable';
 
 interface Props {
   plant: PowerPlant;
@@ -1040,7 +1041,7 @@ const PlantDetailView: React.FC<Props> = ({
           <div className="space-y-6 animate-in fade-in duration-500">
             <div>
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Financing & Lender Intelligence</h3>
-              <p className="text-[10px] text-slate-600 mt-1">Sourced from Perplexity sonar-pro web search</p>
+              <p className="text-[10px] text-slate-600 mt-1">Sourced from v_plant_financing lender evidence records</p>
             </div>
 
             <LenderChatPanel
@@ -1057,8 +1058,8 @@ const PlantDetailView: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Not yet searched — only when no v4 lenders exist either */}
-            {financingFetched && !financing && financingLenders.length === 0 && !loadingFinancing && (
+            {/* Not yet searched */}
+            {financingFetched && financing?.status === 'never' && financingLenders.length === 0 && !loadingFinancing && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center">
                 <p className="text-slate-500 text-sm font-semibold">Not yet searched</p>
                 <p className="text-slate-600 text-xs mt-1">This plant has not been processed by the lender-search pipeline yet.</p>
@@ -1066,122 +1067,33 @@ const PlantDetailView: React.FC<Props> = ({
             )}
 
             {/* No lenders found */}
-            {financingFetched && financing && !financing.lendersFound && !loadingFinancing && (
+            {financingFetched && financing && financingLenders.length === 0 && financing.status !== 'never' && !loadingFinancing && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center">
-                <p className="text-slate-500 text-sm font-semibold">No public financing data found</p>
-                <p className="text-slate-600 text-xs mt-1">Perplexity search found no press releases or announcements about this plant's debt or equity financing.</p>
+                <p className="text-slate-500 text-sm font-semibold">No lender evidence found</p>
+                <p className="text-slate-600 text-xs mt-1">
+                  {financing.status === 'error'
+                    ? 'The most recent lender research run returned an error. Please retry from Lender Research.'
+                    : 'The most recent lender research run found no debt lenders for this plant.'}
+                </p>
                 {financing.searchedAt && (
                   <p className="text-slate-700 text-[10px] mt-2">Searched {new Date(financing.searchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
                 )}
               </div>
             )}
 
-            {/* v4 pipeline lenders — show whenever present, regardless of AI summary */}
+            {/* Shared lender evidence table */}
             {financingFetched && financingLenders.length > 0 && !loadingFinancing && (
-              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                <div className="px-5 py-3 border-b border-slate-800">
-                  <h4 className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Pipeline Lender Evidence</h4>
-                  <p className="text-[10px] text-slate-600 mt-0.5">From the v4 ingestion pipeline — pending human validation</p>
-                </div>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-800/60">
-                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Party</th>
-                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Role</th>
-                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Confidence</th>
-                      <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {financingLenders.map((l, i) => (
-                      <tr key={i} className="border-b border-slate-800/30 last:border-b-0 hover:bg-slate-800/30 transition-colors">
-                        <td className="px-5 py-3">
-                          {l.sourceUrl ? (
-                            <a href={l.sourceUrl} target="_blank" rel="noopener noreferrer" onClick={(e: React.MouseEvent) => e.stopPropagation()} className="text-slate-200 font-semibold hover:text-blue-400 underline underline-offset-2 decoration-slate-600 hover:decoration-blue-400 transition-colors cursor-pointer">{l.lenderName}</a>
-                          ) : (
-                            <div className="text-slate-200 font-semibold">{l.lenderName}</div>
-                          )}
-                          {l.notes && <div className="text-[10px] text-slate-500 mt-0.5 leading-snug max-w-xs truncate" title={l.notes}>{l.notes.length > 80 ? l.notes.slice(0, 80) + '…' : l.notes}</div>}
-                        </td>
-                        <td className="px-5 py-3">
-                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-widest ${
-                            l.role === 'tax_equity'   ? 'text-emerald-400 bg-emerald-900/20 border-emerald-700/30' :
-                            l.role === 'lender'       ? 'text-sky-400 bg-sky-900/20 border-sky-700/30' :
-                            l.role === 'sponsor'      ? 'text-violet-400 bg-violet-900/20 border-violet-700/30' :
-                            'text-slate-400 bg-slate-800/40 border-slate-700/30'
-                          }`}>{l.role.replace(/_/g, ' ')}</span>
-                        </td>
-                        <td className="px-5 py-3">
-                          <span className={`text-[9px] font-bold uppercase ${
-                            l.confidence === 'high' ? 'text-green-400' : l.confidence === 'medium' ? 'text-amber-400' : 'text-slate-500'
-                          }`}>{l.confidence}</span>
-                        </td>
-                        <td className="px-5 py-3">
-                          {l.validationStatus === 'validated' || l.validationStatus === 'manual' ? (
-                            <span className="text-[9px] font-bold uppercase text-emerald-400">Confirmed</span>
-                          ) : (
-                            <span className="text-[9px] font-bold uppercase text-amber-400">Pending review</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Lenders found (AI summary) */}
-            {financingFetched && financing?.lendersFound && !loadingFinancing && (
-              <>
-                {/* AI Summary */}
-                {financing.summary && (
-                  <div className="bg-violet-950/20 border border-violet-800/30 rounded-xl p-5">
-                    <div className="text-[10px] text-violet-400 font-black uppercase tracking-widest mb-2">AI Financing Summary</div>
-                    <p className="text-sm text-slate-300 leading-relaxed">{financing.summary}</p>
-                  </div>
-                )}
-
-
-
-                {/* Citations — card style */}
-                {financing.citations.length > 0 && (
-                  <div>
-                    <div className="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-3">Sources</div>
-                    <div className="space-y-2">
-                      {financing.citations.map((c, i) => {
-                        let hostname = '';
-                        try { hostname = new URL(c.url).hostname.replace(/^www\./, ''); } catch { hostname = c.url; }
-                        const title = (c.title && c.title !== c.url) ? c.title : hostname;
-                        return (
-                          <a
-                            key={i}
-                            href={c.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex gap-3 bg-slate-900 border border-slate-800 hover:border-slate-600 rounded-xl p-4 transition-colors group cursor-pointer"
-                          >
-                            <span className="text-[10px] font-mono text-slate-600 shrink-0 mt-0.5">{i + 1}</span>
-                            <div className="min-w-0 flex-1">
-                              <div className="text-sm font-semibold text-blue-400 group-hover:text-blue-300 transition-colors line-clamp-2 leading-snug mb-1">
-                                {title}
-                              </div>
-                              {c.snippet && (
-                                <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">{c.snippet}</p>
-                              )}
-                              <div className="flex items-center gap-1.5 mt-2">
-                                <span className="text-[10px] text-slate-600 font-medium">{hostname}</span>
-                                <svg className="w-3 h-3 text-slate-700 group-hover:text-slate-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                                </svg>
-                              </div>
-                            </div>
-                          </a>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </>
+              <LenderEvidenceTable
+                rows={financingLenders.map((l) => ({
+                  lenderName: l.lenderName,
+                  role: l.role,
+                  roleSummary: l.roleSummary,
+                  sourceUrl: l.sourceUrl,
+                  evidenceQuote: l.evidenceQuote,
+                  inferred: l.inferred,
+                  inferredFromSiblingPlantId: l.inferredFromSiblingPlantId,
+                }))}
+              />
             )}
           </div>
         )}
