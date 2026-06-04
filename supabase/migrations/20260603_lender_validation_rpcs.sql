@@ -1,10 +1,4 @@
-﻿// TEMPORARY one-time migration runner. Auth-gated by INTERNAL_AUTH_TOKEN.
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import postgres from "https://deno.land/x/postgresjs@v3.4.4/mod.js";
-
-const CORS = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" };
-
-const MIGRATION_SQL = `-- v5.6: SECURITY DEFINER RPCs for lender validation workflow.
+-- v5.6: SECURITY DEFINER RPCs for lender validation workflow.
 -- Background: plant_lender_links and lenders_canonical have RLS enabled with NO policies,
 -- so client-side UPDATE via PostgREST silently affects 0 rows. The Validate / Mark wrong /
 -- pursuit-label buttons in the Lender Research dashboard relied on direct UPDATE, which
@@ -73,25 +67,3 @@ $$;
 GRANT EXECUTE ON FUNCTION public.validate_lender_link(uuid) TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.reject_lender_link(uuid, text) TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.set_lender_pursuit(uuid, text) TO authenticated, anon;
-`;
-
-serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
-  const internalToken = Deno.env.get("INTERNAL_AUTH_TOKEN") ?? "";
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const validToken = internalToken || serviceKey;
-  if (!validToken || token !== validToken) {
-    return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: CORS });
-  }
-  const dbUrl = Deno.env.get("SUPABASE_DB_URL");
-  if (!dbUrl) return new Response(JSON.stringify({ error: "SUPABASE_DB_URL not available" }), { status: 500, headers: CORS });
-  try {
-    const sql = postgres(dbUrl, { max: 1 });
-    await sql.begin(async (tx) => { await tx.unsafe(MIGRATION_SQL); });
-    await sql.end();
-    return new Response(JSON.stringify({ ok: true, message: "Migration applied: lender validation RPCs" }), { status: 200, headers: CORS });
-  } catch (e) {
-    return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: CORS });
-  }
-});

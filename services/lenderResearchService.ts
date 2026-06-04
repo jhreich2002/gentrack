@@ -324,18 +324,12 @@ export async function fetchLenderPlants(
 }
 
 export async function validateLink(linkId: string): Promise<void> {
-  const { error } = await supabase
-    .from('plant_lender_links')
-    .update({ validated_at: new Date().toISOString(), rejected_at: null, rejection_reason: null })
-    .eq('id', linkId);
+  const { error } = await supabase.rpc('validate_lender_link', { p_link_id: linkId });
   if (error) throw new Error(error.message);
 }
 
 export async function rejectLink(linkId: string, reason: string | null): Promise<void> {
-  const { error } = await supabase
-    .from('plant_lender_links')
-    .update({ rejected_at: new Date().toISOString(), validated_at: null, rejection_reason: reason ?? null })
-    .eq('id', linkId);
+  const { error } = await supabase.rpc('reject_lender_link', { p_link_id: linkId, p_reason: reason ?? null });
   if (error) throw new Error(error.message);
 }
 
@@ -363,12 +357,9 @@ export async function setLenderPursuit(
   lenderId: string,
   label: 'hot' | 'warm' | 'cold' | null,
 ): Promise<void> {
-  const { error } = await supabase
-    .from('lenders_canonical')
-    .update({
-      pursuit_label: label,
-      pursuit_set_at: label ? new Date().toISOString() : null,
-    })
-    .eq('id', lenderId);
+  const { error } = await supabase.rpc('set_lender_pursuit', {
+    p_lender_id: lenderId,
+    p_label: label,
+  });
   if (error) throw new Error(error.message);
 }
