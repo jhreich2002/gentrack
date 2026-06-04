@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import LenderEvidenceTable, { LenderEvidenceRow } from './lender-validation/LenderEvidenceTable';
+import LenderValidatedDigestContainer from './lender-validation/LenderValidatedDigestContainer';
 import {
   LenderPlantRow,
   LenderQueueRow,
@@ -15,6 +16,12 @@ import {
 
 interface Props {
   userRole: 'admin' | 'analyst' | 'viewer';
+  /** Seed the active tab on first mount (e.g. when returning from PlantDetailView) */
+  initialTab?: 'queue' | 'validated';
+  /** If set, immediately navigate to this lender's digest on mount */
+  initialLenderId?: string | null;
+  /** Called when user drills into a plant from the digest view */
+  onNavigateToPlant?: (plantId: string, eiaCode: string, lenderId: string) => void;
 }
 
 type Tab = 'queue' | 'validated';
@@ -318,16 +325,17 @@ const PortfolioTable: React.FC<PortfolioTableProps> = ({ rows, canWrite, onSelec
 
 // ── Main component ─────────────────────────────────────────
 
-const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
+const LenderResearchDashboard: React.FC<Props> = ({ userRole, initialTab, initialLenderId, onNavigateToPlant }) => {
   const canWrite = userRole === 'admin' || userRole === 'analyst';
 
   // Navigation state
-  const [activeTab, setActiveTab] = useState<Tab>('queue');
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab ?? 'queue');
   const [selectedLenderId, setSelectedLenderId] = useState<string | null>(null);
   const [selectedLenderName, setSelectedLenderName] = useState<string>('');
   const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
   const [selectedPlantName, setSelectedPlantName] = useState<string>('');
   const [search, setSearch] = useState('');
+  const [showRawEvidence, setShowRawEvidence] = useState(false);
 
   // Data
   const [queueRows, setQueueRows] = useState<LenderQueueRow[]>([]);
@@ -345,6 +353,17 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
 
   const activeTabRef = useRef(activeTab);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+
+  // Honor initialLenderId: select that lender immediately on mount (once only)
+  useEffect(() => {
+    if (initialLenderId) {
+      setSelectedLenderId(initialLenderId);
+      setSelectedLenderName('');
+      setSelectedPlantId(null);
+      setSelectedPlantName('');
+      setShowRawEvidence(false);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Data fetchers ──────────────────────────────────────
 
@@ -445,6 +464,7 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
     setSelectedPlantId(null);
     setSelectedPlantName('');
     setShowManualForm(false);
+    setShowRawEvidence(false);
   };
 
   const handleBackToPlants = () => {
@@ -461,6 +481,7 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
     setSelectedPlantName('');
     setSearch('');
     setShowManualForm(false);
+    setShowRawEvidence(false);
   };
 
   // ── Convert LenderPlantRow → LenderEvidenceRow ─────────
@@ -553,18 +574,40 @@ const LenderResearchDashboard: React.FC<Props> = ({ userRole }) => {
         </div>
       )}
 
-      {/* ── Level 2: Plant list ── */}
-      {selectedLenderId && !selectedPlantId && (
+      {/* ── Level 2: Validated digest (or raw evidence toggle) ── */}
+      {selectedLenderId && !selectedPlantId && activeTab === 'validated' && !showRawEvidence && (
+        <LenderValidatedDigestContainer
+          lenderId={selectedLenderId}
+          onPlantClick={(plantId, eiaCode) =>
+            onNavigateToPlant
+              ? onNavigateToPlant(plantId, eiaCode, selectedLenderId)
+              : undefined
+          }
+          onBack={handleBackToLenders}
+          onViewEvidence={() => setShowRawEvidence(true)}
+          canWrite={canWrite}
+          onPursuitChange={handlePursuitChange}
+          onNameResolved={(name) => {
+            if (name && !selectedLenderName) setSelectedLenderName(name);
+          }}
+        />
+      )}
+
+      {/* ── Level 2: Plant list (queue tab, or raw-evidence toggle in validated) ── */}
+      {selectedLenderId && !selectedPlantId && (activeTab === 'queue' || showRawEvidence) && (
         <div>
           <div className="flex items-center gap-2 mb-4 flex-wrap">
             <button
-              onClick={handleBackToLenders}
+              onClick={showRawEvidence ? () => setShowRawEvidence(false) : handleBackToLenders}
               className="text-xs text-blue-400 hover:text-blue-300"
             >
-              ← Back to lenders
+              {showRawEvidence ? '← Back to digest' : '← Back to lenders'}
             </button>
             <span className="text-slate-600">/</span>
-            <span className="text-sm font-semibold text-slate-200">{selectedLenderName}</span>
+            <span className="text-sm font-semibold text-slate-200">{selectedLenderName || selectedLenderId.slice(0, 8) + '…'}</span>
+            {showRawEvidence && (
+              <span className="text-[10px] px-2 py-0.5 rounded border border-slate-700 text-slate-500 ml-1">Raw Evidence</span>
+            )}
           </div>
 
           {loadingPlants ? (

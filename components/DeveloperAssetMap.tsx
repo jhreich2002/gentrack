@@ -45,6 +45,10 @@ interface Props {
   onPlantClick?: (eiaPlantCode: string) => void;
   initialViewport?: DeveloperMapViewport | null;
   onViewportChange?: (viewport: DeveloperMapViewport) => void;
+  /** Override the default CF-based band coloring. When omitted, the built-in getPerformanceBand logic is used. */
+  colorBy?: (point: DeveloperAssetMapPoint) => 'strong' | 'watch' | 'risk' | 'offline' | 'unknown';
+  /** Override the popup body for individual (non-cluster) markers. When omitted, the default CF/curtailment popup is rendered. */
+  popupContent?: (point: DeveloperAssetMapPoint) => React.ReactNode;
 }
 
 function getPerformanceBand(point: DeveloperAssetMapPoint): 'strong' | 'watch' | 'risk' | 'offline' | 'unknown' {
@@ -154,13 +158,19 @@ function markerTitle(point: DeveloperAssetMapPoint): string {
   return `${point.name}\n${point.capacityMw.toLocaleString()} MW\nCF: ${cf} | Curtailment: ${curtailment}`;
 }
 
-function buildMarkers(points: DeveloperAssetMapPoint[], zoom: number): DisplayMarker[] {
+function buildMarkers(
+  points: DeveloperAssetMapPoint[],
+  zoom: number,
+  colorBy?: (point: DeveloperAssetMapPoint) => 'strong' | 'watch' | 'risk' | 'offline' | 'unknown',
+): DisplayMarker[] {
   if (points.length === 0) return [];
+
+  const getBand = colorBy ?? getPerformanceBand;
 
   const cellSize = getCellSizeDegrees(zoom);
   if (zoom >= 8 || cellSize === 0) {
     return points.map((point) => {
-      const band = getPerformanceBand(point);
+      const band = getBand(point);
       return {
         id: point.id,
         lat: point.lat,
@@ -201,7 +211,7 @@ function buildMarkers(points: DeveloperAssetMapPoint[], zoom: number): DisplayMa
 
     let worstBand: ReturnType<typeof getPerformanceBand> = 'strong';
     for (const p of group) {
-      const current = getPerformanceBand(p);
+      const current = getBand(p);
       if (severityRank[current] > severityRank[worstBand]) worstBand = current;
     }
 
@@ -221,7 +231,7 @@ function buildMarkers(points: DeveloperAssetMapPoint[], zoom: number): DisplayMa
   });
 }
 
-export default function DeveloperAssetMap({ points, unmappedCount, onPlantClick, initialViewport, onViewportChange }: Props) {
+export default function DeveloperAssetMap({ points, unmappedCount, onPlantClick, initialViewport, onViewportChange, colorBy, popupContent }: Props) {
   const [zoom, setZoom] = useState(4);
   const [bounds, setBounds] = useState<LatLngBounds | null>(null);
 
@@ -231,7 +241,7 @@ export default function DeveloperAssetMap({ points, unmappedCount, onPlantClick,
     return points.filter((p) => padded.contains([p.lat, p.lng]));
   }, [points, bounds]);
 
-  const markers = useMemo(() => buildMarkers(visiblePoints, zoom), [visiblePoints, zoom]);
+  const markers = useMemo(() => buildMarkers(visiblePoints, zoom, colorBy), [visiblePoints, zoom, colorBy]);
 
   if (points.length === 0) {
     return (
@@ -314,6 +324,8 @@ export default function DeveloperAssetMap({ points, unmappedCount, onPlantClick,
                       )}
                     </div>
                   </div>
+                ) : popupContent ? (
+                  <>{popupContent(marker.points[0])}</>
                 ) : (
                   <div className="space-y-2 min-w-[240px]">
                     <div className="font-bold text-slate-900">{marker.points[0].name}</div>

@@ -51,6 +51,8 @@ verify_jwt = false
 verify_jwt = false
 [functions.lender-research-sonar]
 verify_jwt = false
+[functions.lender-validated-digest]
+verify_jwt = false
 [functions.news-ingest]
 verify_jwt = false
 [functions.news-search]

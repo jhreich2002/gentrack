@@ -209,6 +209,92 @@ export interface PlantNewsState {
   rankingLastRunAt?:      string | null;
 }
 
+// ── Validated Lender Digest ──────────────────────────────────────────────────
+
+/** One point in the 24-month MW-weighted CF time series. */
+export interface LenderDigestCfPoint {
+  month: string;            // YYYY-MM
+  portfolioCf: number | null;       // MW-weighted portfolio capacity factor (%)
+  blendedRegionalCf: number | null; // MW-weighted blended regional baseline (%)
+}
+
+/** Portfolio-level KPI block stored in lender_validated_digest.kpis. */
+export interface LenderDigestKpis {
+  totalMw: number;
+  plantCount: number;
+  weightedTtmCf: number | null;      // TTM = trailing 12-month, MW-weighted (%)
+  blendedRegionalTtmCf: number | null;
+  cfDeltaPp: number | null;          // weightedTtmCf - blendedRegionalTtmCf (pp)
+  avgNewsRisk: number | null;        // MW-weighted avg of plant news_risk_score (0–100)
+  avgDistressScore: number | null;   // MW-weighted avg of plant distress_score (0–100)
+  activeLoanCount: number | null;
+  curtailedCount: number | null;
+}
+
+/** A plant row inside the digest (enriched from validated links + plant data). */
+export interface DigestPlantRow {
+  plantId: string;
+  eiaPlantCode: string;
+  plantName: string;
+  state: string | null;
+  fuelSource: string;          // 'Solar' | 'Wind' | 'Nuclear'
+  nameplateMw: number | null;
+  role: string | null;
+  ttmCf: number | null;        // TTM CF for this plant (%)
+  regionalCf: number | null;   // Regional baseline for this plant (%)
+  cfDeltaPp: number | null;    // ttmCf - regionalCf
+  newsRiskScore: number | null;
+  distressScore: number | null;
+  validatedAt: string | null;
+  lat?: number | null;
+  lng?: number | null;
+}
+
+/** Full cached digest for one lender. */
+export interface LenderValidatedDigest {
+  lenderId: string;           // numeric as string (lenders_canonical.id)
+  lenderName: string;
+  pursuitLabel: 'hot' | 'warm' | 'cold' | null;
+  kpis: LenderDigestKpis;
+  cfSeries: LenderDigestCfPoint[];
+  aiEngagementThesis: string | null;
+  aiPortfolioHealth: string | null;
+  aiPitchBullets: string[];
+  aiRiskBullets: string[];
+  plantCount: number;
+  totalMw: number;
+  costUsd: number | null;
+  modelUsed: string | null;
+  generatedAt: string;        // ISO-8601
+}
+
+/** Row in the AdminPage "Validated Lender Digests" panel. */
+export interface AdminLenderDigestRow {
+  lenderId: string;
+  lenderName: string;
+  validatedPlantCount: number;
+  pursuitLabel: 'hot' | 'warm' | 'cold' | null;
+  lastDigestAt: string | null;
+  lastDigestCostUsd: number | null;
+  modelUsed: string | null;
+  digestPlantCount: number | null;
+  digestAgeDays: number | null;
+  isStale: boolean;
+}
+
+/** Per-lender trigger result (mirrors TriggerResult from lenderResearchService). */
+export interface DigestTriggerResult {
+  ok: boolean;
+  skipped?: boolean;
+  reason?: string;
+  ageMinutes?: number;
+  costUsd?: number;
+  modelUsed?: string;
+  plantCount?: number;
+  totalMw?: number;
+  error?: string;
+}
+
 /** Per-ult_parent nightly-computed metrics from company_stats table. */
 export interface CompanyStats {
   ultParentName:    string;

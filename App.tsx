@@ -24,8 +24,16 @@ import DeveloperDetailView from './components/DeveloperDetailView';
 import AssetRegistryDetailView from './components/AssetRegistryDetailView';
 import type { DeveloperMapViewport } from './components/DeveloperAssetMap';
 import { fetchDevelopers, DeveloperRow } from './services/developerService';
+import LenderValidatedDigestView from './components/lender-validation/LenderValidatedDigestView';
+import { MOCK_DIGEST, MOCK_PLANTS, MOCK_ARTICLES } from './components/lender-validation/__fixtures__/digestFixture';
 
 type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lender-research' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail' | 'archived';
+
+// Dev-only: render the digest preview when ?preview=lender-digest is in the URL.
+const IS_DIGEST_PREVIEW =
+  typeof window !== 'undefined' &&
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get('preview') === 'lender-digest';
 type Tab = 'Overview' | 'Watchlist' | Region;
 type SortKey = 'name' | 'capacity' | 'curtailment' | 'factor' | 'data';
 
@@ -83,6 +91,8 @@ const App: React.FC = () => {
   const [cameFromPursuits, setCameFromPursuits]     = useState(false);
   const [cameFromEntity, setCameFromEntity]         = useState(false);
   const [cameFromDeveloper, setCameFromDeveloper]   = useState(false);
+  const [cameFromLender, setCameFromLender]         = useState(false);
+  const [lenderReturnId, setLenderReturnId]         = useState<string | null>(null);
   const [companyActiveTab, setCompanyActiveTab]     = useState<'overview' | 'portfolio'>('overview');
   const [developerActiveTab, setDeveloperActiveTab] = useState<'overview' | 'portfolio' | 'map' | 'lead'>('overview');
   const [developerMapViewport, setDeveloperMapViewport] = useState<DeveloperMapViewport | null>(null);
@@ -156,6 +166,13 @@ const App: React.FC = () => {
     }
   };
 
+  // Navigate to plant detail from lender digest (by plant DB id + EIA code)
+  const handlePlantClickFromLender = (plantId: string, _eiaCode: string, lenderId: string) => {
+    setLenderReturnId(lenderId);
+    setCameFromLender(true);
+    handlePlantClick(plantId, 'lender');
+  };
+
   // Navigate to plant detail from company portfolio (by EIA code)
   const handlePlantClickFromCompany = (eiaPlantCode: string) => {
     const plant = plants.find(p => p.eiaPlantCode === eiaPlantCode);
@@ -173,13 +190,14 @@ const App: React.FC = () => {
   };
 
   // Handle row click to view plant details
-  const handlePlantClick = async (id: string, origin: 'dashboard' | 'company' | 'pursuits' | 'entity' | 'developer' = 'dashboard') => {
+  const handlePlantClick = async (id: string, origin: 'dashboard' | 'company' | 'pursuits' | 'entity' | 'developer' | 'lender' = 'dashboard') => {
     setSelectedPlantId(id);
     setView('detail');
     setCameFromCompany(origin === 'company');
     setCameFromPursuits(origin === 'pursuits');
     setCameFromEntity(origin === 'entity');
     setCameFromDeveloper(origin === 'developer');
+    if (origin !== 'lender') setCameFromLender(false);
     setGenerationLoading(true);
     setRegionalTrend([]);
     setSubRegionalTrend([]);
@@ -429,6 +447,31 @@ const App: React.FC = () => {
     const ttm = subRegionalTrend.slice(-12);
     return ttm.length > 0 ? ttm.reduce((acc, curr) => acc + curr.factor, 0) / ttm.length : 0;
   }, [subRegionalTrend]);
+
+  // ── DEV PREVIEW: lender digest UI with mock data ──────────────────────────
+  if (IS_DIGEST_PREVIEW) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 p-6">
+        <div className="max-w-7xl mx-auto">
+          <div className="mb-4 px-3 py-2 bg-indigo-900/30 border border-indigo-500/30 rounded-lg text-xs text-indigo-300 flex items-center gap-2">
+            <span className="font-bold uppercase tracking-wider">Dev Preview</span>
+            <span>—</span>
+            <span>Mock data only · No Supabase calls · Remove <code>?preview=lender-digest</code> from URL to exit</span>
+          </div>
+          <LenderValidatedDigestView
+            digest={MOCK_DIGEST}
+            plants={MOCK_PLANTS}
+            articles={MOCK_ARTICLES}
+            onPlantClick={(_plantId, eiaCode) => alert(`Would navigate to PlantDetailView for EIA ${eiaCode}`)}
+            onBack={() => alert('Would navigate back to the Validated lenders list')}
+            onViewEvidence={() => alert('Would open the raw evidence table')}
+            canWrite
+            onPursuitChange={(_id, label) => alert(`Pursuit changed to: ${label ?? 'none'}`)}
+          />
+        </div>
+      </div>
+    );
+  }
 
   if (authLoading) {
     return (
@@ -865,7 +908,12 @@ const App: React.FC = () => {
           view === 'company' && selectedUltParent
             ? <CompanyDetailView ultParentName={selectedUltParent} onBack={() => { setView(selectedPlantId ? 'detail' : 'dashboard'); }} onPlantClick={handlePlantClickFromCompany} initialTab={companyActiveTab} onTabChange={setCompanyActiveTab} />
             : view === 'lender-research'
-            ? <LenderResearchDashboard userRole={userRole} />
+            ? <LenderResearchDashboard
+                userRole={userRole}
+                initialTab={cameFromLender ? 'validated' : undefined}
+                initialLenderId={lenderReturnId}
+                onNavigateToPlant={handlePlantClickFromLender}
+              />
             : view === 'taxequity'
             ? <TaxEquityPursuitsDashboard onInvestorClick={handleTaxEquityClick} watchlist={watchlist} onToggleWatch={toggleWatch} />
             : view === 'pursuits'
@@ -880,7 +928,7 @@ const App: React.FC = () => {
             ? <DeveloperDetailView developer={selectedDeveloper} onBack={() => { setView('developers'); setDeveloperActiveTab('overview'); setDeveloperMapViewport(null); }} onAssetClick={handleAssetRegistryClick} onPlantClick={handlePlantClickFromDeveloper} onTabChange={setDeveloperActiveTab} mapViewport={developerMapViewport} onMapViewportChange={setDeveloperMapViewport} plants={plants} statsMap={statsMap} initialTab={developerActiveTab} />
             : view === 'asset-detail' && selectedAssetId
             ? <AssetRegistryDetailView assetId={selectedAssetId} onBack={() => selectedDeveloper ? setView('developer-detail') : setView('developers')} onPlantClick={handlePlantClickFromDeveloper} />
-            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.some(w => w.entity_type === 'plant' && w.entity_id === selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, 'plant', selectedPlant.id)} onBack={() => { if (cameFromDeveloper && selectedDeveloper) { setView('developer-detail'); setCameFromDeveloper(false); } else if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
+            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.some(w => w.entity_type === 'plant' && w.entity_id === selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, 'plant', selectedPlant.id)} onBack={() => { if (cameFromLender) { setView('lender-research'); setCameFromLender(false); } else if (cameFromDeveloper && selectedDeveloper) { setView('developer-detail'); setCameFromDeveloper(false); } else if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
         )}
       </main>
 

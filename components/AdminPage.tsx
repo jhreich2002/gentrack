@@ -20,6 +20,11 @@ import {
   fetchMonthlyCost,
   triggerPlantResearch,
 } from '../services/lenderResearchService';
+import {
+  fetchAdminLenderDigestList,
+  triggerLenderValidatedDigest,
+} from '../services/lenderDigestService';
+import type { AdminLenderDigestRow, DigestTriggerResult } from '../types';
 
 interface Props {
   currentUserId: string;
@@ -74,6 +79,15 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
   const [lenderBulkRunning, setLenderBulkRunning] = useState(false);
   const [lenderBulkProgress, setLenderBulkProgress] = useState({ completed: 0, total: 0 });
   const [forceByPlant, setForceByPlant] = useState<Record<string, boolean>>({});
+
+  // Validated Lender Digests panel
+  const [digestRows, setDigestRows] = useState<AdminLenderDigestRow[]>([]);
+  const [digestLoading, setDigestLoading] = useState(true);
+  const [digestError, setDigestError] = useState<string | null>(null);
+  const [digestSearch, setDigestSearch] = useState('');
+  const [digestRefreshingId, setDigestRefreshingId] = useState<string | null>(null);
+  const [forceByDigest, setForceByDigest] = useState<Record<string, boolean>>({});
+  const [digestResults, setDigestResults] = useState<Record<string, DigestTriggerResult>>({});
 
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
@@ -252,7 +266,7 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
   }, [dailyUserActivity]);
 
   const dayOptions = useMemo(() => {
-    const days = Array.from(new Set(sortedUserActivity.map((r) => r.day as string))).sort((a, b) => b.localeCompare(a));
+    const days = Array.from(new Set<string>(sortedUserActivity.map((r) => String(r.day ?? '')))).sort((a: string, b: string) => b.localeCompare(a));
     return days;
   }, [sortedUserActivity]);
 
@@ -401,6 +415,36 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
       alert(`Failed to update role: ${err.message}`);
     } finally {
       setRoleLoading(null);
+    }
+  };
+
+  const loadDigestList = useCallback(async () => {
+    setDigestLoading(true);
+    setDigestError(null);
+    try {
+      const rows = await fetchAdminLenderDigestList(digestSearch);
+      setDigestRows(rows);
+    } catch (err: any) {
+      setDigestError(err.message ?? 'Failed to load digest state');
+    } finally {
+      setDigestLoading(false);
+    }
+  }, [digestSearch]);
+
+  useEffect(() => { loadDigestList(); }, [loadDigestList]);
+
+  const handleGenerateDigest = async (lenderId: string) => {
+    setDigestRefreshingId(lenderId);
+    try {
+      const force = Boolean(forceByDigest[lenderId]);
+      const result = await triggerLenderValidatedDigest(lenderId, force);
+      setDigestResults(prev => ({ ...prev, [lenderId]: result }));
+      if (!result.ok) {
+        alert(`Digest generation failed: ${result.error ?? 'unknown error'}`);
+      }
+      await loadDigestList();
+    } finally {
+      setDigestRefreshingId(null);
     }
   };
 
@@ -848,6 +892,119 @@ const AdminPage: React.FC<Props> = ({ currentUserId, onBack, onDataIngested }) =
               </div>
             )}
           </div>
+        </section>
+
+        {/* ── Validated Lender Digests ──────────────────── */}
+        <section className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-lg">
+          <div className="flex items-center justify-between px-8 py-6 border-b border-slate-800">
+            <div>
+              <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-1">Validated Lender Digests</h2>
+              <p className="text-xs text-slate-600">Generate AI engagement memos for validated lenders</p>
+            </div>
+            <button onClick={loadDigestList} className="p-2 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors" title="Refresh">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+          </div>
+          <div className="px-8 py-4 border-b border-slate-800/50">
+            <input
+              type="text"
+              placeholder="Filter by lender name..."
+              value={digestSearch}
+              onChange={(e) => setDigestSearch(e.target.value)}
+              className="w-full max-w-sm px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          {digestLoading ? (
+            <div className="py-16 text-center text-slate-600 text-sm">Loading digest state...</div>
+          ) : digestError ? (
+            <div className="py-16 text-center text-red-400 text-sm">{digestError}</div>
+          ) : digestRows.length === 0 ? (
+            <div className="py-16 text-center text-slate-600 text-sm">No lenders with validated plants found.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-slate-800/50 text-slate-500 text-[10px] font-black uppercase tracking-[0.15em]">
+                    <th className="px-6 py-4">Lender</th>
+                    <th className="px-4 py-4 text-right">Validated Plants</th>
+                    <th className="px-4 py-4">Pursuit</th>
+                    <th className="px-4 py-4">Last Digest</th>
+                    <th className="px-4 py-4 text-right">Cost</th>
+                    <th className="px-4 py-4">Model</th>
+                    <th className="px-4 py-4 text-center">Force</th>
+                    <th className="px-4 py-4 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {digestRows.map((row) => {
+                    const result = digestResults[row.lenderId];
+                    return (
+                      <tr key={row.lenderId} className="hover:bg-slate-800/30 transition-colors">
+                        <td className="px-6 py-3">
+                          <div className="text-sm font-medium text-slate-200">{row.lenderName}</div>
+                          <div className="text-[10px] text-slate-600 font-mono mt-0.5">{row.lenderId.slice(0, 8)}…</div>
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-300">{row.validatedPlantCount}</td>
+                        <td className="px-4 py-3">
+                          {row.pursuitLabel ? (
+                            <span className="text-[10px] px-2 py-0.5 rounded font-bold border uppercase
+                              " style={{ background: row.pursuitLabel === 'hot' ? 'rgba(239,68,68,0.15)' : row.pursuitLabel === 'warm' ? 'rgba(234,179,8,0.15)' : 'rgba(100,116,139,0.15)', color: row.pursuitLabel === 'hot' ? '#f87171' : row.pursuitLabel === 'warm' ? '#facc15' : '#94a3b8', borderColor: row.pursuitLabel === 'hot' ? 'rgba(239,68,68,0.3)' : row.pursuitLabel === 'warm' ? 'rgba(234,179,8,0.3)' : 'rgba(100,116,139,0.3)' }}>
+                              {row.pursuitLabel}
+                            </span>
+                          ) : <span className="text-slate-600 text-xs">—</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          {row.lastDigestAt ? (
+                            <div>
+                              <div className={`text-xs font-medium ${row.isStale ? 'text-amber-400' : 'text-slate-300'}`}>
+                                {new Date(row.lastDigestAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                              </div>
+                              {row.digestAgeDays != null && (
+                                <div className="text-[10px] text-slate-600">{row.digestAgeDays.toFixed(1)}d ago{row.isStale ? ' · stale' : ''}</div>
+                              )}
+                            </div>
+                          ) : <span className="text-slate-600 text-xs">Never</span>}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <span className="text-xs text-slate-400">
+                            {row.lastDigestCostUsd != null ? `$${row.lastDigestCostUsd.toFixed(4)}` : '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="text-[10px] text-slate-500">{row.modelUsed ?? '—'}</span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(forceByDigest[row.lenderId])}
+                            onChange={(e) => setForceByDigest(prev => ({ ...prev, [row.lenderId]: e.target.checked }))}
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex flex-col items-end gap-1">
+                            <button
+                              onClick={() => handleGenerateDigest(row.lenderId)}
+                              disabled={digestRefreshingId === row.lenderId}
+                              className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs disabled:opacity-60"
+                            >
+                              {digestRefreshingId === row.lenderId ? 'Generating…' : 'Generate'}
+                            </button>
+                            {result && (
+                              <span className={`text-[10px] font-bold ${result.ok && !result.skipped ? 'text-green-400' : result.skipped ? 'text-yellow-400' : 'text-red-400'}`}>
+                                {result.ok && !result.skipped ? `✓ done · $${(result.costUsd ?? 0).toFixed(4)}` : result.skipped ? `skipped: ${result.reason}` : `✗ ${result.error}`}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
 
         {/* ── User Management ───────────────────────────── */}
