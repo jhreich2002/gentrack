@@ -937,6 +937,11 @@ async function main() {
     console.log(`  ✓ Supabase sync complete`);
     console.log(`  ✓ Supabase max month advanced: ${beforeMaxMonth ?? 'none'} → ${afterMaxMonth}`);
 
+    // Refresh has_current_generation_data flag so lender research filters stay accurate.
+    const { error: flagError } = await db.rpc('recompute_current_generation_flag');
+    if (flagError) throw new Error(`recompute_current_generation_flag failed: ${flagError.message}`);
+    console.log(`  ✓ has_current_generation_data flag refreshed`);
+
     // Legacy lender-currency-agent was retired in Phase 7.
     // No follow-on lender trigger is executed from this script.
   } else {

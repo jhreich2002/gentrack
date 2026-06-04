@@ -1,10 +1,4 @@
-﻿// TEMPORARY one-time migration runner. Auth-gated by INTERNAL_AUTH_TOKEN.
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import postgres from "https://deno.land/x/postgresjs@v3.4.4/mod.js";
-
-const CORS = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" };
-
-const MIGRATION_SQL = `-- v5.5 follow-up: deduplicate lenders_canonical entries before lender research dashboard reflects current-gen filter.
+-- v5.5 follow-up: deduplicate lenders_canonical entries before lender research dashboard reflects current-gen filter.
 -- Each row in lender_merge_pairs maps a loser lender_id to its canonical winner.
 -- Logic per pair:
 --   1. Insert winner-side alias rows for the loser's canonical_name (ON CONFLICT DO NOTHING)
@@ -14,6 +8,7 @@ const MIGRATION_SQL = `-- v5.5 follow-up: deduplicate lenders_canonical entries 
 --   4. Delete loser from lenders_canonical (CASCADE will clean any leftover refs)
 -- Idempotent: re-running after losers are gone is a no-op.
 
+BEGIN;
 
 CREATE TEMP TABLE lender_merge_pairs (winner_id uuid, loser_id uuid) ON COMMIT DROP;
 
@@ -22,7 +17,7 @@ INSERT INTO lender_merge_pairs (winner_id, loser_id) VALUES
   ('57e00486-4b82-4bd2-ae46-f6ea0a25d98d', 'e5b30fd4-6738-484b-a1d3-542c90b9f0cf'),
   ('57e00486-4b82-4bd2-ae46-f6ea0a25d98d', '57ff7080-ada7-49e4-96ea-649e7ac84db4'),
   ('57e00486-4b82-4bd2-ae46-f6ea0a25d98d', '8671f023-789c-4f61-b5c3-b37b4552b68a'),
-  -- 2. CrÃ©dit Agricole Corporate and Investment Bank
+  -- 2. Crédit Agricole Corporate and Investment Bank
   ('537e6466-ad47-4178-a1cd-b181aea0be19', '0eea7035-8ca7-4884-91a2-f650d0d81779'),
   -- 3. KeyBank (incl. KeyBanc Capital Markets per user approval)
   ('99c2ba50-de2c-4c85-bf18-1ee9df79f1fb', 'd06ce03c-2ed6-4a6b-b130-9fd5ec588049'),
@@ -146,7 +141,7 @@ SET lender_id = m.winner_id
 FROM lender_merge_pairs m
 WHERE pll.lender_id = m.loser_id;
 
--- Step 4: optional rename for #5 â€” replace branch-specific name with parent entity name.
+-- Step 4: optional rename for #5 — replace branch-specific name with parent entity name.
 UPDATE public.lenders_canonical
 SET canonical_name = 'Bayerische Landesbank',
     normalized_name = public.normalize_lender_name('Bayerische Landesbank')
@@ -156,26 +151,5 @@ WHERE id = '27831121-3351-4655-a87a-3c9d08499aed';
 DELETE FROM public.lenders_canonical lc
 USING lender_merge_pairs m
 WHERE lc.id = m.loser_id;
-`;
 
-serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
-  const internalToken = Deno.env.get("INTERNAL_AUTH_TOKEN") ?? "";
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const validToken = internalToken || serviceKey;
-  if (!validToken || token !== validToken) {
-    return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: CORS });
-  }
-  const dbUrl = Deno.env.get("SUPABASE_DB_URL");
-  if (!dbUrl) return new Response(JSON.stringify({ error: "SUPABASE_DB_URL not available" }), { status: 500, headers: CORS });
-  try {
-    const sql = postgres(dbUrl, { max: 1 });
-    await sql.begin(async (tx) => { await tx.unsafe(MIGRATION_SQL); });
-    await sql.end();
-    return new Response(JSON.stringify({ ok: true, message: "Migration applied: lender canonical dedupe" }), { status: 200, headers: CORS });
-  } catch (e) {
-    return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: CORS });
-  }
-});
-
+COMMIT;

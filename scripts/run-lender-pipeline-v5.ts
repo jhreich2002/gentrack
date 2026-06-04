@@ -34,6 +34,7 @@ async function main() {
     .from('plants')
     .select('id, eia_plant_code, name')
     .eq('is_likely_curtailed', true)
+    .eq('has_current_generation_data', true)
     .order('nameplate_capacity_mw', { ascending: false });
 
   if (plantsRes.error) throw plantsRes.error;
