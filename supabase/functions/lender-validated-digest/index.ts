@@ -19,7 +19,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { checkInternalOrAdminAuth } from '../_shared/auth.ts';
 
-const MODEL = 'gemini-2.0-flash';
+const MODEL = 'gemini-2.5-flash';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const CF_MONTHS = 24;
 const COST_CAP_USD = 0.15;  // slightly raised: priority overlay adds ~20% tokens
