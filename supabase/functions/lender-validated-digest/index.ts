@@ -246,7 +246,7 @@ Deno.serve(async (req: Request) => {
       role_summary,
       validated_at,
       source_url,
-      plants!inner(
+      plants!plant_id(
         id, name, eia_plant_code, state, region, sub_region,
         fuel_source, nameplate_capacity_mw, lat, lng,
         is_likely_curtailed, distress_score, cod
