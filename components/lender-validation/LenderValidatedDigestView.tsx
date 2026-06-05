@@ -218,7 +218,7 @@ interface AiOverviewProps {
 
 const AiOverviewCard: React.FC<AiOverviewProps> = ({ thesis, health, pitchBullets, riskBullets }) => {
   const [thesisOpen, setThesisOpen] = useState(true);
-  const [healthOpen, setHealthOpen] = useState(false);
+  const [healthOpen, setHealthOpen] = useState(true);
 
   return (
     <div className="bg-slate-900/70 border border-slate-800 rounded-xl overflow-hidden">
@@ -229,7 +229,7 @@ const AiOverviewCard: React.FC<AiOverviewProps> = ({ thesis, health, pitchBullet
       </div>
 
       {/* Two-column: narratives left, bullet chips right */}
-      <div className="flex flex-col lg:flex-row gap-0 divide-y lg:divide-y-0 lg:divide-x divide-slate-800">
+      <div className="flex flex-col lg:flex-row lg:items-start gap-0 divide-y lg:divide-y-0 lg:divide-x divide-slate-800">
         {/* Narratives */}
         <div className="flex-1 p-5 space-y-3">
           {/* Engagement thesis */}
