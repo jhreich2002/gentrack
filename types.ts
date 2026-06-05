@@ -237,17 +237,28 @@ export interface DigestPlantRow {
   eiaPlantCode: string;
   plantName: string;
   state: string | null;
-  fuelSource: string;          // 'Solar' | 'Wind' | 'Nuclear'
+  fuelSource: string;
   nameplateMw: number | null;
   role: string | null;
-  ttmCf: number | null;        // TTM CF for this plant (%)
-  regionalCf: number | null;   // Regional baseline for this plant (%)
-  cfDeltaPp: number | null;    // ttmCf - regionalCf
+  cod?: string | null;                  // Commercial operation date (YYYY-MM-DD)
+  ttmCf: number | null;
+  regionalCf: number | null;
+  cfDeltaPp: number | null;
   newsRiskScore: number | null;
   distressScore: number | null;
   validatedAt: string | null;
   lat?: number | null;
   lng?: number | null;
+  // Outreach priority fields (optional — absent in older cached digests)
+  evidenceArticleDate?: string | null;  // Most recent evidence article ISO date
+  evidenceAgeYears?: number | null;     // Years since evidence article
+  expectedTenorYears?: number | null;   // Expected loan tenor for this role
+  loanLikelyActivePct?: number | null;  // 0–100 sigmoid score
+  recentNewsCount?: number | null;      // # news articles in last 12 months
+  priorityScore?: number | null;        // 0–100 composite heuristic
+  priorityBand?: 'high' | 'medium' | 'low' | 'cold' | null;
+  aiPriorityBand?: 'high' | 'medium' | 'low' | 'cold' | null;
+  aiPriorityReason?: string | null;
 }
 
 /** Full cached digest for one lender. */
