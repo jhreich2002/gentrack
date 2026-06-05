@@ -105,12 +105,29 @@ export async function fetchLenderValidatedDigest(lenderId: string): Promise<{
   if (eiaCodes.length > 0) {
     const { data: artData } = await supabase
       .from('news_articles')
-      .select('id, title, description, published_at, sentiment_label, relevance_score, entity_company_names, lenders, article_summary, plant_codes')
+      .select('id, title, description, url, source_name, published_at, topics, sentiment_label, event_type, impact_tags, fti_relevance_tags, importance, relevance_score, entity_company_names, lenders, article_summary, plant_codes')
       .overlaps('plant_codes', eiaCodes)
       .order('relevance_score', { ascending: false, nullsFirst: false })
       .order('published_at', { ascending: false, nullsFirst: false })
       .limit(25);
-    articles = (artData ?? []) as any[];
+    articles = (artData ?? []).map((row: Record<string, unknown>) => ({
+      id:                  String(row.id ?? ''),
+      title:                String(row.title ?? ''),
+      description:          row.description ? String(row.description) : null,
+      url:                  String(row.url ?? ''),
+      sourceName:           row.source_name ? String(row.source_name) : null,
+      publishedAt:          row.published_at ? String(row.published_at) : '',
+      topics:               Array.isArray(row.topics) ? (row.topics as any[]).map(String) : [],
+      sentimentLabel:       row.sentiment_label ? String(row.sentiment_label) as any : null,
+      eventType:            row.event_type ? String(row.event_type) : null,
+      impactTags:           Array.isArray(row.impact_tags) ? (row.impact_tags as any[]).map(String) : [],
+      ftiRelevanceTags:     Array.isArray(row.fti_relevance_tags) ? (row.fti_relevance_tags as any[]).map(String) : [],
+      importance:           row.importance ? String(row.importance) as any : null,
+      entityCompanyNames:   Array.isArray(row.entity_company_names) ? (row.entity_company_names as any[]).map(String) : [],
+      lenders:              Array.isArray(row.lenders) ? (row.lenders as any[]).map(String) : [],
+      relevanceScore:       row.relevance_score != null ? Number(row.relevance_score) : null,
+      articleSummary:       row.article_summary ? String(row.article_summary) : null,
+    }));
   }
 
   return { digest, plants, articles };

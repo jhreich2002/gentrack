@@ -512,11 +512,11 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ articles, filterPlantName }) => {
   const filtered = filterPlantName
     ? articles.filter(
         (a) =>
-          a.entityCompanyNames.some((n) =>
+          (a.entityCompanyNames ?? []).some((n) =>
             n.toLowerCase().includes(filterPlantName.toLowerCase()),
           ) ||
-          (a.lenders?.some((l) => l.toLowerCase().includes(filterPlantName.toLowerCase()))) ||
-          a.title.toLowerCase().includes(filterPlantName.toLowerCase()),
+          ((a.lenders ?? []).some((l) => l.toLowerCase().includes(filterPlantName.toLowerCase()))) ||
+          (a.title ?? '').toLowerCase().includes(filterPlantName.toLowerCase()),
       )
     : articles;
 
@@ -577,7 +577,7 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ articles, filterPlantName }) => {
                     {article.importance}
                   </span>
                 )}
-                {article.impactTags.slice(0, 2).map((tag) => (
+                {article.impactTags && article.impactTags.slice(0, 2).map((tag) => (
                   <span
                     key={tag}
                     className="text-[9px] text-slate-500 bg-slate-800 rounded px-1.5 py-0.5"
@@ -633,15 +633,6 @@ const LenderValidatedDigestView: React.FC<LenderValidatedDigestViewProps> = ({
 }) => {
   const [newsFeedPlantId, setNewsFeedPlantId] = useState<string | null>(null);
   const newsFeedPlantName = plants.find((p) => p.plantId === newsFeedPlantId)?.plantName ?? null;
-
-  // eslint-disable-next-line no-console
-  console.debug('[LenderValidatedDigestView] render', {
-    lenderId: digest?.lenderId,
-    hasKpis: !!digest?.kpis,
-    cfSeriesLen: Array.isArray(digest?.cfSeries) ? digest.cfSeries.length : 'NOT_ARRAY',
-    plantCount: plants?.length,
-    articleCount: articles?.length,
-  });
 
   const { kpis } = digest;
 
