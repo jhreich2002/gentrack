@@ -1,7 +1,52 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, type ReactNode } from 'react';
 import { fetchLenderValidatedDigest } from '../../services/lenderDigestService';
 import LenderValidatedDigestView from './LenderValidatedDigestView';
 import type { LenderValidatedDigest, DigestPlantRow } from '../../types';
+
+// Error boundary so a render error in the digest view surfaces a visible card
+// instead of whitescreening the page (React 18 unmounts subtree on uncaught throw).
+interface DigestErrorBoundaryProps {
+  onBack: () => void;
+  children: ReactNode;
+}
+interface DigestErrorBoundaryState {
+  error: Error | null;
+}
+class DigestErrorBoundary extends React.Component<DigestErrorBoundaryProps, DigestErrorBoundaryState> {
+  constructor(props: DigestErrorBoundaryProps) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): DigestErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // eslint-disable-next-line no-console
+    console.error('[LenderValidatedDigest] render error:', error, info?.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="bg-slate-900 border border-red-800/40 rounded-xl p-8 text-center">
+          <p className="text-red-400 text-sm mb-2">Digest view crashed</p>
+          <p className="text-slate-500 text-xs font-mono whitespace-pre-wrap break-words max-w-2xl mx-auto">
+            {this.state.error.message}
+          </p>
+          <button
+            onClick={this.props.onBack}
+            className="mt-4 text-xs text-blue-400 hover:text-blue-300"
+          >
+            ← Back to lenders
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface Props {
   lenderId: string;
@@ -113,16 +158,18 @@ const LenderValidatedDigestContainer: React.FC<Props> = ({
   }
 
   return (
-    <LenderValidatedDigestView
-      digest={digest}
-      plants={plants}
-      articles={articles}
-      onPlantClick={onPlantClick}
-      onBack={onBack}
-      onViewEvidence={onViewEvidence}
-      canWrite={canWrite}
-      onPursuitChange={onPursuitChange}
-    />
+    <DigestErrorBoundary onBack={onBack}>
+      <LenderValidatedDigestView
+        digest={digest}
+        plants={plants}
+        articles={articles}
+        onPlantClick={onPlantClick}
+        onBack={onBack}
+        onViewEvidence={onViewEvidence}
+        canWrite={canWrite}
+        onPursuitChange={onPursuitChange}
+      />
+    </DigestErrorBoundary>
   );
 };
 

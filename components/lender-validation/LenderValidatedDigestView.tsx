@@ -634,6 +634,15 @@ const LenderValidatedDigestView: React.FC<LenderValidatedDigestViewProps> = ({
   const [newsFeedPlantId, setNewsFeedPlantId] = useState<string | null>(null);
   const newsFeedPlantName = plants.find((p) => p.plantId === newsFeedPlantId)?.plantName ?? null;
 
+  // eslint-disable-next-line no-console
+  console.debug('[LenderValidatedDigestView] render', {
+    lenderId: digest?.lenderId,
+    hasKpis: !!digest?.kpis,
+    cfSeriesLen: Array.isArray(digest?.cfSeries) ? digest.cfSeries.length : 'NOT_ARRAY',
+    plantCount: plants?.length,
+    articleCount: articles?.length,
+  });
+
   const { kpis } = digest;
 
   const isStale =
