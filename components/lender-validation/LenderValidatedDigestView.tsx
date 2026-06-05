@@ -310,9 +310,51 @@ const AiOverviewCard: React.FC<AiOverviewProps> = ({ thesis, health, pitchBullet
   );
 };
 
+// ── Priority band helpers ────────────────────────────────────────────────────
+
+type PriorityBand = 'high' | 'medium' | 'low' | 'cold';
+
+function priorityBandClass(band: PriorityBand | null | undefined): string {
+  if (!band) return 'bg-slate-800 text-slate-500 border-slate-700';
+  const cfg: Record<PriorityBand, string> = {
+    high:   'bg-emerald-900/30 text-emerald-400 border-emerald-500/40',
+    medium: 'bg-amber-900/20 text-amber-400 border-amber-500/30',
+    low:    'bg-slate-800/80 text-slate-400 border-slate-600',
+    cold:   'bg-slate-900 text-slate-600 border-slate-700',
+  };
+  return cfg[band];
+}
+
+function priorityBandLabel(band: PriorityBand | null | undefined): string {
+  if (!band) return '—';
+  return band.charAt(0).toUpperCase() + band.slice(1);
+}
+
+function buildPriorityTooltip(p: DigestPlantRow): string {
+  const effectiveBand = p.aiPriorityBand ?? p.priorityBand;
+  const lines: string[] = [];
+  if (p.priorityScore != null) lines.push(`Score: ${p.priorityScore}/100`);
+  if (p.loanLikelyActivePct != null) lines.push(`Loan likely active: ${p.loanLikelyActivePct}%`);
+  if (p.evidenceAgeYears != null && p.expectedTenorYears != null) {
+    lines.push(`Evidence age: ${p.evidenceAgeYears.toFixed(1)}yr | Expected tenor: ${p.expectedTenorYears}yr`);
+  }
+  if (p.evidenceArticleDate) {
+    lines.push(`Latest evidence: ${new Date(p.evidenceArticleDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short' })}`);
+  }
+  if (p.cod) lines.push(`COD: ${p.cod.slice(0, 7)}`);
+  if (p.recentNewsCount != null) lines.push(`Recent news (12mo): ${p.recentNewsCount}`);
+  if (p.aiPriorityBand && p.aiPriorityReason) {
+    lines.push(`AI: "${p.aiPriorityReason}"`);
+  }
+  if (effectiveBand === 'cold') {
+    lines.push('Low outreach priority — loan likely matured.');
+  }
+  return lines.join('\n');
+}
+
 // ── Plant table ───────────────────────────────────────────────────────────────
 
-type SortKey = 'name' | 'mw' | 'ttmCf' | 'delta' | 'newsRisk';
+type SortKey = 'priority' | 'name' | 'mw' | 'ttmCf' | 'delta' | 'newsRisk';
 
 interface PlantTableProps {
   plants: DigestPlantRow[];
@@ -322,21 +364,28 @@ interface PlantTableProps {
 }
 
 const PlantTable: React.FC<PlantTableProps> = ({ plants, onPlantClick, selectedPlantId, onFilterSelect }) => {
-  const [sortKey, setSortKey] = useState<SortKey>('mw');
+  const hasPriorityData = plants.some((p) => p.priorityScore != null);
+  const [sortKey, setSortKey] = useState<SortKey>(hasPriorityData ? 'priority' : 'mw');
   const [sortDesc, setSortDesc] = useState(true);
 
   const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDesc((d) => !d);
-    } else {
-      setSortKey(key);
-      setSortDesc(true);
-    }
+    if (sortKey === key) setSortDesc((d) => !d);
+    else { setSortKey(key); setSortDesc(true); }
   };
+
+  const BAND_ORDER: Record<string, number> = { high: 3, medium: 2, low: 1, cold: 0 };
 
   const sorted = [...plants].sort((a, b) => {
     const mul = sortDesc ? -1 : 1;
     switch (sortKey) {
+      case 'priority': {
+        const aEffBand = a.aiPriorityBand ?? a.priorityBand;
+        const bEffBand = b.aiPriorityBand ?? b.priorityBand;
+        const aBandScore = BAND_ORDER[aEffBand ?? ''] ?? -1;
+        const bBandScore = BAND_ORDER[bEffBand ?? ''] ?? -1;
+        if (aBandScore !== bBandScore) return mul * (aBandScore - bBandScore);
+        return mul * ((a.priorityScore ?? 0) - (b.priorityScore ?? 0));
+      }
       case 'name':    return mul * a.plantName.localeCompare(b.plantName);
       case 'mw':      return mul * ((a.nameplateMw ?? 0) - (b.nameplateMw ?? 0));
       case 'ttmCf':   return mul * ((a.ttmCf ?? -1) - (b.ttmCf ?? -1));
@@ -358,9 +407,14 @@ const PlantTable: React.FC<PlantTableProps> = ({ plants, onPlantClick, selectedP
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
+      <div className="px-4 py-3 border-b border-slate-800 flex items-center gap-2 flex-wrap">
         <h3 className="text-sm font-semibold text-slate-200">Validated Plants</h3>
         <span className="text-xs text-slate-500">({plants.length})</span>
+        {hasPriorityData && (
+          <span className="text-[10px] text-slate-500 hidden sm:inline">
+            · sorted by outreach priority — hover pill for scoring details
+          </span>
+        )}
         {selectedPlantId && (
           <button
             onClick={() => onFilterSelect(null)}
@@ -370,9 +424,11 @@ const PlantTable: React.FC<PlantTableProps> = ({ plants, onPlantClick, selectedP
           </button>
         )}
       </div>
+      <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-slate-800/60 bg-slate-900/70">
+            {hasPriorityData && <SortHeader k="priority" label="Priority" />}
             <SortHeader k="name" label="Plant" />
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">State</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">Fuel</th>
@@ -387,16 +443,29 @@ const PlantTable: React.FC<PlantTableProps> = ({ plants, onPlantClick, selectedP
         <tbody>
           {sorted.map((p) => {
             const isActive = selectedPlantId === p.plantId;
+            const effectiveBand = (p.aiPriorityBand ?? p.priorityBand) as PriorityBand | null;
+            const isCold = effectiveBand === 'cold';
             return (
               <tr
                 key={p.plantId}
-                className={`border-b border-slate-800/30 last:border-b-0 cursor-pointer transition-colors ${
-                  isActive ? 'bg-blue-900/20' : 'hover:bg-slate-800/40'
+                className={`border-b border-slate-800/30 last:border-b-0 cursor-pointer transition-all ${
+                  isActive ? 'bg-blue-900/20' : isCold ? 'hover:bg-slate-800/20 opacity-50' : 'hover:bg-slate-800/40'
                 }`}
-                onClick={() => {
-                  onFilterSelect(isActive ? null : p.plantId);
-                }}
+                onClick={() => onFilterSelect(isActive ? null : p.plantId)}
               >
+                {hasPriorityData && (
+                  <td className="px-4 py-3">
+                    <span
+                      title={buildPriorityTooltip(p)}
+                      className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border cursor-help ${priorityBandClass(effectiveBand)}`}
+                    >
+                      {priorityBandLabel(effectiveBand)}
+                    </span>
+                    {p.aiPriorityBand && p.aiPriorityBand !== p.priorityBand && (
+                      <span className="ml-1 text-[9px] text-indigo-400" title="AI adjusted heuristic band">AI</span>
+                    )}
+                  </td>
+                )}
                 <td className="px-4 py-3">
                   <button
                     className="text-blue-400 hover:text-blue-300 font-semibold text-left"
@@ -426,6 +495,7 @@ const PlantTable: React.FC<PlantTableProps> = ({ plants, onPlantClick, selectedP
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 };
