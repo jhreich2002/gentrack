@@ -36,8 +36,15 @@ const PAGE_SIZE = 5000; // EIA max per request
 const RATE_LIMIT_DELAY_MS = 1_500; // delay between paginated requests
 
 // Supabase credentials (set in .env / GitHub Actions secrets)
+// Accept both legacy key names and the newer SUPABASE_SECRET_KEY name so the
+// script works regardless of which secret the GitHub environment exposes.
 const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL  || '';
-const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_KEY  =
+  process.env.SUPABASE_SECRET_KEY ||
+  process.env.VITE_SUPABASE_SECRET_KEY ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ||
+  '';
 
 // Dynamic data window configuration
 const EIA923_TRAILING_MONTHS = 24;
@@ -853,9 +860,8 @@ async function main() {
 
     const beforeMaxMonth = beforeMaxMonthRows?.[0]?.month ?? null;
     if (beforeMaxMonth && beforeMaxMonth >= latestEia923Month) {
-      console.log(`\nℹ No new EIA month to ingest. Supabase already has ${beforeMaxMonth} (latest available ${latestEia923Month}). Skipping upsert.`);
-      process.exit(0);
-    }
+      console.log(`\nℹ No new EIA month to ingest. Supabase already has ${beforeMaxMonth} (latest available ${latestEia923Month}). Skipping DB upsert — will still write plants.json.`);
+    } else {
 
     // Build plant rows — use pre-computed stats embedded during the scoring pass above
     const plantRows = finalPlants.map(p => ({
@@ -923,14 +929,10 @@ async function main() {
     if (!afterMaxMonth) {
       throw new Error('Supabase post-check failed: monthly_generation has no rows after ingestion.');
     }
+    // Only fail if DB is behind EIA — equal means data is already current (idempotent re-run).
     if (afterMaxMonth < latestEia923Month) {
       throw new Error(
         `Supabase post-check failed: latest month is ${afterMaxMonth}, expected at least ${latestEia923Month}.`
-      );
-    }
-    if (beforeMaxMonth && afterMaxMonth <= beforeMaxMonth) {
-      throw new Error(
-        `Supabase post-check failed: latest month did not advance (before=${beforeMaxMonth}, after=${afterMaxMonth}).`
       );
     }
 
@@ -944,6 +946,7 @@ async function main() {
 
     // Legacy lender-currency-agent was retired in Phase 7.
     // No follow-on lender trigger is executed from this script.
+    } // end else (new data to upsert)
   } else {
     console.log('  ℹ Supabase credentials not set — skipping DB upsert (JSON only)');
   }

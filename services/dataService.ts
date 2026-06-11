@@ -5,6 +5,8 @@ import { supabase } from './supabaseClient';
 
 let _dataTimestamp: string | null = null;
 let _globalLatestMonth: string = EIA_START_MONTH;
+let _globalLatestMonthFetchedAt: number = 0;
+const GLOBAL_LATEST_MONTH_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 export function getDataTimestamp(): string | null {
   return _dataTimestamp;
@@ -12,6 +14,26 @@ export function getDataTimestamp(): string | null {
 
 /** The latest month with EIA data across all loaded plants — used to align chart X-axes. */
 export function getGlobalLatestMonth(): string {
+  return _globalLatestMonth;
+}
+
+/**
+ * Force a fresh query for the latest generation month from Supabase and update the
+ * module-level cache. Call this after triggering a data refresh in the Admin UI so
+ * long-lived tabs immediately reflect the new data without a full page reload.
+ */
+export async function refreshGlobalLatestMonth(): Promise<string> {
+  try {
+    const { data: maxRow } = await supabase
+      .from('monthly_generation')
+      .select('month')
+      .order('month', { ascending: false })
+      .limit(1);
+    if (maxRow?.[0]?.month) {
+      _globalLatestMonth = maxRow[0].month;
+      _globalLatestMonthFetchedAt = Date.now();
+    }
+  } catch { /* non-fatal */ }
   return _globalLatestMonth;
 }
 
@@ -117,15 +139,20 @@ export const fetchPowerPlants = async (): Promise<FetchPlantsResult> => {
     _dataTimestamp = allRows[0]?.last_updated ?? new Date().toISOString();
     console.log(`[GenTrack] Loaded ${allRows.length} plants from Supabase`);
 
-    // Determine global latest month so all charts share the same X-axis end
+    // Determine global latest month so all charts share the same X-axis end.
+    // Re-fetch if the cached value is stale (older than TTL).
     try {
-      const { data: maxRow } = await supabase
-        .from('monthly_generation')
-        .select('month')
-        .order('month', { ascending: false })
-        .limit(1);
-      if (maxRow?.[0]?.month && maxRow[0].month > _globalLatestMonth) {
-        _globalLatestMonth = maxRow[0].month;
+      const stale = Date.now() - _globalLatestMonthFetchedAt > GLOBAL_LATEST_MONTH_TTL_MS;
+      if (stale) {
+        const { data: maxRow } = await supabase
+          .from('monthly_generation')
+          .select('month')
+          .order('month', { ascending: false })
+          .limit(1);
+        if (maxRow?.[0]?.month && maxRow[0].month > _globalLatestMonth) {
+          _globalLatestMonth = maxRow[0].month;
+          _globalLatestMonthFetchedAt = Date.now();
+        }
       }
     } catch { /* non-fatal — fallback to EIA_START_MONTH */ }
 
@@ -139,7 +166,9 @@ export const fetchPowerPlants = async (): Promise<FetchPlantsResult> => {
   }
 
   try {
-    const res = await fetch(`${import.meta.env.BASE_URL}data/plants.json`);
+    const dataVersion = import.meta.env.VITE_DATA_VERSION ?? '';
+    const cacheBust = dataVersion ? `?v=${dataVersion}` : '';
+    const res = await fetch(`${import.meta.env.BASE_URL}data/plants.json${cacheBust}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const manifest = await res.json();
     if (manifest.plants?.length > 0) {

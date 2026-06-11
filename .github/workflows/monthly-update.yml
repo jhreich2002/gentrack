@@ -16,6 +16,9 @@ name: Refresh EIA Data & Deploy
 
 on:
   workflow_dispatch:
+  schedule:
+    # 5th of each month at 05:00 UTC — past EIA-923's typical 90-day publication lag
+    - cron: '0 5 5 * *'
 
 # Allow only one deployment at a time
 concurrency:
@@ -53,7 +56,9 @@ jobs:
         env:
           VITE_EIA_API_KEY: ${{ secrets.VITE_EIA_API_KEY }}
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          # Support both legacy and new secret key names
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
         run: npx --yes tsx scripts/fetch-eia-data.ts
 
       - name: Trigger news refresh for curtailed plants
@@ -86,6 +91,8 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # Injected into the client bundle so static JSON fetches bust the CDN cache
+          VITE_DATA_VERSION: ${{ github.run_id }}
         run: npm run build
 
       - name: Setup Pages
@@ -99,3 +106,10 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::EIA data refresh failed. Check the workflow logs at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "Hint: if the 'Fetch fresh EIA data' step failed with 'Invalid API key' or 'JWT', rotate SUPABASE_SECRET_KEY in repo secrets."
+          echo "Hint: if it failed with 'latest month did not advance', EIA may not have published new data yet — retry on the 10th."

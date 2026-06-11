@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useTransition, useCallback } from 'react';
 import { PowerPlant, Region, FuelSource, CapacityFactorStats, AnalysisResult } from './types';
 import { REGIONS, FUEL_SOURCES, COLORS, SUBREGIONS } from './constants';
-import { fetchPowerPlants, fetchGenerationHistory, fetchRegionalTrend, fetchSubRegionalTrend, calculateCapacityFactorStats, getDataTimestamp } from './services/dataService';
+import { fetchPowerPlants, fetchGenerationHistory, fetchRegionalTrend, fetchSubRegionalTrend, calculateCapacityFactorStats, getDataTimestamp, getGlobalLatestMonth } from './services/dataService';
 import { getGeminiInsights } from './services/geminiService';
 import { onAuthStateChange, getProfile, fetchWatchlist, addToWatchlist, removeFromWatchlist, signOut, trackUserActivityEvent, WatchlistEntry, WatchlistEntityType } from './services/authService';
 import { supabase } from './services/supabaseClient';
@@ -625,9 +625,17 @@ const App: React.FC = () => {
             <div className="pt-4 pb-2 px-4">
               <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">Data Source</span>
               <p className="text-[10px] text-slate-500 mt-1">
-                {getDataTimestamp()
-                  ? `EIA • ${new Date(getDataTimestamp()!).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
-                  : 'Built-in dataset'}
+                {(() => {
+                  const latestMonth = getGlobalLatestMonth();
+                  if (latestMonth) {
+                    const [y, m] = latestMonth.split('-');
+                    const label = new Date(Number(y), Number(m) - 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+                    return `EIA • through ${label}`;
+                  }
+                  return getDataTimestamp()
+                    ? `EIA • ${new Date(getDataTimestamp()!).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
+                    : 'Built-in dataset';
+                })()}
               </p>
             </div>
           )}
