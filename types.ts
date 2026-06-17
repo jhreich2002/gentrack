@@ -215,6 +215,8 @@ export interface PlantNewsState {
 export interface LenderDigestCfPoint {
   month: string;            // YYYY-MM
   portfolioCf: number | null;       // MW-weighted portfolio capacity factor (%)
+  curtailedCf: number | null;       // MW-weighted curtailed-plants-only CF (%)
+  performingCf: number | null;      // MW-weighted performing-plants-only CF (%)
   blendedRegionalCf: number | null; // MW-weighted blended regional baseline (%)
 }
 
@@ -223,6 +225,8 @@ export interface LenderDigestKpis {
   totalMw: number;
   plantCount: number;
   weightedTtmCf: number | null;      // TTM = trailing 12-month, MW-weighted (%)
+  curtailedTtmCf?: number | null;    // TTM CF for curtailed plants only (%)
+  performingTtmCf?: number | null;   // TTM CF for performing plants only (%)
   blendedRegionalTtmCf: number | null;
   cfDeltaPp: number | null;          // weightedTtmCf - blendedRegionalTtmCf (pp)
   avgNewsRisk: number | null;        // MW-weighted avg of plant news_risk_score (0–100)
@@ -249,6 +253,7 @@ export interface DigestPlantRow {
   validatedAt: string | null;
   lat?: number | null;
   lng?: number | null;
+  isLikelyCurtailed?: boolean;          // Whether plant is flagged as likely curtailed
   // Outreach priority fields (optional — absent in older cached digests)
   evidenceArticleDate?: string | null;  // Most recent evidence article ISO date
   evidenceAgeYears?: number | null;     // Years since evidence article

@@ -355,12 +355,14 @@ Deno.serve(async (req: Request) => {
 
   // ── 4. Portfolio CF series (MW-weighted) ─────────────────────────────────────
 
-  const cfSeries: Array<{ month: string; portfolioCf: number | null; blendedRegionalCf: number | null }> = [];
+  const cfSeries: Array<{ month: string; portfolioCf: number | null; curtailedCf: number | null; performingCf: number | null; blendedRegionalCf: number | null }> = [];
 
   for (const month of months) {
     const hours = daysInMonth(month) * 24;
     let numerator   = 0;
     let denominator = 0;
+    let curtNum = 0, curtDen = 0;
+    let perfNum = 0, perfDen = 0;
 
     for (const plant of uniquePlants) {
       if (!plant.nameplateMw) continue;
@@ -368,12 +370,21 @@ Deno.serve(async (req: Request) => {
       if (mwh == null) continue;  // exclude plants with null mwh from this month
       numerator   += mwh;
       denominator += plant.nameplateMw * hours;
+      if (plant.isLikelyCurtailed) {
+        curtNum += mwh;
+        curtDen += plant.nameplateMw * hours;
+      } else {
+        perfNum += mwh;
+        perfDen += plant.nameplateMw * hours;
+      }
     }
 
     cfSeries.push({
       month,
-      portfolioCf: denominator > 0 ? Math.round((numerator / denominator) * 100 * 10) / 10 : null,
-      blendedRegionalCf: null,  // filled in step 4
+      portfolioCf:      denominator > 0 ? Math.round((numerator / denominator) * 100 * 10) / 10 : null,
+      curtailedCf:      curtDen > 0     ? Math.round((curtNum  / curtDen)  * 100 * 10) / 10 : null,
+      performingCf:     perfDen > 0     ? Math.round((perfNum  / perfDen)  * 100 * 10) / 10 : null,
+      blendedRegionalCf: null,  // filled in step 5
     });
   }
 
@@ -426,6 +437,8 @@ Deno.serve(async (req: Request) => {
   // Per-plant TTM CF (MW-weighted avg of last 12 months)
   let ttmNumerator = 0, ttmDenominator = 0;
   let regNumerator = 0, regDenominator = 0;
+  let curtTtmNumerator = 0, curtTtmDenominator = 0;
+  let perfTtmNumerator = 0, perfTtmDenominator = 0;
 
   for (const plant of uniquePlants) {
     if (!plant.nameplateMw) continue;
@@ -443,6 +456,13 @@ Deno.serve(async (req: Request) => {
       const plantTtmCf = (mwhSum / (plant.nameplateMw * hoursSum)) * 100;
       ttmNumerator   += plant.nameplateMw * plantTtmCf;
       ttmDenominator += plant.nameplateMw;
+      if (plant.isLikelyCurtailed) {
+        curtTtmNumerator   += plant.nameplateMw * plantTtmCf;
+        curtTtmDenominator += plant.nameplateMw;
+      } else {
+        perfTtmNumerator   += plant.nameplateMw * plantTtmCf;
+        perfTtmDenominator += plant.nameplateMw;
+      }
     }
 
     // Regional TTM from blended series
@@ -460,8 +480,10 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  const weightedTtmCf      = ttmDenominator > 0 ? Math.round((ttmNumerator / ttmDenominator) * 10) / 10 : null;
-  const blendedRegionalTtmCf = regDenominator > 0 ? Math.round((regNumerator / regDenominator) * 10) / 10 : null;
+  const weightedTtmCf        = ttmDenominator     > 0 ? Math.round((ttmNumerator     / ttmDenominator)     * 10) / 10 : null;
+  const curtailedTtmCf       = curtTtmDenominator > 0 ? Math.round((curtTtmNumerator / curtTtmDenominator) * 10) / 10 : null;
+  const performingTtmCf      = perfTtmDenominator > 0 ? Math.round((perfTtmNumerator / perfTtmDenominator) * 10) / 10 : null;
+  const blendedRegionalTtmCf = regDenominator     > 0 ? Math.round((regNumerator     / regDenominator)     * 10) / 10 : null;
   const cfDeltaPp = (weightedTtmCf != null && blendedRegionalTtmCf != null)
     ? Math.round((weightedTtmCf - blendedRegionalTtmCf) * 10) / 10
     : null;
@@ -755,6 +777,7 @@ ${plantPriorityLines}
       validatedAt:          plant.validatedAt,
       lat:                  plant.lat,
       lng:                  plant.lng,
+      isLikelyCurtailed:    plant.isLikelyCurtailed,
       // Outreach priority
       evidenceArticleDate:  priority.evidenceArticleDate,
       evidenceAgeYears:     priority.evidenceAgeYears,
@@ -772,6 +795,8 @@ ${plantPriorityLines}
     totalMw,
     plantCount,
     weightedTtmCf,
+    curtailedTtmCf,
+    performingTtmCf,
     blendedRegionalTtmCf,
     cfDeltaPp,
     avgNewsRisk: null,
@@ -786,6 +811,8 @@ ${plantPriorityLines}
   const cfSeriesDb = cfSeries.map((p) => ({
     month: p.month,
     portfolio_cf: p.portfolioCf,
+    curtailed_cf: p.curtailedCf,
+    performing_cf: p.performingCf,
     blended_regional_cf: p.blendedRegionalCf,
   }));
 

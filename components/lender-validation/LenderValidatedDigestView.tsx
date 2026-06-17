@@ -129,10 +129,14 @@ const PortfolioCfChart: React.FC<CfChartProps> = ({ cfSeries }) => {
   const data = cfSeries.map((p) => ({
     name: p.month,
     portfolioCf: p.portfolioCf !== null ? Math.round(p.portfolioCf * 10) / 10 : null,
+    curtailedCf: p.curtailedCf !== null && p.curtailedCf !== undefined ? Math.round(p.curtailedCf * 10) / 10 : null,
+    performingCf: p.performingCf !== null && p.performingCf !== undefined ? Math.round(p.performingCf * 10) / 10 : null,
     blendedRegionalCf: p.blendedRegionalCf !== null ? Math.round(p.blendedRegionalCf * 10) / 10 : null,
   }));
 
-  const allVals = data.flatMap((d) => [d.portfolioCf, d.blendedRegionalCf]).filter((v): v is number => v !== null);
+  const allVals = data
+    .flatMap((d) => [d.portfolioCf, d.curtailedCf, d.performingCf, d.blendedRegionalCf])
+    .filter((v): v is number => v !== null);
   const minVal = allVals.length > 0 ? Math.min(...allVals) : 0;
   const maxVal = allVals.length > 0 ? Math.max(...allVals) : 50;
   const yDomain: [number, number] = [
@@ -140,10 +144,17 @@ const PortfolioCfChart: React.FC<CfChartProps> = ({ cfSeries }) => {
     Math.min(100, Math.ceil(maxVal) + 3),
   ];
 
+  const SERIES_LABELS: Record<string, string> = {
+    portfolioCf:       'Portfolio CF (MW-weighted)',
+    curtailedCf:       'Curtailed Plants CF',
+    performingCf:      'Performing Plants CF',
+    blendedRegionalCf: 'Blended Regional Baseline',
+  };
+
   return (
-    <div className="h-72 w-full bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+    <div className="h-80 w-full bg-slate-800/50 rounded-xl p-4 border border-slate-700">
       <h3 className="text-sm font-semibold text-slate-300 mb-4">
-        Portfolio Capacity Factor vs Blended Regional Baseline (MW-weighted, %)
+        Portfolio Capacity Factor — Total / Curtailed / Performing vs Regional Baseline (MW-weighted, %)
       </h3>
       <ResponsiveContainer width="100%" height="85%">
         <LineChart data={data} margin={{ top: 4, right: 20, left: -20, bottom: 4 }}>
@@ -171,14 +182,12 @@ const PortfolioCfChart: React.FC<CfChartProps> = ({ cfSeries }) => {
             labelFormatter={(label: string) => formatMonthYear(label)}
             formatter={(value: number | null, name: string) => [
               value !== null ? `${value}%` : 'N/A',
-              name === 'portfolioCf' ? 'Portfolio CF' : 'Blended Regional',
+              SERIES_LABELS[name] ?? name,
             ]}
           />
           <Legend
             wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }}
-            formatter={(value: string) =>
-              value === 'portfolioCf' ? 'Portfolio CF (MW-weighted)' : 'Blended Regional Baseline'
-            }
+            formatter={(value: string) => SERIES_LABELS[value] ?? value}
           />
           <Line
             name="blendedRegionalCf"
@@ -199,6 +208,26 @@ const PortfolioCfChart: React.FC<CfChartProps> = ({ cfSeries }) => {
             strokeWidth={3}
             dot={false}
             activeDot={{ r: 6 }}
+            connectNulls
+          />
+          <Line
+            name="curtailedCf"
+            type="monotone"
+            dataKey="curtailedCf"
+            stroke="#f43f5e"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 4 }}
+            connectNulls
+          />
+          <Line
+            name="performingCf"
+            type="monotone"
+            dataKey="performingCf"
+            stroke="#10b981"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 4 }}
             connectNulls
           />
         </LineChart>
@@ -432,6 +461,7 @@ const PlantTable: React.FC<PlantTableProps> = ({ plants, onPlantClick, selectedP
             <SortHeader k="name" label="Plant" />
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">State</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">Fuel</th>
+            <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">Status</th>
             <SortHeader k="mw" label="MW" />
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">Role</th>
             <SortHeader k="ttmCf" label="TTM CF" />
@@ -476,6 +506,12 @@ const PlantTable: React.FC<PlantTableProps> = ({ plants, onPlantClick, selectedP
                 </td>
                 <td className="px-4 py-3 text-slate-400 text-xs">{p.state ?? '—'}</td>
                 <td className="px-4 py-3">{fuelChip(p.fuelSource)}</td>
+                <td className="px-4 py-3">
+                  {p.isLikelyCurtailed
+                    ? <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border bg-rose-900/20 text-rose-400 border-rose-500/30">Curtailed</span>
+                    : <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border bg-emerald-900/20 text-emerald-400 border-emerald-500/30">Performing</span>
+                  }
+                </td>
                 <td className="px-4 py-3 text-slate-300 text-xs font-semibold">
                   {p.nameplateMw != null ? p.nameplateMw.toLocaleString() : '—'}
                 </td>
@@ -710,7 +746,7 @@ const LenderValidatedDigestView: React.FC<LenderValidatedDigestViewProps> = ({
       />
 
       {/* ── KPI Strip ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
         <KpiCard
           label="Validated plants"
           value={digest.plantCount}
@@ -729,6 +765,16 @@ const LenderValidatedDigestView: React.FC<LenderValidatedDigestViewProps> = ({
               </span>
             ) : undefined
           }
+        />
+        <KpiCard
+          label="Curtailed TTM CF"
+          value={kpis.curtailedTtmCf != null ? `${fmt(kpis.curtailedTtmCf)}%` : '—'}
+          sub={kpis.curtailedCount != null && kpis.curtailedCount > 0 ? `${kpis.curtailedCount} curtailed plants` : 'No curtailed plants'}
+        />
+        <KpiCard
+          label="Performing TTM CF"
+          value={kpis.performingTtmCf != null ? `${fmt(kpis.performingTtmCf)}%` : '—'}
+          sub={kpis.curtailedCount != null ? `${kpis.plantCount - (kpis.curtailedCount ?? 0)} performing plants` : undefined}
         />
         <KpiCard
           label="Avg news risk"

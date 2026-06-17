@@ -60,12 +60,15 @@ export async function fetchLenderValidatedDigest(lenderId: string): Promise<{
     priorityBand:         p.priorityBand ? String(p.priorityBand) as any : null,
     aiPriorityBand:       p.aiPriorityBand ? String(p.aiPriorityBand) as any : null,
     aiPriorityReason:     p.aiPriorityReason ? String(p.aiPriorityReason) : null,
+    isLikelyCurtailed:    p.isLikelyCurtailed != null ? Boolean(p.isLikelyCurtailed) : (p.is_likely_curtailed != null ? Boolean(p.is_likely_curtailed) : false),
   }));
 
   const kpis: LenderDigestKpis = {
     totalMw:              kpisRaw.totalMw != null ? Number(kpisRaw.totalMw) : 0,
     plantCount:           kpisRaw.plantCount != null ? Number(kpisRaw.plantCount) : 0,
     weightedTtmCf:        kpisRaw.weightedTtmCf != null ? Number(kpisRaw.weightedTtmCf) : null,
+    curtailedTtmCf:       kpisRaw.curtailedTtmCf != null ? Number(kpisRaw.curtailedTtmCf) : null,
+    performingTtmCf:      kpisRaw.performingTtmCf != null ? Number(kpisRaw.performingTtmCf) : null,
     blendedRegionalTtmCf: kpisRaw.blendedRegionalTtmCf != null ? Number(kpisRaw.blendedRegionalTtmCf) : null,
     cfDeltaPp:            kpisRaw.cfDeltaPp != null ? Number(kpisRaw.cfDeltaPp) : null,
     avgNewsRisk:          kpisRaw.avgNewsRisk != null ? Number(kpisRaw.avgNewsRisk) : null,
@@ -78,6 +81,8 @@ export async function fetchLenderValidatedDigest(lenderId: string): Promise<{
     ? (r.cf_series as any[]).map((row: Record<string, unknown>) => ({
         month:              String(row.month),
         portfolioCf:        row.portfolio_cf != null ? Number(row.portfolio_cf) : null,
+        curtailedCf:        row.curtailed_cf != null ? Number(row.curtailed_cf) : null,
+        performingCf:       row.performing_cf != null ? Number(row.performing_cf) : null,
         blendedRegionalCf:  row.blended_regional_cf != null ? Number(row.blended_regional_cf) : null,
       }))
     : [];
