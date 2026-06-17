@@ -459,6 +459,7 @@ const PlantTable: React.FC<PlantTableProps> = ({ plants, onPlantClick, selectedP
           <tr className="border-b border-slate-800/60 bg-slate-900/70">
             {hasPriorityData && <SortHeader k="priority" label="Priority" />}
             <SortHeader k="name" label="Plant" />
+            <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">EIA Code</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">State</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">Fuel</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">Status</th>
@@ -504,6 +505,7 @@ const PlantTable: React.FC<PlantTableProps> = ({ plants, onPlantClick, selectedP
                     {p.plantName}
                   </button>
                 </td>
+                <td className="px-4 py-3 text-slate-500 text-xs font-mono">{p.eiaPlantCode || '—'}</td>
                 <td className="px-4 py-3 text-slate-400 text-xs">{p.state ?? '—'}</td>
                 <td className="px-4 py-3">{fuelChip(p.fuelSource)}</td>
                 <td className="px-4 py-3">
