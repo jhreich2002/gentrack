@@ -226,6 +226,10 @@ const QueueTable: React.FC<QueueTableProps> = ({ rows, onSelect }) => {
           <tr className="border-b border-slate-800/60 bg-slate-900/70">
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Lender</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5"># Plants</th>
+            <th
+              className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5 cursor-help"
+              title="Curtailed plants the lender is exposed to vs total plants exposed (pending + validated, rejected excluded)"
+            >Curtailed / Total</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5"># Pending</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5"># Validated</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Last Link</th>
@@ -240,6 +244,18 @@ const QueueTable: React.FC<QueueTableProps> = ({ rows, onSelect }) => {
             >
               <td className="px-5 py-3 text-slate-200 font-semibold">{row.lenderName}</td>
               <td className="px-5 py-3 text-slate-400 text-xs">{row.distinctPlantCount}</td>
+              <td className="px-5 py-3 text-xs">
+                {row.distinctPlantCount > 0 ? (
+                  <span className="text-slate-300">
+                    <span className="text-amber-400 font-semibold">{row.curtailedPlantCount}</span>
+                    <span className="text-slate-600"> / </span>
+                    {row.distinctPlantCount}
+                    <span className="text-slate-600 ml-1 text-[9px]">
+                      ({Math.round((row.curtailedPlantCount / row.distinctPlantCount) * 100)}%)
+                    </span>
+                  </span>
+                ) : <span className="text-slate-600">—</span>}
+              </td>
               <td className="px-5 py-3 text-xs">
                 <span className="text-amber-400 font-semibold">{row.pendingCount}</span>
               </td>
@@ -280,6 +296,10 @@ const PortfolioTable: React.FC<PortfolioTableProps> = ({ rows, canWrite, onSelec
           <tr className="border-b border-slate-800/60 bg-slate-900/70">
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Lender</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5"># Validated Plants</th>
+            <th
+              className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5 cursor-help"
+              title="Curtailed validated plants vs total validated plants for this lender"
+            >Curtailed / Validated</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Pursuit</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Last Validated</th>
           </tr>
@@ -293,6 +313,18 @@ const PortfolioTable: React.FC<PortfolioTableProps> = ({ rows, canWrite, onSelec
             >
               <td className="px-5 py-3 text-slate-200 font-semibold">{row.lenderName}</td>
               <td className="px-5 py-3 text-slate-400 text-xs">{row.distinctValidatedPlantCount}</td>
+              <td className="px-5 py-3 text-xs">
+                {row.distinctValidatedPlantCount > 0 ? (
+                  <span className="text-slate-300">
+                    <span className="text-amber-400 font-semibold">{row.curtailedValidatedPlantCount}</span>
+                    <span className="text-slate-600"> / </span>
+                    {row.distinctValidatedPlantCount}
+                    <span className="text-slate-600 ml-1 text-[9px]">
+                      ({Math.round((row.curtailedValidatedPlantCount / row.distinctValidatedPlantCount) * 100)}%)
+                    </span>
+                  </span>
+                ) : <span className="text-slate-600">—</span>}
+              </td>
               <td
                 className="px-5 py-3 text-xs"
                 onClick={(e) => { if (canWrite) e.stopPropagation(); }}

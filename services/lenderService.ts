@@ -26,6 +26,8 @@ export interface PlantLenderRow {
   inferredFromSiblingPlantId:  string | null;
   lastResearchAt:              string | null;
   researchStatus:              'complete' | 'no_lender_identifiable' | 'error' | 'never';
+  validationState:             'pending' | 'validated' | 'rejected';
+  validatedAt:                 string | null;
 }
 
 export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<{
@@ -50,7 +52,7 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
   const [linksRes, latestResearchRes] = await Promise.all([
     supabase
       .from('v_plant_financing')
-      .select('lender_name, role, role_summary, source_url, evidence_quote, inferred, inferred_from_sibling_plant_id, last_research_at, research_status')
+      .select('lender_name, role, role_summary, source_url, evidence_quote, inferred, inferred_from_sibling_plant_id, last_research_at, research_status, validated_at, rejected_at')
       .eq('plant_id', plantId),
     supabase
       .from('plant_lender_research')
@@ -75,6 +77,8 @@ export async function fetchPlantFinancingSummary(eiaPlantCode: string): Promise<
     inferredFromSiblingPlantId: row.inferred_from_sibling_plant_id ? String(row.inferred_from_sibling_plant_id) : null,
     lastResearchAt: row.last_research_at ? String(row.last_research_at) : null,
     researchStatus: (String(row.research_status ?? 'never') as PlantLenderRow['researchStatus']),
+    validationState: row.validated_at ? 'validated' : row.rejected_at ? 'rejected' : 'pending',
+    validatedAt: row.validated_at ? String(row.validated_at) : null,
   }));
 
   const latestStatus = latestResearchRes.data?.status

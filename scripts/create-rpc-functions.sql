@@ -6,6 +6,7 @@
 -- Drops for idempotency
 DROP FUNCTION IF EXISTS get_regional_trend(text, text);
 DROP FUNCTION IF EXISTS get_subregional_trend(text, text, text);
+DROP FUNCTION IF EXISTS get_plant_cf_windows();
 
 
 -- ------------------------------------------------------------
@@ -78,3 +79,78 @@ $$;
 -- Grant anonymous access (needed for the browser client with anon key)
 GRANT EXECUTE ON FUNCTION get_regional_trend(text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION get_subregional_trend(text, text, text) TO anon, authenticated;
+
+
+-- ------------------------------------------------------------
+-- get_plant_cf_windows()
+-- Returns two 12-month CF windows per plant (Wind + Solar only):
+--   recent_cf = avg CF over the 12 months ending at MAX(month)
+--   prior_cf  = avg CF over the 12 months immediately before that
+-- Used by the Regional Analysis tab to compute deterioration
+-- (prior_cf − recent_cf) as the primary distress signal.
+--
+-- Same CF formula as get_regional_trend: mwh / (nameplate * days * 24).
+-- NULL mwh rows are excluded (not treated as zero).
+-- Nuclear is excluded — the Regional Analysis feature only screens
+-- Wind + Solar.
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION get_plant_cf_windows()
+RETURNS TABLE(
+  plant_id text,
+  recent_cf float8,
+  prior_cf float8,
+  recent_months int,
+  prior_months int
+)
+LANGUAGE sql
+STABLE
+AS $$
+  WITH anchor AS (
+    SELECT MAX(month) AS max_month FROM monthly_generation
+  ),
+  bounds AS (
+    -- Compute anchor month as a date, then derive window edges.
+    -- recent window = 12 months ending at max_month (inclusive):
+    --   months in [max_month - 11, max_month]
+    -- prior window  = 12 months before that:
+    --   months in [max_month - 23, max_month - 12]
+    SELECT
+      TO_DATE(max_month, 'YYYY-MM') AS max_dt,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '11 months' AS recent_start,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '12 months' AS prior_end,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '23 months' AS prior_start
+    FROM anchor
+  ),
+  cf AS (
+    SELECT
+      mg.plant_id,
+      TO_DATE(mg.month, 'YYYY-MM') AS mdt,
+      CASE
+        WHEN mg.mwh IS NULL OR p.nameplate_capacity_mw = 0 THEN NULL
+        ELSE mg.mwh / (
+          p.nameplate_capacity_mw *
+          (EXTRACT(DAY FROM (
+            DATE_TRUNC('month', TO_DATE(mg.month, 'YYYY-MM')) + INTERVAL '1 month'
+            - DATE_TRUNC('month', TO_DATE(mg.month, 'YYYY-MM'))
+          )) * 24)
+        )
+      END AS cf_val
+    FROM monthly_generation mg
+    JOIN plants p ON p.id = mg.plant_id
+    WHERE p.fuel_source IN ('Wind', 'Solar')
+  )
+  SELECT
+    cf.plant_id,
+    AVG(cf.cf_val) FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.recent_start AND b.max_dt)   AS recent_cf,
+    AVG(cf.cf_val) FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.prior_start  AND b.prior_end) AS prior_cf,
+    COUNT(*)      FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.recent_start AND b.max_dt)::int AS recent_months,
+    COUNT(*)      FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.prior_start  AND b.prior_end)::int AS prior_months
+  FROM cf CROSS JOIN bounds b
+  GROUP BY cf.plant_id
+  HAVING
+    COUNT(*) FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.recent_start AND b.max_dt) > 0
+    OR
+    COUNT(*) FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.prior_start  AND b.prior_end) > 0;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_plant_cf_windows() TO anon, authenticated;

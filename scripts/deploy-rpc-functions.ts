@@ -52,6 +52,7 @@ async function deploy() {
   console.log('✅ RPC functions deployed successfully!');
   console.log('   • get_regional_trend(region, fuel_source)');
   console.log('   • get_subregional_trend(region, sub_region, fuel_source)');
+  console.log('   • get_plant_cf_windows()');
 }
 
 deploy().catch(err => {

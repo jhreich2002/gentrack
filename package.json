@@ -9,6 +9,8 @@
     "test": "vitest",
     "preview": "vite preview",
     "fetch-data": "npx tsx scripts/fetch-eia-data.ts",
+    "build:geojson": "npx tsx scripts/build-subregion-geojson.ts",
+    "audit:subregions": "npx tsx scripts/fix-subregions.ts",
     "score:developers": "npx tsx scripts/compute-developer-opportunities.ts",
     "seed-articles": "npx tsx scripts/bulk-seed-articles.ts",
     "archive:lender:v4": "npx tsx scripts/archive-v4-lender-data.ts",

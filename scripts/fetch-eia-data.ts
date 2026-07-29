@@ -19,6 +19,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
+import { resolveSubRegion, SUBREGION_LABELS } from '../constants/subregionGeometry';
 
 // -------------------------------------------------------------------
 // Config
@@ -121,78 +122,16 @@ const STATE_TO_REGION: Record<string, string> = {
   HI: 'Hawaii', AK: 'Alaska',
 };
 
-const SUBREGIONS: Record<string, string[]> = {
-  CAISO: ['NP15', 'SP15', 'ZP26'],
-  ERCOT: ['West', 'North', 'South', 'Coast'],
-  PJM: ['Mid-Atlantic', 'Western', 'Southern'],
-  MISO: ['North', 'Central', 'South'],
-  NYISO: ['Upstate', 'Hudson Valley', 'NYC/Long Island'],
-  'ISO-NE': ['Maine/NH', 'VT/CT/RI', 'Massachusetts'],
-  SPP: ['North', 'Central', 'South'],
-  Northwest: ['WA/OR Coast', 'Inland PNW', 'Mountain'],
-  Southwest: ['Arizona/Nevada', 'New Mexico', 'Colorado'],
-  Southeast: ['Florida', 'Carolinas', 'Deep South'],
-  Hawaii: ['Oahu', 'Maui', 'Big Island'],
-  Alaska: ['Railbelt', 'Remote'],
-};
+const SUBREGIONS: Record<string, string[]> = SUBREGION_LABELS;
 
-// State-to-sub-region mapping for multi-state ISOs.
-// Single-state ISOs (CA/CAISO, TX/ERCOT, NY/NYISO) use lat/lng in getSubRegion.
-const STATE_TO_SUBREGION: Record<string, string> = {
-  // PJM
-  PA: 'Mid-Atlantic', NJ: 'Mid-Atlantic', MD: 'Mid-Atlantic', DE: 'Mid-Atlantic', DC: 'Mid-Atlantic',
-  OH: 'Western', WV: 'Western',
-  VA: 'Southern',
-  // MISO
-  MN: 'North', WI: 'North', ND: 'North', SD: 'North', MI: 'North',
-  IL: 'Central', IN: 'Central', IA: 'Central',
-  MO: 'South',
-  // SPP
-  KS: 'North', NE: 'North',
-  OK: 'Central',
-  AR: 'South',
-  // ISO-NE
-  ME: 'Maine/NH', NH: 'Maine/NH',
-  VT: 'VT/CT/RI', CT: 'VT/CT/RI', RI: 'VT/CT/RI',
-  MA: 'Massachusetts',
-  // Northwest
-  WA: 'WA/OR Coast', OR: 'WA/OR Coast',
-  ID: 'Inland PNW',
-  MT: 'Mountain', WY: 'Mountain',
-  // Southwest
-  AZ: 'Arizona/Nevada', NV: 'Arizona/Nevada',
-  NM: 'New Mexico',
-  CO: 'Colorado', UT: 'Colorado',
-  // Southeast
-  FL: 'Florida',
-  SC: 'Carolinas', NC: 'Carolinas',
-  GA: 'Deep South', AL: 'Deep South', MS: 'Deep South',
-  TN: 'Deep South', KY: 'Deep South', LA: 'Deep South',
-  // Single-island defaults for Hawaii and Alaska
-  HI: 'Oahu',
-  AK: 'Railbelt',
-};
+// NOTE: The per-ISO state→sub-region mapping and cutlines used to live here as
+// a flat STATE_TO_SUBREGION record + inline lat/lng rules. They now live in
+// `constants/subregionGeometry.ts` as region-scoped maps so cross-ISO states
+// (e.g. TX / ND / MT plants labeled SPP by upstream data) resolve to a valid
+// sub-region for their actual ISO. See `resolveSubRegion` below.
 
 function getSubRegion(state: string, region: string, lat?: number, lng?: number): string {
-  // Coordinate-based assignment for single-state ISOs
-  if (state === 'CA' && lat != null) {
-    if (lat > 36.0) return 'NP15';
-    if (lat > 34.5) return 'ZP26';
-    return 'SP15';
-  }
-  if (state === 'TX' && lat != null && lng != null) {
-    if (lng < -100) return 'West';
-    if (lat > 32.5) return 'North';
-    if (lat < 29.5) return 'Coast';
-    return 'South';
-  }
-  if (state === 'NY' && lat != null) {
-    if (lat > 42.5) return 'Upstate';
-    if (lat > 41.0) return 'Hudson Valley';
-    return 'NYC/Long Island';
-  }
-  // State-based lookup for all other ISOs
-  return STATE_TO_SUBREGION[state] ?? (SUBREGIONS[region]?.[0] ?? 'Unknown');
+  return resolveSubRegion(state, region, lat, lng);
 }
 
 function isMonthString(value: string): boolean {

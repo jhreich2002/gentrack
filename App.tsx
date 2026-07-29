@@ -22,12 +22,14 @@ import LenderResearchDashboard from './components/LenderResearchDashboard';
 import DeveloperListView from './components/DeveloperListView';
 import DeveloperDetailView from './components/DeveloperDetailView';
 import AssetRegistryDetailView from './components/AssetRegistryDetailView';
+import OwnerAnalysisView from './components/OwnerAnalysisView';
+import RegionalAnalysisDashboard from './components/RegionalAnalysisDashboard';
 import type { DeveloperMapViewport } from './components/DeveloperAssetMap';
 import { fetchDevelopers, DeveloperRow } from './services/developerService';
 import LenderValidatedDigestView from './components/lender-validation/LenderValidatedDigestView';
 import { MOCK_DIGEST, MOCK_PLANTS, MOCK_ARTICLES } from './components/lender-validation/__fixtures__/digestFixture';
 
-type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lender-research' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail' | 'archived';
+type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lender-research' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail' | 'archived' | 'owner-analysis' | 'regional-analysis';
 
 // Dev-only: render the digest preview when ?preview=lender-digest is in the URL.
 const IS_DIGEST_PREVIEW =
@@ -92,6 +94,7 @@ const App: React.FC = () => {
   const [cameFromEntity, setCameFromEntity]         = useState(false);
   const [cameFromDeveloper, setCameFromDeveloper]   = useState(false);
   const [cameFromLender, setCameFromLender]         = useState(false);
+  const [cameFromRegional, setCameFromRegional]     = useState(false);
   const [lenderReturnId, setLenderReturnId]         = useState<string | null>(null);
   const [companyActiveTab, setCompanyActiveTab]     = useState<'overview' | 'portfolio'>('overview');
   const [developerActiveTab, setDeveloperActiveTab] = useState<'overview' | 'portfolio' | 'map' | 'lead'>('overview');
@@ -189,14 +192,20 @@ const App: React.FC = () => {
     }
   };
 
+  // Navigate to plant detail from the Regional Analysis dashboard (by plant id).
+  const handlePlantClickFromRegional = (plantId: string) => {
+    handlePlantClick(plantId, 'regional');
+  };
+
   // Handle row click to view plant details
-  const handlePlantClick = async (id: string, origin: 'dashboard' | 'company' | 'pursuits' | 'entity' | 'developer' | 'lender' = 'dashboard') => {
+  const handlePlantClick = async (id: string, origin: 'dashboard' | 'company' | 'pursuits' | 'entity' | 'developer' | 'lender' | 'regional' = 'dashboard') => {
     setSelectedPlantId(id);
     setView('detail');
     setCameFromCompany(origin === 'company');
     setCameFromPursuits(origin === 'pursuits');
     setCameFromEntity(origin === 'entity');
     setCameFromDeveloper(origin === 'developer');
+    setCameFromRegional(origin === 'regional');
     if (origin !== 'lender') setCameFromLender(false);
     setGenerationLoading(true);
     setRegionalTrend([]);
@@ -235,30 +244,60 @@ const App: React.FC = () => {
     }
   };
 
-  // Auth: restore session, sync role and watchlist from Supabase
+  // Auth: restore session from Supabase and keep it in sync with auth events.
+  // NOTE: We intentionally do NOT fetch the watchlist/profile inside the
+  // onAuthStateChange callback. Doing so tied restoration to the timing of the
+  // INITIAL_SESSION event, which can fire with `null` first during hydration
+  // and wipe the local watchlist on page refresh. Instead, the effect below
+  // keyed on `session?.user?.id` handles per-user data restoration.
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
-      if (!data.session) setAuthLoading(false);
+      setAuthLoading(false);
     });
-    const sub = onAuthStateChange(async (sess, event) => {
+    const sub = onAuthStateChange((sess, event) => {
       setSession(sess);
       setAuthLoading(false);
-      if (sess) {
-        if (event === 'SIGNED_IN') {
-          trackUserActivityEvent(sess.user.id, 'app_open', 'login_success').catch(() => {});
-        }
-        const profile = await getProfile(sess.user.id);
-        setUserRole(profile?.role ?? 'user');
-        try { const wl = await fetchWatchlist(sess.user.id); setWatchlist(wl); }
-        catch { setWatchlist([]); }
-      } else {
-        setUserRole(null);
-        setWatchlist([]);
+      if (sess && event === 'SIGNED_IN') {
+        trackUserActivityEvent(sess.user.id, 'app_open', 'login_success').catch(() => {});
       }
     });
     return () => sub.unsubscribe();
   }, []);
+
+  // Restore role + watchlist whenever the signed-in user changes.
+  // - On page refresh with a valid session, this runs as soon as `session` is
+  //   hydrated, so the watchlist is fetched from Supabase and rendered.
+  // - Token refreshes keep the same user.id, so this does not re-run and the
+  //   watchlist never flickers to empty.
+  // - Only clears local state when the user is truly signed out (no user.id).
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId) {
+      setUserRole(null);
+      setWatchlist([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const profile = await getProfile(userId);
+        if (!cancelled) setUserRole(profile?.role ?? 'user');
+      } catch {
+        if (!cancelled) setUserRole('user');
+      }
+      try {
+        const wl = await fetchWatchlist(userId);
+        if (!cancelled) setWatchlist(wl);
+      } catch (err) {
+        console.error('[GenTrack] Failed to load watchlist:', err);
+        // Do NOT clear the watchlist on a transient fetch error — that would
+        // reintroduce the "watchlist vanishes on refresh" bug. Leave whatever
+        // was previously loaded in place; the next refresh will try again.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session?.user?.id]);
 
   useEffect(() => {
     if (!session) return;
@@ -614,6 +653,34 @@ const App: React.FC = () => {
             {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">National Overview</span>}
           </button>
 
+          <button
+            onClick={() => setView('owner-analysis')}
+            title={sidebarCollapsed ? 'Owner Analysis' : undefined}
+            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
+              view === 'owner-analysis'
+                ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+            }`}
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Owner Analysis</span>}
+          </button>
+
+          <button
+            onClick={() => setView('regional-analysis')}
+            title={sidebarCollapsed ? 'Regional Analysis' : undefined}
+            className={`w-full text-left rounded-xl transition-all duration-200 flex items-center gap-3 ${sidebarCollapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'} ${
+              view === 'regional-analysis'
+                ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+            }`}
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {!sidebarCollapsed && <span className="text-sm font-semibold tracking-wide">Regional Analysis</span>}
+          </button>
+
           {!sidebarCollapsed && (
             <div className="pt-6 pb-2 px-4">
               <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">ISO / RTO SECTORS</span>
@@ -936,7 +1003,11 @@ const App: React.FC = () => {
             ? <DeveloperDetailView developer={selectedDeveloper} onBack={() => { setView('developers'); setDeveloperActiveTab('overview'); setDeveloperMapViewport(null); }} onAssetClick={handleAssetRegistryClick} onPlantClick={handlePlantClickFromDeveloper} onTabChange={setDeveloperActiveTab} mapViewport={developerMapViewport} onMapViewportChange={setDeveloperMapViewport} plants={plants} statsMap={statsMap} initialTab={developerActiveTab} />
             : view === 'asset-detail' && selectedAssetId
             ? <AssetRegistryDetailView assetId={selectedAssetId} onBack={() => selectedDeveloper ? setView('developer-detail') : setView('developers')} onPlantClick={handlePlantClickFromDeveloper} />
-            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.some(w => w.entity_type === 'plant' && w.entity_id === selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, 'plant', selectedPlant.id)} onBack={() => { if (cameFromLender) { setView('lender-research'); setCameFromLender(false); } else if (cameFromDeveloper && selectedDeveloper) { setView('developer-detail'); setCameFromDeveloper(false); } else if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
+            : view === 'owner-analysis'
+            ? <OwnerAnalysisView onBack={() => setView('dashboard')} onCompanyClick={handleCompanyClick} onPlantClick={handlePlantClickFromCompany} />
+            : view === 'regional-analysis'
+            ? <RegionalAnalysisDashboard plants={plants} statsMap={statsMap} onPlantClick={handlePlantClickFromRegional} onOwnerClick={handleCompanyClick} onLenderClick={handleLenderClick} />
+            : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.some(w => w.entity_type === 'plant' && w.entity_id === selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, 'plant', selectedPlant.id)} onBack={() => { if (cameFromLender) { setView('lender-research'); setCameFromLender(false); } else if (cameFromDeveloper && selectedDeveloper) { setView('developer-detail'); setCameFromDeveloper(false); } else if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else if (cameFromRegional) { setView('regional-analysis'); setCameFromRegional(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
         )}
       </main>
 

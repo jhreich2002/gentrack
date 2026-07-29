@@ -12,6 +12,7 @@ export interface LenderEvidenceRow {
   isManual?: boolean;
   manualNote?: string | null;
   validationState?: 'pending' | 'validated' | 'rejected';
+  validatedAt?: string | null;
 }
 
 interface Actions {
@@ -134,6 +135,7 @@ const LenderEvidenceTable: React.FC<Props> = ({ rows, loading = false, emptyMess
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Role</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Summary</th>
             <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Source</th>
+            {!actions && <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-5 py-2.5">Status</th>}
             {actions && <th className="text-left text-[10px] text-slate-500 font-bold uppercase tracking-wider px-4 py-2.5">Actions</th>}
           </tr>
         </thead>
@@ -175,6 +177,32 @@ const LenderEvidenceTable: React.FC<Props> = ({ rows, loading = false, emptyMess
                   View source
                 </a>
               </td>
+              {!actions && (
+                <td className="px-5 py-3 text-xs">
+                  {row.validationState === 'validated' && (
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded border border-emerald-500/40 bg-emerald-900/20 text-emerald-400 tracking-wider inline-block w-fit">
+                        Validated
+                      </span>
+                      {row.validatedAt && (
+                        <span className="text-[9px] text-slate-500">
+                          {new Date(row.validatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {row.validationState === 'rejected' && (
+                    <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded border border-rose-500/40 bg-rose-900/20 text-rose-400 tracking-wider">
+                      Rejected
+                    </span>
+                  )}
+                  {(!row.validationState || row.validationState === 'pending') && (
+                    <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded border border-slate-600 text-slate-500">
+                      Pending
+                    </span>
+                  )}
+                </td>
+              )}
               {actions && <ActionCell row={row} actions={actions} />}
             </tr>
           ))}

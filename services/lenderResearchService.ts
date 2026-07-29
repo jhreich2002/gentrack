@@ -191,6 +191,7 @@ export interface LenderQueueRow {
   validatedCount: number;
   rejectedCount: number;
   distinctPlantCount: number;
+  curtailedPlantCount: number;
   mostRecentLinkAt: string | null;
 }
 
@@ -201,6 +202,7 @@ export interface LenderValidatedRow {
   pursuitSetAt: string | null;
   validatedCount: number;
   distinctValidatedPlantCount: number;
+  curtailedValidatedPlantCount: number;
   mostRecentValidationAt: string | null;
 }
 
@@ -227,7 +229,7 @@ export interface LenderPlantRow {
 export async function fetchLenderValidationQueue(search?: string): Promise<LenderQueueRow[]> {
   const { data, error } = await supabase
     .from('v_lender_validation_queue')
-    .select('lender_id, lender_name, pending_count, validated_count, rejected_count, distinct_plant_count, most_recent_link_at')
+    .select('lender_id, lender_name, pending_count, validated_count, rejected_count, distinct_plant_count, curtailed_plant_count, most_recent_link_at')
     .order('pending_count', { ascending: false });
 
   if (error || !data) {
@@ -242,6 +244,7 @@ export async function fetchLenderValidationQueue(search?: string): Promise<Lende
     validatedCount: Number(row.validated_count ?? 0),
     rejectedCount: Number(row.rejected_count ?? 0),
     distinctPlantCount: Number(row.distinct_plant_count ?? 0),
+    curtailedPlantCount: Number(row.curtailed_plant_count ?? 0),
     mostRecentLinkAt: row.most_recent_link_at ? String(row.most_recent_link_at) : null,
   }));
 
@@ -256,7 +259,7 @@ export async function fetchLenderValidationQueue(search?: string): Promise<Lende
 export async function fetchLenderValidatedPortfolio(search?: string): Promise<LenderValidatedRow[]> {
   const { data, error } = await supabase
     .from('v_lender_validated_portfolio')
-    .select('lender_id, lender_name, pursuit_label, pursuit_set_at, validated_count, distinct_validated_plant_count, most_recent_validation_at')
+    .select('lender_id, lender_name, pursuit_label, pursuit_set_at, validated_count, distinct_validated_plant_count, curtailed_validated_plant_count, most_recent_validation_at')
     .order('validated_count', { ascending: false });
 
   if (error || !data) {
@@ -271,6 +274,7 @@ export async function fetchLenderValidatedPortfolio(search?: string): Promise<Le
     pursuitSetAt: row.pursuit_set_at ? String(row.pursuit_set_at) : null,
     validatedCount: Number(row.validated_count ?? 0),
     distinctValidatedPlantCount: Number(row.distinct_validated_plant_count ?? 0),
+    curtailedValidatedPlantCount: Number(row.curtailed_validated_plant_count ?? 0),
     mostRecentValidationAt: row.most_recent_validation_at ? String(row.most_recent_validation_at) : null,
   }));
 

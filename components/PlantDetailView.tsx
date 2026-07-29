@@ -1092,6 +1092,8 @@ const PlantDetailView: React.FC<Props> = ({
                   evidenceQuote: l.evidenceQuote,
                   inferred: l.inferred,
                   inferredFromSiblingPlantId: l.inferredFromSiblingPlantId,
+                  validationState: l.validationState,
+                  validatedAt: l.validatedAt,
                 }))}
               />
             )}
