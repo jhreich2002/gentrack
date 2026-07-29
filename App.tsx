@@ -31,6 +31,39 @@ import { MOCK_DIGEST, MOCK_PLANTS, MOCK_ARTICLES } from './components/lender-val
 
 type View = 'dashboard' | 'detail' | 'admin' | 'company' | 'lender-research' | 'taxequity' | 'pursuits' | 'entity' | 'developers' | 'developer-detail' | 'asset-detail' | 'archived' | 'owner-analysis' | 'regional-analysis';
 
+// -----------------------------------------------------------------------------
+// Per-user watchlist localStorage cache
+// -----------------------------------------------------------------------------
+// Persisting to localStorage guarantees a signed-in user's watchlist survives a
+// page refresh *immediately*, without waiting for — or depending on — a
+// successful round-trip to Supabase. Supabase is still the source of truth for
+// cross-device sync, but transient network errors, RLS misconfiguration, or
+// slow session hydration can no longer wipe a user's saved plants.
+const WATCHLIST_STORAGE_PREFIX = 'gentrack_watchlist_v2:';
+
+const readWatchlistFromStorage = (userId: string): WatchlistEntry[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(WATCHLIST_STORAGE_PREFIX + userId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as WatchlistEntry[]) : [];
+  } catch {
+    return [];
+  }
+};
+
+const writeWatchlistToStorage = (userId: string, entries: WatchlistEntry[]): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(WATCHLIST_STORAGE_PREFIX + userId, JSON.stringify(entries));
+  } catch {
+    /* quota exceeded / private mode — silently ignore */
+  }
+};
+
+const watchlistKey = (w: WatchlistEntry) => `${w.entity_type}:${w.entity_id}`;
+
 // Dev-only: render the digest preview when ?preview=lender-digest is in the URL.
 const IS_DIGEST_PREVIEW =
   typeof window !== 'undefined' &&
@@ -266,11 +299,12 @@ const App: React.FC = () => {
   }, []);
 
   // Restore role + watchlist whenever the signed-in user changes.
-  // - On page refresh with a valid session, this runs as soon as `session` is
-  //   hydrated, so the watchlist is fetched from Supabase and rendered.
-  // - Token refreshes keep the same user.id, so this does not re-run and the
-  //   watchlist never flickers to empty.
-  // - Only clears local state when the user is truly signed out (no user.id).
+  // Strategy: localStorage is the *primary* source of truth for the UI on
+  // refresh — it hydrates instantly. Supabase is used for cross-device sync:
+  // once the fetch resolves, we merge (union) the server list with the local
+  // cache, push any local-only entries up to Supabase, and persist the merged
+  // result back to localStorage. A failed Supabase fetch never wipes local
+  // state, so a user's saved plants can only be removed by the user.
   useEffect(() => {
     const userId = session?.user?.id;
     if (!userId) {
@@ -278,6 +312,11 @@ const App: React.FC = () => {
       setWatchlist([]);
       return;
     }
+
+    // 1. Instant hydration from localStorage (survives refresh / offline).
+    const cached = readWatchlistFromStorage(userId);
+    if (cached.length > 0) setWatchlist(cached);
+
     let cancelled = false;
     (async () => {
       try {
@@ -286,14 +325,30 @@ const App: React.FC = () => {
       } catch {
         if (!cancelled) setUserRole('user');
       }
+
+      // 2. Reconcile with Supabase (cross-device source of truth).
       try {
-        const wl = await fetchWatchlist(userId);
-        if (!cancelled) setWatchlist(wl);
+        const serverList = await fetchWatchlist(userId);
+        if (cancelled) return;
+
+        const serverKeys = new Set(serverList.map(watchlistKey));
+        const localOnly = cached.filter(w => !serverKeys.has(watchlistKey(w)));
+        const merged = [...serverList, ...localOnly];
+
+        setWatchlist(merged);
+        writeWatchlistToStorage(userId, merged);
+
+        // Push any entries that exist locally but not on the server (e.g.
+        // saved while offline or during a previous failed write) so all
+        // devices eventually converge.
+        for (const entry of localOnly) {
+          addToWatchlist(userId, entry.entity_type, entry.entity_id).catch(err => {
+            console.error('[GenTrack] Failed to backfill watchlist entry to Supabase:', err);
+          });
+        }
       } catch (err) {
-        console.error('[GenTrack] Failed to load watchlist:', err);
-        // Do NOT clear the watchlist on a transient fetch error — that would
-        // reintroduce the "watchlist vanishes on refresh" bug. Leave whatever
-        // was previously loaded in place; the next refresh will try again.
+        console.error('[GenTrack] Failed to load watchlist from Supabase (using local cache):', err);
+        // Do NOT clear state — leave the localStorage-hydrated list in place.
       }
     })();
     return () => { cancelled = true; };
@@ -455,15 +510,24 @@ const App: React.FC = () => {
     const userId = session.user.id;
     setWatchlist(prev => {
       const isWatched = prev.some(w => w.entity_type === entityType && w.entity_id === entityId);
+      let next: WatchlistEntry[];
       if (isWatched) {
-        removeFromWatchlist(userId, entityType, entityId).catch(console.error);
+        next = prev.filter(w => !(w.entity_type === entityType && w.entity_id === entityId));
+        removeFromWatchlist(userId, entityType, entityId).catch(err => {
+          console.error('[GenTrack] Failed to remove watchlist entry from Supabase:', err);
+        });
         trackUserActivityEvent(userId, 'watchlist_toggle', `watchlist_remove_${entityType}`, { entityId }).catch(() => {});
-        return prev.filter(w => !(w.entity_type === entityType && w.entity_id === entityId));
       } else {
-        addToWatchlist(userId, entityType, entityId).catch(console.error);
+        next = [...prev, { entity_type: entityType, entity_id: entityId, created_at: new Date().toISOString() }];
+        addToWatchlist(userId, entityType, entityId).catch(err => {
+          console.error('[GenTrack] Failed to add watchlist entry to Supabase:', err);
+        });
         trackUserActivityEvent(userId, 'watchlist_toggle', `watchlist_add_${entityType}`, { entityId }).catch(() => {});
-        return [...prev, { entity_type: entityType, entity_id: entityId, created_at: new Date().toISOString() }];
       }
+      // Persist locally on every change so a refresh always shows the latest
+      // state, even if the Supabase call above fails or the user is offline.
+      writeWatchlistToStorage(userId, next);
+      return next;
     });
   };
 

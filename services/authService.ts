@@ -163,9 +163,18 @@ export async function fetchWatchlist(userId: string, entityType?: WatchlistEntit
 
 
 export async function addToWatchlist(userId: string, entityType: WatchlistEntityType, entityId: string): Promise<void> {
+  // Use `ignoreDuplicates: true` so PostgREST issues
+  //   INSERT ... ON CONFLICT DO NOTHING
+  // instead of ON CONFLICT DO UPDATE. The watchlist table only has INSERT/
+  // SELECT/DELETE RLS policies (no UPDATE policy) — a plain merge upsert would
+  // therefore fail silently for some clients and the item would appear to save
+  // locally but never actually persist, causing it to "disappear" on refresh.
   const { error } = await supabase
     .from('watchlist')
-    .upsert({ user_id: userId, entity_type: entityType, entity_id: entityId }, { onConflict: 'user_id,entity_type,entity_id' });
+    .upsert(
+      { user_id: userId, entity_type: entityType, entity_id: entityId },
+      { onConflict: 'user_id,entity_type,entity_id', ignoreDuplicates: true }
+    );
   if (error) throw error;
 }
 
