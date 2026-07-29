@@ -154,3 +154,51 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION get_plant_cf_windows() TO anon, authenticated;
+
+
+-- ------------------------------------------------------------
+-- get_subregion_monthly_cf(p_region, p_fuel_source)
+-- Phase 3 — Sub-region sparklines.
+-- Returns capacity-weighted monthly CF for each sub-region
+-- within the given ISO, for the last 24 calendar months.
+-- One call per region replaces N calls per sub-region.
+--
+-- Note: when techFilter is "Both" the frontend passes Wind by
+-- default; call twice (Wind + Solar) if a blended sparkline is
+-- needed in future.
+-- ------------------------------------------------------------
+DROP FUNCTION IF EXISTS get_subregion_monthly_cf(text, text);
+CREATE OR REPLACE FUNCTION get_subregion_monthly_cf(p_region text, p_fuel_source text)
+RETURNS TABLE(sub_region text, month text, cap_weighted_cf float8)
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT
+    p.sub_region,
+    mg.month,
+    -- Capacity-weighted CF: SUM(mwh) / SUM(nameplate_hours) across sub-region
+    SUM(
+      CASE WHEN mg.mwh IS NULL OR p.nameplate_capacity_mw = 0 THEN NULL ELSE mg.mwh END
+    ) /
+    NULLIF(
+      SUM(
+        CASE WHEN mg.mwh IS NULL OR p.nameplate_capacity_mw = 0 THEN NULL
+          ELSE p.nameplate_capacity_mw * (
+            EXTRACT(DAY FROM (
+              DATE_TRUNC('month', TO_DATE(mg.month, 'YYYY-MM')) + INTERVAL '1 month'
+              - DATE_TRUNC('month', TO_DATE(mg.month, 'YYYY-MM'))
+            )) * 24
+          )
+        END
+      ), 0
+    ) AS cap_weighted_cf
+  FROM monthly_generation mg
+  JOIN plants p ON p.id = mg.plant_id
+  WHERE p.region      = p_region
+    AND p.fuel_source = p_fuel_source
+    AND mg.month     >= TO_CHAR(CURRENT_DATE - INTERVAL '24 months', 'YYYY-MM')
+  GROUP BY p.sub_region, mg.month
+  ORDER BY p.sub_region, mg.month;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_subregion_monthly_cf(text, text) TO anon, authenticated;

@@ -53,6 +53,7 @@ async function deploy() {
   console.log('   • get_regional_trend(region, fuel_source)');
   console.log('   • get_subregional_trend(region, sub_region, fuel_source)');
   console.log('   • get_plant_cf_windows()');
+  console.log('   • get_subregion_monthly_cf(region, fuel_source)  ← Phase 3 sparklines');
 }
 
 deploy().catch(err => {

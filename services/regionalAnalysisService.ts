@@ -71,7 +71,33 @@ export const THRESHOLDS = {
   exposureHotPortfolioShare: 0.25,
   /** WARM tier requires at least this much exposed MW. */
   exposureWarmMw: 25,
+
+  // ── Top Targets BD scoring (Phase 2) ─────────────────────────────────────────────
+  /**
+   * Priority score weights: priorityScore = exposedMwNorm*mwWeight
+   *   + portfolioShare*concentrationWeight + (distressScore/100)*distressWeight.
+   * Weights should sum to 1.0.
+   */
+  priorityWeights: { mwWeight: 0.5, concentrationWeight: 0.3, distressWeight: 0.2 },
+  /** Max rows shown in the Top BD Targets table. */
+  topTargetsCount: 10,
 } as const;
+
+/**
+ * Directional average realized price per ISO (\$/MWh, EIA public data).
+ * Used ONLY for revenue-at-risk estimates in the Top Targets table.
+ * Label clearly as "directional estimate" in the UI; not a price forecast.
+ * Update seasonally for more accurate client discussions.
+ */
+export const AVG_REALIZED_PRICE_BY_REGION: Record<string, number> = {
+  ERCOT: 35,
+  CAISO: 40,
+  SPP: 28,
+  MISO: 32,
+  PJM: 38,
+  NYISO: 45,
+  'ISO-NE': 48,
+};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -165,24 +191,48 @@ export interface LenderStake {
   plantId: string;
 }
 
+/**
+ * A ranked BD target produced by computeTopTargets.
+ * Contains everything needed to render the Top Targets table row
+ * and a one-sentence pitch hook.
+ */
+export interface TopTarget {
+  entityName: string;
+  entityType: 'owner' | 'lender';
+  tier: 'hot' | 'warm' | 'cold';
+  /** Pro-rata MW exposed in flagged plants within the current scope. */
+  exposedMw: number;
+  flaggedPlantCount: number;
+  /** exposedMw / entityTotalTrackedMw */
+  portfolioShare: number;
+  /** 0–1 composite score for table ranking. */
+  priorityScore: number;
+  /** Estimated annual revenue at risk in $M, or null when data is insufficient. */
+  revenueAtRiskUsd: number | null;
+  /** One-sentence pitch hook for the BD conversation. */
+  whyNow: string;
+  /** Unique sub-regions containing this entity's flagged exposure. */
+  subRegions: string[];
+}
+
 // ─── RPC + bulk fetch functions ─────────────────────────────────────────────
 
 /**
  * Fetch two 12-month CF windows per plant (Wind + Solar).
- * Returns an empty map on RPC failure so the UI degrades gracefully
- * (deterioration-based metrics will be zero, other stats still render).
+ * Returns an empty map + rpcError flag on failure so the UI can show
+ * the right diagnostic: "RPC not deployed" vs "no data".
  */
-export async function fetchCfWindows(): Promise<Map<string, CfWindow>> {
-  const result = new Map<string, CfWindow>();
+export async function fetchCfWindows(): Promise<{ windows: Map<string, CfWindow>; rpcError: boolean }> {
+  const windows = new Map<string, CfWindow>();
   try {
     const { data, error } = await supabase.rpc('get_plant_cf_windows');
     if (error) {
       console.warn('[RegionalAnalysis] get_plant_cf_windows RPC failed:', error.message);
-      return result;
+      return { windows, rpcError: true };
     }
     for (const row of (data ?? []) as any[]) {
       const plantId = String(row.plant_id);
-      result.set(plantId, {
+      windows.set(plantId, {
         plantId,
         recentCf: row.recent_cf == null ? null : Number(row.recent_cf),
         priorCf: row.prior_cf == null ? null : Number(row.prior_cf),
@@ -190,10 +240,11 @@ export async function fetchCfWindows(): Promise<Map<string, CfWindow>> {
         priorMonths: Number(row.prior_months ?? 0),
       });
     }
+    return { windows, rpcError: false };
   } catch (err) {
     console.warn('[RegionalAnalysis] get_plant_cf_windows threw:', err);
+    return { windows, rpcError: true };
   }
-  return result;
 }
 
 /**
@@ -745,4 +796,157 @@ export function lenderExposuresForScope(
     scope,
     scopeDistressScore,
   });
+}
+
+// ─── Top BD Targets ──────────────────────────────────────────────────────────
+
+/**
+ * Produce a ranked list of BD targets from the scoped owner + lender exposures.
+ *
+ * Candidates = hot + warm exposures from both entity types.
+ * Priority score formula (tunable via THRESHOLDS.priorityWeights):
+ *   score = norm(exposedMw) × mwWeight
+ *         + portfolioShare   × concentrationWeight
+ *         + distressScore/100 × distressWeight
+ *
+ * Revenue-at-risk uses per-plant CF shortfall vs sub-region benchmark,
+ * pro-rated by entity share, multiplied by AVG_REALIZED_PRICE_BY_REGION.
+ * Label this as a directional estimate in the UI.
+ */
+export function computeTopTargets(
+  ownerExposures: EntityExposure[],
+  lenderExposures: EntityExposure[],
+  analyses: PlantAnalysis[],
+  benchmarks: Benchmarks,
+): TopTarget[] {
+  const candidates = [
+    ...ownerExposures.filter(e => e.tier !== 'cold'),
+    ...lenderExposures.filter(e => e.tier !== 'cold'),
+  ];
+  if (candidates.length === 0) return [];
+
+  // Build a fast lookup for plant analyses.
+  const analysesById = new Map<string, PlantAnalysis>();
+  for (const a of analyses) analysesById.set(a.plantId, a);
+
+  const maxMw = Math.max(...candidates.map(c => c.exposedMw), 1);
+  const { mwWeight, concentrationWeight, distressWeight } = THRESHOLDS.priorityWeights;
+
+  const scored: TopTarget[] = candidates.map(e => {
+    const mwNorm = e.exposedMw / maxMw;
+    const distressNorm = e.scopeDistressScore != null ? e.scopeDistressScore / 100 : 0;
+    const priorityScore =
+      mwNorm * mwWeight + e.portfolioShare * concentrationWeight + distressNorm * distressWeight;
+
+    // Per-plant revenue-at-risk computation.
+    const flaggedAnalyses = e.flaggedPlantIds
+      .map(id => analysesById.get(id))
+      .filter((a): a is PlantAnalysis => a != null);
+
+    const totalFlaggedNominalMw = flaggedAnalyses.reduce((s, a) => s + a.nameplateMw, 0);
+    const uniqueSubRegions = new Set<string>();
+    let revenueAtRiskUsd: number | null = null;
+
+    if (flaggedAnalyses.length > 0) {
+      let totalRisk = 0;
+      for (const a of flaggedAnalyses) {
+        uniqueSubRegions.add(a.subRegion);
+        // Attribute exposedMw pro-rata by each plant's nameplate share.
+        const proRataMw = totalFlaggedNominalMw > 0
+          ? (a.nameplateMw / totalFlaggedNominalMw) * e.exposedMw
+          : 0;
+        const peerCf =
+          benchmarks.subRegionTech.get(`${a.region}|${a.subRegion}|${a.fuelSource}`) ??
+          benchmarks.regionTech.get(`${a.region}|${a.fuelSource}`) ??
+          null;
+        if (peerCf == null) continue;
+        const cfGap = Math.max(0, peerCf - a.ttmCf);
+        const price = AVG_REALIZED_PRICE_BY_REGION[String(a.region)] ?? 35;
+        totalRisk += proRataMw * 8760 * cfGap * price;
+      }
+      revenueAtRiskUsd = totalRisk / 1_000_000; // → $M
+    } else {
+      // No analyses resolved; still collect sub-regions from plantIds if possible.
+      // (This can happen when a plant is flagged but excluded from analyses after tech filter.)
+    }
+
+    // Build the "why now" sentence.
+    const verb = e.entityType === 'owner' ? 'Owns' : 'Finances';
+    const subList = Array.from(uniqueSubRegions);
+    const subStr = subList.length > 0 ? subList.slice(0, 3).join(', ') : 'the region';
+    const n = e.flaggedPlantIds.length;
+    const m = e.plantCount;
+
+    let cfNote = '';
+    if (flaggedAnalyses.length > 0) {
+      // Cap-weighted CF for this entity's flagged plants vs region benchmark.
+      const entityFlaggedCf =
+        flaggedAnalyses.reduce((s, a) => s + a.ttmCf * a.nameplateMw, 0) /
+        Math.max(1, flaggedAnalyses.reduce((s, a) => s + a.nameplateMw, 0));
+      const a0 = flaggedAnalyses[0];
+      const regionBenchmark = benchmarks.regionTech.get(`${a0.region}|${a0.fuelSource}`);
+      if (regionBenchmark != null && entityFlaggedCf > 0) {
+        const pts = (regionBenchmark - entityFlaggedCf) * 100;
+        if (pts > 0) cfNote = `; CF ${pts.toFixed(1)} pts below ${a0.region} benchmark`;
+      }
+    }
+
+    const whyNow =
+      `${verb} ${Math.round(e.exposedMw)} MW across ${subStr} ` +
+      `where ${n} of ${m} tracked assets are flagged${cfNote}.`;
+
+    return {
+      entityName: e.entityName,
+      entityType: e.entityType,
+      tier: e.tier,
+      exposedMw: e.exposedMw,
+      flaggedPlantCount: e.flaggedPlantIds.length,
+      portfolioShare: e.portfolioShare,
+      priorityScore,
+      revenueAtRiskUsd,
+      whyNow,
+      subRegions: subList,
+    };
+  });
+
+  scored.sort((a, b) => b.priorityScore - a.priorityScore);
+  return scored.slice(0, THRESHOLDS.topTargetsCount);
+}
+
+// ─── Phase 3 — Sub-region sparkline RPC ──────────────────────────────────────
+
+/**
+ * Fetch 24 months of capacity-weighted CF per sub-region for a given region+tech.
+ * Calls the `get_subregion_monthly_cf` RPC which must be deployed separately.
+ * Returns an empty map on failure — sparklines are optional context, not critical.
+ *
+ * Key = subRegion label, Value = array of CF values (chronological, last 24 months).
+ * When techFilter is "Both", call twice (Wind + Solar) and merge via cap-weighted avg
+ * — for now the caller passes the dominant tech to keep the RPC count low.
+ */
+export async function fetchSubregionMonthlyCf(
+  region: Region,
+  fuelSource: FuelSource,
+): Promise<Map<string, number[]>> {
+  const result = new Map<string, number[]>();
+  try {
+    const { data, error } = await supabase.rpc('get_subregion_monthly_cf', {
+      p_region: String(region),
+      p_fuel_source: String(fuelSource),
+    });
+    if (error) {
+      console.warn('[RegionalAnalysis] get_subregion_monthly_cf RPC failed:', error.message);
+      return result;
+    }
+    for (const row of (data ?? []) as any[]) {
+      const sr = String(row.sub_region ?? '');
+      const cf = row.cap_weighted_cf == null ? null : Number(row.cap_weighted_cf);
+      if (!sr || cf == null || !Number.isFinite(cf)) continue;
+      if (!result.has(sr)) result.set(sr, []);
+      result.get(sr)!.push(cf);
+    }
+  } catch (err) {
+    console.warn('[RegionalAnalysis] fetchSubregionMonthlyCf threw:', err);
+  }
+  return result;
 }

@@ -25,6 +25,8 @@ import {
   Bar,
   CartesianGrid,
   Cell,
+  Line,
+  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip as RechartsTooltip,
@@ -36,10 +38,13 @@ import { PowerPlant, Region, FuelSource, CapacityFactorStats } from '../types';
 import {
   ANALYSIS_REGIONS,
   ANALYSIS_TECHS,
+  AVG_REALIZED_PRICE_BY_REGION,
   THRESHOLDS,
+  computeTopTargets,
   fetchCfWindows,
   fetchOwnershipStakes,
   fetchLenderStakes,
+  fetchSubregionMonthlyCf,
   buildRegionalAnalysis,
   buildPlantsById,
   ownerExposuresForScope,
@@ -52,6 +57,7 @@ import {
   type PlantAnalysis,
   type RegionalAnalysisResult,
   type SubregionStats,
+  type TopTarget,
 } from '../services/regionalAnalysisService';
 
 // ─── Props ───────────────────────────────────────────────────────────────────
@@ -177,23 +183,27 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   const [lenderStakes, setLenderStakes] = useState<LenderStake[] | null>(null);
   const [geojson, setGeojson] = useState<FeatureCollection | null>(null);
   const [geojsonError, setGeojsonError] = useState<string | null>(null);
+  // Subregion monthly CF for sparklines (Phase 3). Null = not yet fetched.
+  const [subregionMonthly, setSubregionMonthly] = useState<Map<string, number[]> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const cf = await fetchCfWindows();
-        if (!cancelled) {
-          setCfWindows(cf);
-          if (cf.size === 0) {
-            setCfWindowsError('Deterioration data unavailable — only peer-relative underperformance will be flagged.');
-          }
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setCfWindows(new Map());
-          setCfWindowsError('Failed to load CF windows.');
-          console.warn('[RegionalAnalysis] CF windows error:', err);
+      const { windows, rpcError } = await fetchCfWindows();
+      if (!cancelled) {
+        setCfWindows(windows);
+        if (rpcError) {
+          setCfWindowsError(
+            'Deterioration data unavailable — the get_plant_cf_windows RPC has not been deployed to Supabase. ' +
+            'Run the SQL block at the bottom of scripts/create-rpc-functions.sql in the Supabase SQL Editor ' +
+            '(https://supabase.com/dashboard/project/ohmmtplnaddrfuoowpuq/sql/new). ' +
+            'Until then, only peer-relative underperformance is flagged.'
+          );
+        } else if (windows.size === 0) {
+          setCfWindowsError(
+            'Deterioration data unavailable — the RPC returned no rows. ' +
+            'monthly_generation may be empty for Wind/Solar plants.'
+          );
         }
       }
     })();
@@ -229,7 +239,9 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/data/subregions.geojson');
+        // Use import.meta.env.BASE_URL so the path works when Vite is deployed
+        // to a subpath (e.g. GitHub Pages serves from /<repo>/).
+        const res = await fetch(`${import.meta.env.BASE_URL}data/subregions.geojson`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const gj = (await res.json()) as FeatureCollection;
         if (!cancelled) setGeojson(gj);
@@ -323,6 +335,28 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
     if (!plantsById || !lenderStakes) return null;
     return lenderExposuresForScope(plantsById, lenderStakes, scope, scopeDistress);
   }, [plantsById, lenderStakes, scope, scopeDistress]);
+
+  // Top BD Targets — ranked by priority score across hot+warm exposures.
+  const topTargets: TopTarget[] = useMemo(() => {
+    if (!analysis) return [];
+    return computeTopTargets(
+      ownerExposures,
+      lenderResult?.exposures ?? [],
+      analysis.analyses,
+      analysis.benchmarks,
+    );
+  }, [analysis, ownerExposures, lenderResult]);
+
+  // Subregion sparkline fetch (Phase 3) — re-fires when region or tech changes.
+  useEffect(() => {
+    let cancelled = false;
+    const tech = techFilter === 'Both' ? 'Wind' : techFilter; // default to Wind when both
+    (async () => {
+      const data = await fetchSubregionMonthlyCf(selectedRegion, tech as any);
+      if (!cancelled) setSubregionMonthly(data);
+    })();
+    return () => { cancelled = true; };
+  }, [selectedRegion, techFilter]);
 
   // Filter entity lists to those with actual exposed MW when tier != all.
   const filterByTier = (rows: EntityExposure[], tier: TierFilter): EntityExposure[] => {
@@ -452,6 +486,14 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
           </button>
         )}
       </div>
+
+      {/* ── Top BD Targets ───────────────────────────────────────────────── */}
+      <TopTargetsTable
+        targets={topTargets}
+        onOwnerClick={onOwnerClick}
+        onLenderClick={onLenderClick}
+        loading={loading}
+      />
 
       {/* ── KPI strip ────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -611,6 +653,33 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
               </BarChart>
             </ResponsiveContainer>
           </div>
+          {/* Sub-region trend sparklines — rendered when Phase 3 RPC is deployed */}
+          {subregionMonthly && subregionMonthly.size > 0 && (
+            <div className="mt-3 border-t border-slate-800 pt-3">
+              <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-2">
+                24-month trend {techFilter === 'Both' ? '(Wind — switch to single tech for Solar)' : `(${techFilter})`}
+              </div>
+              <div className="grid grid-cols-1 gap-1">
+                {regionSubStats.map(s => {
+                  const pts = subregionMonthly.get(s.subRegion) ?? [];
+                  return (
+                    <div key={s.subRegion} className="flex items-center gap-2 text-[11px]">
+                      <span
+                        className="w-32 truncate text-slate-400 cursor-pointer hover:text-slate-200"
+                        onClick={() => setSelectedSubRegion(prev => prev === s.subRegion ? null : s.subRegion)}
+                      >
+                        {s.subRegion}
+                      </span>
+                      <Sparkline data={pts} color={distressColor(s.distressScore)} />
+                      <span className="font-mono text-slate-500 text-[10px]">
+                        {pts.length > 0 ? `${(pts[pts.length - 1] * 100).toFixed(1)}%` : '—'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -999,5 +1068,165 @@ const InternalDetailTable: React.FC<InternalDetailTableProps> = ({
         </table>
       </div>
     </div>
+  );
+};
+
+// ─── TopTargetsTable ──────────────────────────────────────────────────────────
+
+interface TopTargetsTableProps {
+  targets: TopTarget[];
+  onOwnerClick: (name: string) => void;
+  onLenderClick: (name: string) => void;
+  loading: boolean;
+}
+const TopTargetsTable: React.FC<TopTargetsTableProps> = ({
+  targets,
+  onOwnerClick,
+  onLenderClick,
+  loading,
+}) => {
+  if (loading) return null;
+  if (targets.length === 0) return (
+    <div className="bg-slate-900 border border-dashed border-slate-700 rounded-2xl p-5 text-sm text-slate-500">
+      No hot or warm targets in the current scope. Select a different ISO, adjust the tech filter, or
+      deploy the <code className="text-amber-400 text-[11px]">get_plant_cf_windows</code> RPC to enable
+      deterioration-based signals (see deterioration banner above).
+    </div>
+  );
+
+  const hasLenders = targets.some(t => t.entityType === 'lender');
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div className="flex items-end justify-between mb-3">
+        <div>
+          <h2 className="text-sm font-bold text-white flex items-center gap-2">
+            <span className="inline-block w-2 h-2 rounded-full bg-rose-400 animate-pulse" />
+            Top BD Targets — Regional Pursuit Priority
+          </h2>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            Hot &amp; warm entities ranked by exposed MW concentration, portfolio share, and sub-region distress.
+            {' '}<span className="text-amber-600">Pitch externally at regional level only — do not share plant-specific CF data.</span>
+          </p>
+        </div>
+        <span className="text-[10px] text-slate-500 whitespace-nowrap ml-4">
+          {targets.length} target{targets.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-slate-800">
+        <table className="w-full text-xs min-w-[720px]">
+          <thead className="bg-slate-950/60 text-slate-500 uppercase text-[10px] font-bold sticky top-0">
+            <tr>
+              <th className="text-center px-2 py-2 w-8">#</th>
+              <th className="text-left px-3 py-2">Entity</th>
+              <th className="text-left px-2 py-2">Role</th>
+              <th className="text-left px-2 py-2">Tier</th>
+              <th className="text-right px-2 py-2">Exposed MW</th>
+              <th className="text-right px-2 py-2">Portfolio %</th>
+              <th className="text-right px-2 py-2">
+                Est. $/yr <sup className="text-[8px] normal-case">†</sup>
+              </th>
+              <th className="text-left px-3 py-2">Why now</th>
+            </tr>
+          </thead>
+          <tbody>
+            {targets.map((t, i) => (
+              <tr
+                key={`${t.entityName}|${t.entityType}`}
+                className="border-t border-slate-800 hover:bg-slate-800/30 transition-colors"
+              >
+                <td className="px-2 py-2.5 text-center text-slate-500 font-mono text-[11px]">{i + 1}</td>
+                <td className="px-3 py-2.5">
+                  <button
+                    onClick={() =>
+                      t.entityType === 'owner'
+                        ? onOwnerClick(t.entityName)
+                        : onLenderClick(t.entityName)
+                    }
+                    className="text-blue-400 hover:text-blue-300 font-semibold text-left leading-tight"
+                  >
+                    {t.entityName}
+                  </button>
+                </td>
+                <td className="px-2 py-2.5">
+                  <span
+                    className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase border ${
+                      t.entityType === 'owner'
+                        ? 'bg-sky-900/40 text-sky-300 border-sky-700/40'
+                        : 'bg-violet-900/40 text-violet-300 border-violet-700/40'
+                    }`}
+                  >
+                    {t.entityType === 'owner' ? 'Owner' : 'Lender'}
+                  </span>
+                </td>
+                <td className="px-2 py-2.5">
+                  <span
+                    className={`inline-block px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-widest ${tierBadgeClasses(t.tier)}`}
+                  >
+                    {t.tier}
+                  </span>
+                </td>
+                <td className="px-2 py-2.5 text-right font-mono text-slate-200">{fmtMw(t.exposedMw)}</td>
+                <td className="px-2 py-2.5 text-right font-mono text-slate-400">
+                  {(t.portfolioShare * 100).toFixed(0)}%
+                </td>
+                <td className="px-2 py-2.5 text-right font-mono text-slate-300">
+                  {t.revenueAtRiskUsd != null && t.revenueAtRiskUsd > 0.05
+                    ? `~$${t.revenueAtRiskUsd.toFixed(1)}M`
+                    : '—'}
+                </td>
+                <td className="px-3 py-2.5 text-slate-400 max-w-[280px]">
+                  <span title={t.whyNow} className="block truncate">{t.whyNow}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-2 flex flex-col gap-1 text-[10px] text-slate-600">
+        <span>
+          <sup>†</sup> Revenue-at-risk is a directional estimate: CF shortfall vs sub-region benchmark ×
+          exposed MW × 8,760 hr/yr × EIA average realized price
+          (ERCOT ${AVG_REALIZED_PRICE_BY_REGION['ERCOT']}/MWh, CAISO ${AVG_REALIZED_PRICE_BY_REGION['CAISO']},
+          SPP ${AVG_REALIZED_PRICE_BY_REGION['SPP']}, MISO ${AVG_REALIZED_PRICE_BY_REGION['MISO']},
+          PJM ${AVG_REALIZED_PRICE_BY_REGION['PJM']}, NYISO ${AVG_REALIZED_PRICE_BY_REGION['NYISO']},
+          ISO-NE ${AVG_REALIZED_PRICE_BY_REGION['ISO-NE']}/MWh). Not a price forecast.
+        </span>
+        {hasLenders && (
+          <span className="text-amber-700/80">
+            Lender entries reflect validated links only — public lender data is incomplete; absence here does not mean absence of exposure.
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Sparkline ────────────────────────────────────────────────────────────────
+
+interface SparklineProps {
+  data: number[];
+  color?: string;
+}
+/**
+ * Tiny inline sparkline (80 × 28 px). Requires get_subregion_monthly_cf RPC.
+ * Shows nothing if data is empty.
+ */
+const Sparkline: React.FC<SparklineProps> = ({ data, color = '#38bdf8' }) => {
+  if (data.length < 2) return <span className="inline-block w-20 text-slate-700 text-[10px]">—</span>;
+  const pts = data.map((cf, i) => ({ i, cf: Math.round(cf * 1000) / 10 }));
+  return (
+    <LineChart width={80} height={28} data={pts} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+      <Line
+        type="monotone"
+        dataKey="cf"
+        dot={false}
+        stroke={color}
+        strokeWidth={1.5}
+        isAnimationActive={false}
+      />
+    </LineChart>
   );
 };
