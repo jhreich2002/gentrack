@@ -41,6 +41,7 @@ import {
   AVG_REALIZED_PRICE_BY_REGION,
   THRESHOLDS,
   computeTopTargets,
+  buildLenderBriefings,
   fetchCfWindows,
   fetchOwnershipStakes,
   fetchLenderStakes,
@@ -51,6 +52,7 @@ import {
   lenderExposuresForScope,
   type CfWindow,
   type EntityExposure,
+  type LenderBriefing,
   type LenderCoverage,
   type LenderStake,
   type OwnershipStake,
@@ -71,7 +73,7 @@ interface Props {
 
 // ─── UI-local types ──────────────────────────────────────────────────────────
 type TechFilter = 'Wind' | 'Solar' | 'Both';
-type MapMetric = 'distress' | 'cfDelta' | 'flaggedCount';
+type MapMetric = 'struggle' | 'excessDecline' | 'flaggedCount';
 type TierFilter = 'all' | 'hot' | 'warm' | 'cold';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -122,14 +124,14 @@ function fmtInt(v: number): string {
 }
 
 /**
- * Distress → color. Green (low) → amber (mid) → red (high). Null → gray.
- * Values below `distressWarm` blend green→amber; between warm and hot
+ * Struggle score → color. Green (low) → amber (mid) → red (high). Null → gray.
+ * Values below `struggleWarm` blend green→amber; between warm and hot
  * blend amber→red; ≥ hot is deep red.
  */
-function distressColor(score: number | null): string {
+function struggleColor(score: number | null): string {
   if (score == null) return '#334155'; // suppressed
-  const w = THRESHOLDS.distressWarm;
-  const h = THRESHOLDS.distressHot;
+  const w = THRESHOLDS.struggleWarm;
+  const h = THRESHOLDS.struggleHot;
   if (score < w) {
     const t = Math.max(0, Math.min(1, score / w));
     return lerpColor('#10b981', '#f59e0b', t);
@@ -171,7 +173,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   const [selectedRegion, setSelectedRegion] = useState<Region>(Region.ERCOT);
   const [techFilter, setTechFilter] = useState<TechFilter>('Both');
   const [selectedSubRegion, setSelectedSubRegion] = useState<string | null>(null);
-  const [mapMetric, setMapMetric] = useState<MapMetric>('distress');
+  const [mapMetric, setMapMetric] = useState<MapMetric>('struggle');
   const [ownerTierFilter, setOwnerTierFilter] = useState<TierFilter>('all');
   const [lenderTierFilter, setLenderTierFilter] = useState<TierFilter>('all');
   const [showInternalDetail, setShowInternalDetail] = useState(false);
@@ -304,37 +306,62 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   const regionFlaggedCount = regionAnalyses.filter(a => a.isFlagged).length;
   const regionMwAnalyzed = regionAnalyses.reduce((s, a) => s + a.nameplateMw, 0);
   const flaggedSubregions = regionSubStats.filter(
-    s => s.distressScore != null && s.distressScore >= THRESHOLDS.distressWarm,
+    s => s.struggleScore != null && s.struggleScore >= THRESHOLDS.struggleWarm,
   ).length;
+
+  // National YoY for the selected tech (for the KPI strip).
+  const nationalYoY = useMemo<number | null>(() => {
+    if (!analysis) return null;
+    const t = techFilter === 'Both' ? null : String(techFilter);
+    if (t) return analysis.nationalYoY.get(t) ?? null;
+    // Both: cap-weighted average of Wind and Solar national YoY.
+    let num = 0; let den = 0;
+    for (const tech of ANALYSIS_TECHS) {
+      const v = analysis.nationalYoY.get(String(tech));
+      const w = plants.filter(p => p.fuelSource === tech && ANALYSIS_REGIONS.includes(p.region))
+        .reduce((s, p) => s + p.nameplateCapacityMW, 0);
+      if (v != null && w > 0) { num += v * w; den += w; }
+    }
+    return den > 0 ? num / den : null;
+  }, [analysis, techFilter, plants]);
+
+  // Region-level YoY (cap-weighted across all sub-regions in this region).
+  const regionYoY = useMemo<number | null>(() => {
+    const sub = regionSubStats.filter(s => s.signalComponents.selfTrendPts != null);
+    if (sub.length === 0) return null;
+    const num = sub.reduce((s, r) => s + (r.signalComponents.selfTrendPts ?? 0) * r.totalMw, 0);
+    const den = sub.reduce((s, r) => s + r.totalMw, 0);
+    return den > 0 ? num / den : null;
+  }, [regionSubStats]);
 
   // Scope for entity exposure.
   const scope = useMemo(
     () => ({ region: selectedRegion, subRegion: selectedSubRegion ?? undefined }),
     [selectedRegion, selectedSubRegion],
   );
-  const scopeDistress = useMemo<number | null>(() => {
+  const scopeStruggle = useMemo<number | null>(() => {
     if (selectedSubRegion) {
       const s = analysis?.subregionStatsMap.get(`${selectedRegion}|${selectedSubRegion}`);
-      return s?.distressScore ?? null;
+      return s?.struggleScore ?? null;
     }
-    // Region-level: average of per-subregion distress, cap-weighted by flaggedMw.
+    // Region-level: cap-weighted average of per-subregion struggle scores.
     if (!analysis) return null;
-    const subs = analysis.subregionStats.filter(s => s.region === selectedRegion && s.distressScore != null);
+    const subs = analysis.subregionStats.filter(s => s.region === selectedRegion && s.struggleScore != null);
     if (subs.length === 0) return null;
-    const num = subs.reduce((sum, s) => sum + (s.distressScore ?? 0) * Math.max(1, s.totalMw), 0);
+    const num = subs.reduce((sum, s) => sum + (s.struggleScore ?? 0) * Math.max(1, s.totalMw), 0);
     const den = subs.reduce((sum, s) => sum + Math.max(1, s.totalMw), 0);
     return den > 0 ? Math.round(num / den) : null;
   }, [analysis, selectedRegion, selectedSubRegion]);
 
   const ownerExposures: EntityExposure[] = useMemo(() => {
     if (!plantsById || !ownerStakes) return [];
-    return ownerExposuresForScope(plantsById, ownerStakes, scope, scopeDistress);
-  }, [plantsById, ownerStakes, scope, scopeDistress]);
+    return ownerExposuresForScope(plantsById, ownerStakes, scope, scopeStruggle);
+  }, [plantsById, ownerStakes, scope, scopeStruggle]);
 
   const lenderResult = useMemo<{ exposures: EntityExposure[]; coverage: LenderCoverage } | null>(() => {
     if (!plantsById || !lenderStakes) return null;
-    return lenderExposuresForScope(plantsById, lenderStakes, scope, scopeDistress);
-  }, [plantsById, lenderStakes, scope, scopeDistress]);
+    return lenderExposuresForScope(plantsById, lenderStakes, scope, scopeStruggle);
+  }, [plantsById, lenderStakes, scope, scopeStruggle]);
 
   // Top BD Targets — ranked by priority score across hot+warm exposures.
   const topTargets: TopTarget[] = useMemo(() => {
@@ -346,6 +373,18 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
       analysis.benchmarks,
     );
   }, [analysis, ownerExposures, lenderResult]);
+
+  // Lender briefings — built from lender exposures + subregion struggle signals.
+  const lenderBriefings: LenderBriefing[] = useMemo(() => {
+    if (!analysis || !lenderResult) return [];
+    const analysesById = new Map<string, PlantAnalysis>();
+    for (const a of analysis.analyses) analysesById.set(a.plantId, a);
+    return buildLenderBriefings(
+      lenderResult.exposures,
+      analysis.subregionStatsMap,
+      analysesById,
+    );
+  }, [analysis, lenderResult]);
 
   // Subregion sparkline fetch (Phase 3) — re-fires when region or tech changes.
   useEffect(() => {
@@ -367,11 +406,16 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   const ownerRows = filterByTier(ownerExposures, ownerTierFilter);
   const lenderRows = lenderResult ? filterByTier(lenderResult.exposures, lenderTierFilter) : [];
 
-  // ── Benchmark chart data ──────────────────────────────────────────────────
+  // ── Benchmark chart data (YoY decline per sub-region) ────────────────────
   const benchmarkChart = regionSubStats.map(s => ({
     name: s.subRegion,
-    cf: s.capWeightedTtmCf == null ? null : Math.round(s.capWeightedTtmCf * 1000) / 10,
-    distress: s.distressScore,
+    yoyDecline: s.signalComponents.selfTrendPts == null
+      ? null
+      : Math.round(s.signalComponents.selfTrendPts * 1000) / 10,
+    excessDecline: s.signalComponents.excessDeclinePts == null
+      ? null
+      : Math.round(s.signalComponents.excessDeclinePts * 1000) / 10,
+    struggle: s.struggleScore,
     plants: s.plantCount,
   }));
 
@@ -386,15 +430,14 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
     const s = analysis?.subregionStatsMap.get(`${selectedRegion}|${props.subRegion}`);
     let fill = '#334155';
     if (s) {
-      if (mapMetric === 'distress') {
-        fill = distressColor(s.distressScore);
-      } else if (mapMetric === 'cfDelta') {
-        // CF delta vs regional avg; more red the worse it is.
-        if (s.capWeightedTtmCf != null && regionTtmCf != null) {
-          const delta = s.capWeightedTtmCf - regionTtmCf; // negative = worse
-          const norm = Math.max(-1, Math.min(1, delta / 0.05));
-          if (norm > 0) fill = lerpColor('#f59e0b', '#10b981', norm);
-          else fill = lerpColor('#f59e0b', '#ef4444', -norm);
+      if (mapMetric === 'struggle') {
+        fill = struggleColor(s.struggleScore);
+      } else if (mapMetric === 'excessDecline') {
+        // Excess YoY decline vs national cohort — positive (worse) = red.
+        const excess = s.signalComponents.excessDeclinePts;
+        if (excess != null) {
+          const norm = Math.max(0, Math.min(1, excess / THRESHOLDS.excessDeclineNorm));
+          fill = lerpColor('#10b981', '#ef4444', norm);
         }
       } else {
         // flaggedCount → red scaling by flagged MW share.
@@ -544,7 +587,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
               </p>
             </div>
             <div className="flex gap-1">
-              {(['distress', 'cfDelta', 'flaggedCount'] as MapMetric[]).map(m => (
+              {(['struggle', 'excessDecline', 'flaggedCount'] as MapMetric[]).map(m => (
                 <button
                   key={m}
                   onClick={() => setMapMetric(m)}
@@ -554,7 +597,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
                       : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  {m === 'distress' ? 'Distress' : m === 'cfDelta' ? 'CF Δ' : 'Flagged share'}
+                  {m === 'struggle' ? 'Struggle' : m === 'excessDecline' ? 'Excess ↓' : 'Flagged share'}
                 </button>
               ))}
             </div>
@@ -599,8 +642,8 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h2 className="text-sm font-bold text-white">Sub-region benchmarks</h2>
-              <p className="text-[11px] text-slate-500">Cap-weighted TTM CF per sub-region vs regional / national</p>
+              <h2 className="text-sm font-bold text-white">Sub-region YoY decline</h2>
+              <p className="text-[11px] text-slate-500">Cap-weighted CF change vs same period prior year (pts). National cohort reference line.</p>
             </div>
           </div>
           <div className="h-64">
@@ -613,38 +656,30 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
                   fontSize={10}
                   tickLine={false}
                   axisLine={false}
-                  domain={[0, 60]}
-                  tickFormatter={(v: number) => `${v}%`}
+                  tickFormatter={(v: number) => `${v > 0 ? '+' : ''}${v} pt`}
                 />
                 <RechartsTooltip
                   cursor={{ fill: 'rgba(255,255,255,0.05)' }}
                   contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', fontSize: '12px' }}
                   formatter={(value: number | null, name: string) => [
-                    value == null ? 'N/A' : `${value}%`,
-                    name === 'cf' ? 'CF' : name,
+                    value == null ? 'N/A' : `${value > 0 ? '+' : ''}${value} pt`,
+                    name === 'yoyDecline' ? 'YoY decline' : name === 'excessDecline' ? 'vs national' : name,
                   ]}
                 />
-                {regionTtmCf != null && (
+                {nationalYoY != null && (
                   <ReferenceLine
-                    y={Math.round(regionTtmCf * 1000) / 10}
-                    stroke="#64748b"
-                    strokeDasharray="5 5"
-                    label={{ position: 'right', value: 'Region', fill: '#64748b', fontSize: 10 }}
-                  />
-                )}
-                {nationalTtmCf != null && (
-                  <ReferenceLine
-                    y={Math.round(nationalTtmCf * 1000) / 10}
+                    y={Math.round(nationalYoY * 1000) / 10}
                     stroke="#94a3b8"
-                    strokeDasharray="2 5"
+                    strokeDasharray="3 5"
                     label={{ position: 'right', value: 'National', fill: '#94a3b8', fontSize: 10 }}
                   />
                 )}
-                <Bar dataKey="cf" radius={[4, 4, 0, 0]} barSize={36}>
+                <ReferenceLine y={0} stroke="#475569" strokeWidth={1} />
+                <Bar dataKey="yoyDecline" radius={[4, 4, 0, 0]} barSize={36}>
                   {benchmarkChart.map((d, i) => (
                     <Cell
                       key={i}
-                      fill={distressColor(d.distress)}
+                      fill={struggleColor(d.struggle)}
                       stroke={selectedSubRegion === d.name ? '#38bdf8' : 'transparent'}
                       strokeWidth={selectedSubRegion === d.name ? 2 : 0}
                     />
@@ -670,7 +705,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
                       >
                         {s.subRegion}
                       </span>
-                      <Sparkline data={pts} color={distressColor(s.distressScore)} />
+                      <Sparkline data={pts} color={struggleColor(s.struggleScore)} />
                       <span className="font-mono text-slate-500 text-[10px]">
                         {pts.length > 0 ? `${(pts[pts.length - 1] * 100).toFixed(1)}%` : '—'}
                       </span>
@@ -715,6 +750,9 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
           coverage={lenderResult?.coverage}
         />
       </div>
+
+      {/* ── Lender Briefings ─────────────────────────────────────────────── */}
+      <LenderBriefingsSection briefings={lenderBriefings} onLenderClick={onLenderClick} loading={loading} />
 
       {/* ── Internal drill-down ──────────────────────────────────────────── */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl">
@@ -771,17 +809,17 @@ const KpiCard: React.FC<KpiCardProps> = ({ label, value, sub, tone = 'neutral' }
 
 interface MapLegendProps { metric: MapMetric }
 const MapLegend: React.FC<MapLegendProps> = ({ metric }) => {
-  const stops = metric === 'distress'
+  const stops = metric === 'struggle'
     ? [
-        { c: distressColor(0), l: '0' },
-        { c: distressColor(THRESHOLDS.distressWarm), l: `${THRESHOLDS.distressWarm}` },
-        { c: distressColor(THRESHOLDS.distressHot), l: `${THRESHOLDS.distressHot}+` },
+        { c: struggleColor(0), l: '0' },
+        { c: struggleColor(THRESHOLDS.struggleWarm), l: `${THRESHOLDS.struggleWarm}` },
+        { c: struggleColor(THRESHOLDS.struggleHot), l: `${THRESHOLDS.struggleHot}+` },
       ]
-    : metric === 'cfDelta'
+    : metric === 'excessDecline'
     ? [
-        { c: '#ef4444', l: 'below' },
-        { c: '#f59e0b', l: 'peer' },
-        { c: '#10b981', l: 'above' },
+        { c: '#10b981', l: 'at/above national' },
+        { c: '#f59e0b', l: 'slight excess' },
+        { c: '#ef4444', l: 'large excess' },
       ]
     : [
         { c: '#10b981', l: 'few' },
@@ -817,17 +855,18 @@ const SubregionTooltip: React.FC<SubregionTooltipProps> = ({
   regionTtmCf,
   nationalTtmCf,
 }) => {
-  // GeoJSON Tooltip renders once per hover — we render the whole legend layout;
-  // the sticky prop causes it to follow the cursor. Without direct access to
-  // the hovered feature here, we render generic footer context — most detail
-  // is delivered by the map + entity tables below.
+  // The tooltip is sticky so it follows the cursor — we show generic region-level
+  // context here; the sub-region signal detail is in the entity tables below.
   return (
-    <div className="text-xs">
+    <div className="text-xs max-w-[220px]">
       <div className="font-bold text-slate-900">{selectedRegion}</div>
       <div className="text-slate-700">
         Regional CF: {fmtPct(regionTtmCf)} · National CF: {fmtPct(nationalTtmCf)}
       </div>
-      <div className="text-slate-500 mt-1">Click a sub-region to drill down.</div>
+      <div className="text-slate-500 mt-1 text-[10px]">
+        Colour shows sub-region struggle score (YoY decline vs own history + national cohort).
+        Click to drill down.
+      </div>
     </div>
   );
 };
@@ -972,7 +1011,7 @@ const InternalDetailTable: React.FC<InternalDetailTableProps> = ({
         return da - db;
       });
     } else {
-      arr.sort((a, b) => (b.deteriorationPts ?? -1) - (a.deteriorationPts ?? -1));
+      arr.sort((a, b) => (b.yoyDeclinePts ?? -1) - (a.yoyDeclinePts ?? -1));
     }
     return arr;
   }, [scoped, sortKey]);
@@ -1058,7 +1097,7 @@ const InternalDetailTable: React.FC<InternalDetailTableProps> = ({
                     {delta == null ? '—' : `${(delta * 100).toFixed(1)}pt`}
                   </td>
                   <td className={`px-2 py-2 text-right font-mono ${a.isDeteriorating ? 'text-rose-300' : 'text-slate-400'}`}>
-                    {a.deteriorationPts == null ? '—' : `${(a.deteriorationPts * 100).toFixed(1)}pt`}
+                    {a.yoyDeclinePts == null ? '—' : `${(a.yoyDeclinePts * 100).toFixed(1)}pt`}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-slate-400">{a.curtailmentScore.toFixed(0)}</td>
                 </tr>
@@ -1228,5 +1267,170 @@ const Sparkline: React.FC<SparklineProps> = ({ data, color = '#38bdf8' }) => {
         isAnimationActive={false}
       />
     </LineChart>
+  );
+};
+
+// ─── LenderBriefingsSection ───────────────────────────────────────────────────
+
+interface LenderBriefingsSectionProps {
+  briefings: LenderBriefing[];
+  onLenderClick: (name: string) => void;
+  loading: boolean;
+}
+
+const LenderBriefingsSection: React.FC<LenderBriefingsSectionProps> = ({
+  briefings,
+  onLenderClick,
+  loading,
+}) => {
+  const [open, setOpen] = useState(false);
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
+
+  if (loading) return null;
+
+  const handleCopy = (text: string, idx: number) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(idx);
+      setTimeout(() => setCopied(null), 2000);
+    });
+  };
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 text-left"
+      >
+        <div>
+          <h2 className="text-sm font-bold text-white flex items-center gap-2">
+            <span className="inline-block w-2 h-2 rounded-full bg-violet-400" />
+            Lender Outreach Briefings
+          </h2>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            Per-lender struggle signal breakdown + ready-to-use outreach narrative. Regional framing only.
+            {' '}{briefings.length > 0 ? `${briefings.length} lender${briefings.length > 1 ? 's' : ''} with hot/warm exposure.` : 'No hot/warm lender exposure in current scope.'}
+          </p>
+        </div>
+        <svg
+          className={`w-4 h-4 text-slate-400 transform transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="px-5 pb-5 space-y-3">
+          {briefings.length === 0 && (
+            <div className="text-sm text-slate-500 py-3">
+              No hot or warm lender exposures in the current scope.
+            </div>
+          )}
+          {briefings.map((b, idx) => (
+            <div key={b.lenderName} className="border border-slate-800 rounded-xl overflow-hidden">
+              {/* Row header */}
+              <div
+                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-800/40 transition-colors"
+                onClick={() => setExpandedIdx(prev => prev === idx ? null : idx)}
+              >
+                <span className={`inline-block px-1.5 py-0.5 rounded border text-[10px] font-bold uppercase tracking-widest ${tierBadgeClasses(b.tier)}`}>
+                  {b.tier}
+                </span>
+                <button
+                  onClick={e => { e.stopPropagation(); onLenderClick(b.lenderName); }}
+                  className="text-blue-400 hover:text-blue-300 font-semibold text-sm text-left"
+                >
+                  {b.lenderName}
+                </button>
+                <span className="ml-auto text-[11px] text-slate-400 font-mono">
+                  {Math.round(b.exposedMw)} MW · {b.flaggedPlantCount} plant{b.flaggedPlantCount !== 1 ? 's' : ''}
+                </span>
+                {b.weightedStruggleScore != null && (
+                  <span
+                    className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold"
+                    style={{ backgroundColor: struggleColor(b.weightedStruggleScore) + '33', color: struggleColor(b.weightedStruggleScore) }}
+                  >
+                    Score {b.weightedStruggleScore}
+                  </span>
+                )}
+                <svg
+                  className={`w-3 h-3 text-slate-500 ml-2 transform transition-transform ${expandedIdx === idx ? 'rotate-180' : ''}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+
+              {expandedIdx === idx && (
+                <div className="px-4 pb-4 space-y-3 border-t border-slate-800 pt-3">
+                  {/* Sub-region breakdown table */}
+                  {b.subRegionBreakdowns.length > 0 && (
+                    <div className="overflow-auto rounded-lg border border-slate-700/50">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-950/50 text-slate-500 uppercase text-[10px] font-bold">
+                          <tr>
+                            <th className="text-left px-3 py-2">Sub-region</th>
+                            <th className="text-right px-2 py-2">Exposed MW</th>
+                            <th className="text-right px-2 py-2">Score</th>
+                            <th className="text-right px-2 py-2">YoY ↓</th>
+                            <th className="text-right px-2 py-2">vs National</th>
+                            <th className="text-right px-2 py-2">Breadth</th>
+                            <th className="text-right px-2 py-2">Momentum</th>
+                            <th className="text-left px-3 py-2">Diagnosis</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {b.subRegionBreakdowns.map(bd => (
+                            <tr key={bd.subRegion} className="border-t border-slate-800">
+                              <td className="px-3 py-2 font-semibold text-slate-200">{bd.subRegion}</td>
+                              <td className="px-2 py-2 text-right font-mono text-slate-300">{Math.round(bd.exposedMw)} MW</td>
+                              <td className="px-2 py-2 text-right font-mono">
+                                {bd.struggleScore != null ? (
+                                  <span style={{ color: struggleColor(bd.struggleScore) }}>{bd.struggleScore}</span>
+                                ) : '—'}
+                              </td>
+                              <td className={`px-2 py-2 text-right font-mono ${bd.selfTrendPts != null && bd.selfTrendPts > 0 ? 'text-rose-300' : 'text-slate-400'}`}>
+                                {bd.selfTrendPts != null ? `${(bd.selfTrendPts * 100).toFixed(1)} pt` : '—'}
+                              </td>
+                              <td className={`px-2 py-2 text-right font-mono ${bd.excessDeclinePts != null && bd.excessDeclinePts > 0 ? 'text-rose-300' : 'text-slate-400'}`}>
+                                {bd.excessDeclinePts != null ? `${bd.excessDeclinePts >= 0 ? '+' : ''}${(bd.excessDeclinePts * 100).toFixed(1)} pt` : '—'}
+                              </td>
+                              <td className="px-2 py-2 text-right font-mono text-slate-400">
+                                {`${Math.round(bd.breadth * 100)}%`}
+                              </td>
+                              <td className={`px-2 py-2 text-right font-mono ${bd.momentumPts != null && bd.momentumPts > 0 ? 'text-amber-300' : 'text-slate-400'}`}>
+                                {bd.momentumPts != null ? `${bd.momentumPts >= 0 ? '↑' : '↓'} ${Math.abs(bd.momentumPts * 100).toFixed(1)} pt` : '—'}
+                              </td>
+                              <td className="px-3 py-2 text-slate-400">{bd.diagnosisLabel ?? '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Outreach narrative */}
+                  <div className="bg-slate-950 rounded-xl border border-violet-800/30 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-bold text-violet-300 uppercase tracking-widest">
+                        Outreach narrative — regional framing only
+                      </span>
+                      <button
+                        onClick={() => handleCopy(b.outreachNarrative, idx)}
+                        className="text-[10px] text-slate-400 hover:text-slate-200 border border-slate-700 rounded px-2 py-0.5 transition-colors"
+                      >
+                        {copied === idx ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">{b.outreachNarrative}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 };

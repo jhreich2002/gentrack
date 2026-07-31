@@ -83,24 +83,42 @@ GRANT EXECUTE ON FUNCTION get_subregional_trend(text, text, text) TO anon, authe
 
 -- ------------------------------------------------------------
 -- get_plant_cf_windows()
--- Returns two 12-month CF windows per plant (Wind + Solar only):
---   recent_cf = avg CF over the 12 months ending at MAX(month)
---   prior_cf  = avg CF over the 12 months immediately before that
--- Used by the Regional Analysis tab to compute deterioration
--- (prior_cf − recent_cf) as the primary distress signal.
+-- Returns CF windows per plant (Wind + Solar only) for the
+-- Regional Analysis v2 struggle-signal model:
 --
+--   12-month windows (YoY self-trend):
+--     recent_cf  = cap-weighted avg CF over [M-11, M]
+--     prior_cf   = cap-weighted avg CF over [M-23, M-12]
+--     recent_months / prior_months = non-null data month counts
+--
+--   6-month half-windows (momentum signal):
+--     r2_cf / r2_months  = [M-5, M]       — most recent half-year
+--     r1_cf / r1_months  = [M-11, M-6]    — earlier half of recent year
+--     p2_cf / p2_months  = [M-17, M-12]   — YoY peer of r2
+--     p1_cf / p1_months  = [M-23, M-18]   — YoY peer of r1
+--
+--   Momentum = (p2_cf − r2_cf) − (p1_cf − r1_cf):
+--     positive = decline is accelerating (strongest "why now" signal).
+--
+-- Frontend tolerates old RPC shape (missing half-window cols → null).
 -- Same CF formula as get_regional_trend: mwh / (nameplate * days * 24).
--- NULL mwh rows are excluded (not treated as zero).
--- Nuclear is excluded — the Regional Analysis feature only screens
--- Wind + Solar.
+-- NULL mwh rows are excluded (not treated as zero). Nuclear excluded.
 -- ------------------------------------------------------------
 CREATE OR REPLACE FUNCTION get_plant_cf_windows()
 RETURNS TABLE(
-  plant_id text,
-  recent_cf float8,
-  prior_cf float8,
+  plant_id      text,
+  recent_cf     float8,
+  prior_cf      float8,
   recent_months int,
-  prior_months int
+  prior_months  int,
+  r2_cf         float8,
+  r1_cf         float8,
+  p2_cf         float8,
+  p1_cf         float8,
+  r2_months     int,
+  r1_months     int,
+  p2_months     int,
+  p1_months     int
 )
 LANGUAGE sql
 STABLE
@@ -109,16 +127,28 @@ AS $$
     SELECT MAX(month) AS max_month FROM monthly_generation
   ),
   bounds AS (
-    -- Compute anchor month as a date, then derive window edges.
-    -- recent window = 12 months ending at max_month (inclusive):
-    --   months in [max_month - 11, max_month]
-    -- prior window  = 12 months before that:
-    --   months in [max_month - 23, max_month - 12]
+    -- All window edges derived from a single anchor date (max_dt = M).
+    -- 12-month windows:
+    --   recent  : [M-11, M]
+    --   prior   : [M-23, M-12]
+    -- 6-month half-windows (YYYY-MM format, day always = 1st of month):
+    --   r2      : [M-5, M]
+    --   r1      : [M-11, M-6]
+    --   p2      : [M-17, M-12]
+    --   p1      : [M-23, M-18]
     SELECT
-      TO_DATE(max_month, 'YYYY-MM') AS max_dt,
-      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '11 months' AS recent_start,
-      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '12 months' AS prior_end,
-      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '23 months' AS prior_start
+      TO_DATE(max_month, 'YYYY-MM')                                   AS max_dt,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '11 months'           AS recent_start,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '12 months'           AS prior_end,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '23 months'           AS prior_start,
+      -- half-window edges
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '5 months'            AS r2_start,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '6 months'            AS r1_end,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '11 months'           AS r1_start,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '12 months'           AS p2_end,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '17 months'           AS p2_start,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '18 months'           AS p1_end,
+      TO_DATE(max_month, 'YYYY-MM') - INTERVAL '23 months'           AS p1_start
     FROM anchor
   ),
   cf AS (
@@ -141,10 +171,20 @@ AS $$
   )
   SELECT
     cf.plant_id,
-    AVG(cf.cf_val) FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.recent_start AND b.max_dt)   AS recent_cf,
-    AVG(cf.cf_val) FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.prior_start  AND b.prior_end) AS prior_cf,
-    COUNT(*)      FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.recent_start AND b.max_dt)::int AS recent_months,
-    COUNT(*)      FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.prior_start  AND b.prior_end)::int AS prior_months
+    -- 12-month windows
+    AVG(cf.cf_val)  FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.recent_start AND b.max_dt)   AS recent_cf,
+    AVG(cf.cf_val)  FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.prior_start  AND b.prior_end) AS prior_cf,
+    COUNT(*)        FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.recent_start AND b.max_dt)::int   AS recent_months,
+    COUNT(*)        FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.prior_start  AND b.prior_end)::int AS prior_months,
+    -- 6-month half-windows for momentum
+    AVG(cf.cf_val)  FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.r2_start AND b.max_dt)    AS r2_cf,
+    AVG(cf.cf_val)  FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.r1_start AND b.r1_end)    AS r1_cf,
+    AVG(cf.cf_val)  FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.p2_start AND b.p2_end)    AS p2_cf,
+    AVG(cf.cf_val)  FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.p1_start AND b.p1_end)    AS p1_cf,
+    COUNT(*)        FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.r2_start AND b.max_dt)::int   AS r2_months,
+    COUNT(*)        FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.r1_start AND b.r1_end)::int   AS r1_months,
+    COUNT(*)        FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.p2_start AND b.p2_end)::int   AS p2_months,
+    COUNT(*)        FILTER (WHERE cf.cf_val IS NOT NULL AND cf.mdt BETWEEN b.p1_start AND b.p1_end)::int   AS p1_months
   FROM cf CROSS JOIN bounds b
   GROUP BY cf.plant_id
   HAVING
