@@ -309,7 +309,7 @@ async function fetchEIA860Characteristics(
     url.searchParams.append('data[]', 'county');
     url.searchParams.append('data[]', 'latitude');
     url.searchParams.append('data[]', 'longitude');
-    url.searchParams.append('data[]', 'prime_mover');
+    // prime-mover-code and technology are dimension fields — returned automatically in response
     // entityid is a dimension field returned automatically — do not add to data[]
     // Facets — use append with [] notation for multi-value arrays
     url.searchParams.append('facets[status][]', 'OP');
@@ -362,10 +362,14 @@ async function fetchEIA860Characteristics(
     const owner = r.entityName || r['entity-name'] || undefined;
     const operatorId = r.entityid ? String(r.entityid) : undefined;
 
-    // Track PV vs non-PV prime mover capacity per plant (for CSP detection).
-    // EIA-860 prime_mover 'PV' = photovoltaic; 'ST'/'CP' = concentrated solar.
-    const primeMover = String(r.prime_mover || r['prime_mover'] || '');
-    const isPvGenerator = primeMover === 'PV' || primeMover === '';
+    // Track PV vs non-PV capacity per plant (for CSP detection).
+    // EIA-860 technology field: 'Solar Photovoltaic' = PV; 'Solar Thermal...' = CSP.
+    // prime-mover-code: 'PV' = photovoltaic; 'CP'/'ST' = concentrated solar.
+    const technology = String(r.technology || '');
+    const primeMoverCode = String(r['prime-mover-code'] || r.primeMoverCode || '');
+    const isSolarThermalTech = technology.toLowerCase().includes('thermal');
+    const isPvPrimeMover = primeMoverCode === 'PV' || primeMoverCode === '';
+    const isPvGenerator = !isSolarThermalTech && isPvPrimeMover;
     const pvCap = isPvGenerator ? cap : 0;
 
     const existing = plantMap.get(code);
