@@ -17,7 +17,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { GeoJSON, MapContainer, TileLayer, Tooltip as LeafletTooltip } from 'react-leaflet';
+import { GeoJSON, MapContainer, TileLayer } from 'react-leaflet';
 import type { Feature, FeatureCollection } from 'geojson';
 import type { Layer, PathOptions } from 'leaflet';
 import {
@@ -27,6 +27,8 @@ import {
   Cell,
   Line,
   LineChart,
+  Area,
+  AreaChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip as RechartsTooltip,
@@ -470,6 +472,31 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
     return result;
   }, [analysis, annualCfRows]);
 
+  // 5-year cap-weighted annual CF for selected region / sub-region scope.
+  const annualCfChartData = useMemo(() => {
+    if (!analysis || annualCfRows.length === 0) return [];
+    const plantMeta = new Map<string, { region: string; subRegion: string; mw: number; fuel: string }>();
+    for (const a of analysis.analyses) {
+      plantMeta.set(a.plantId, { region: a.region, subRegion: a.subRegion, mw: a.nameplateMw, fuel: String(a.fuelSource) });
+    }
+    const techSet = new Set(techArr.map(String));
+    const byYear = new Map<number, { mwSum: number; cfMwSum: number }>();
+    for (const r of annualCfRows) {
+      const meta = plantMeta.get(r.plant_id);
+      if (!meta || meta.region !== selectedRegion) continue;
+      if (selectedSubRegion && meta.subRegion !== selectedSubRegion) continue;
+      if (!techSet.has(meta.fuel)) continue;
+      const prev = byYear.get(r.year) ?? { mwSum: 0, cfMwSum: 0 };
+      byYear.set(r.year, { mwSum: prev.mwSum + meta.mw, cfMwSum: prev.cfMwSum + r.year_cf * meta.mw });
+    }
+    return Array.from(byYear.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([year, { mwSum, cfMwSum }]) => ({
+        year: String(year),
+        cf: mwSum > 0 ? Math.round((cfMwSum / mwSum) * 1000) / 10 : null,
+      }));
+  }, [analysis, annualCfRows, selectedRegion, selectedSubRegion, techArr]);
+
   // Filter entity lists to those with actual exposed MW when tier != all.
   const filterByTier = (rows: EntityExposure[], tier: TierFilter): EntityExposure[] => {
     if (tier === 'all') return rows.filter(r => r.exposedMw > 0 || tier === 'all');
@@ -533,6 +560,30 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   };
 
   const onEachFeature = (feature: Feature, layer: Layer): void => {
+    const props = feature.properties as Record<string, string> | undefined;
+    if (props && props.region === selectedRegion) {
+      const s = analysis?.subregionStatsMap.get(`${selectedRegion}|${props.subRegion}`);
+      const ttmStr = s?.ttmCf != null ? fmtPct(s.ttmCf) : '—';
+      const yoyPts = s?.signalComponents.selfTrendPts;
+      const yoyStr = yoyPts != null
+        ? `${yoyPts >= 0 ? '+' : ''}${(yoyPts * 100).toFixed(1)} pt`
+        : '—';
+      const yoyColor = yoyPts != null && yoyPts > 0 ? '#f87171' : '#34d399';
+      const mwStr = s?.totalMw != null ? fmtMw(s.totalMw) : '—';
+      const html = [
+        `<div style="font-size:11px;line-height:1.6;min-width:170px;font-family:sans-serif">`,
+        `<div style="font-weight:700;font-size:12px;margin-bottom:4px;border-bottom:1px solid #334155;padding-bottom:3px">${props.subRegion}</div>`,
+        `<div>TTM CF: <b style="color:#e2e8f0">${ttmStr}</b></div>`,
+        `<div>YoY: <b style="color:${yoyColor}">${yoyStr}</b></div>`,
+        `<div style="color:#94a3b8">${s?.plantCount ?? 0} plants · ${mwStr}</div>`,
+        s?.struggleScore != null
+          ? `<div style="font-size:10px;margin-top:3px;color:#64748b">Struggle score: ${s.struggleScore} / 100</div>`
+          : '',
+        `<div style="font-size:10px;color:#475569;margin-top:3px">Click to drill down ↓</div>`,
+        `</div>`,
+      ].join('');
+      layer.bindTooltip(html, { sticky: true, opacity: 0.95 });
+    }
     layer.on({
       click: () => {
         const props = feature.properties as Record<string, string> | undefined;
@@ -766,16 +817,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
                   filter={geojsonFilter}
                   style={styleFeature as (feature?: Feature) => PathOptions}
                   onEachFeature={onEachFeature}
-                >
-                  <LeafletTooltip sticky opacity={0.95}>
-                    <SubregionTooltip
-                      subregionStatsMap={analysis?.subregionStatsMap}
-                      selectedRegion={selectedRegion}
-                      regionTtmCf={regionTtmCf}
-                      nationalTtmCf={nationalTtmCf}
-                    />
-                  </LeafletTooltip>
-                </GeoJSON>
+                />
               )}
             </MapContainer>
           </div>
@@ -789,11 +831,21 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
               <p className="text-[11px] text-slate-500">Cap-weighted CF change vs same period prior year (pts). National cohort reference line.</p>
             </div>
           </div>
-          <div className="h-64">
+          <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={benchmarkChart} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+              <BarChart data={benchmarkChart} margin={{ top: 5, right: 16, left: 0, bottom: 52 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                <XAxis dataKey="name" stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={false} interval={0} />
+                <XAxis
+                  dataKey="name"
+                  stroke="#94a3b8"
+                  fontSize={10}
+                  tickLine={false}
+                  axisLine={false}
+                  interval={0}
+                  angle={-38}
+                  textAnchor="end"
+                  height={60}
+                />
                 <YAxis
                   stroke="#94a3b8"
                   fontSize={10}
@@ -818,7 +870,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
                   />
                 )}
                 <ReferenceLine y={0} stroke="#475569" strokeWidth={1} />
-                <Bar dataKey="yoyDecline" radius={[4, 4, 0, 0]} barSize={36}>
+                <Bar dataKey="yoyDecline" radius={[4, 4, 0, 0]} maxBarSize={36}>
                   {benchmarkChart.map((d, i) => (
                     <Cell
                       key={i}
@@ -845,7 +897,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
                   return (
                     <div key={s.subRegion} className="flex items-center gap-2 text-[11px]">
                       <span
-                        className="w-32 truncate text-slate-400 cursor-pointer hover:text-slate-200"
+                        className="w-40 truncate text-slate-400 cursor-pointer hover:text-slate-200"
                         onClick={() => setSelectedSubRegion(prev => prev === s.subRegion ? null : s.subRegion)}
                       >
                         {s.subRegion}
@@ -875,6 +927,115 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      {/* ── 5-year annual CF trend ────────────────────────────────────────── */}
+      {annualCfChartData.length >= 3 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="flex items-start justify-between mb-3">
+            <div>
+              <h2 className="text-sm font-bold text-white">
+                5-year annual capacity factor
+                {selectedSubRegion ? (
+                  <span className="text-blue-400 ml-1.5">{selectedSubRegion}</span>
+                ) : (
+                  <span className="text-slate-400 ml-1.5">{selectedRegion} — all zones</span>
+                )}
+              </h2>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Cap-weighted avg annual CF · {techFilter === 'Both' ? 'Wind + Solar' : techFilter} · min 10 reported months/yr · calendar years 2021–2025
+              </p>
+            </div>
+            {(() => {
+              const persKey = selectedSubRegion ? `${selectedRegion}|${selectedSubRegion}` : null;
+              const pers = persKey ? subregionPersistenceMap.get(persKey) : null;
+              if (!pers) return null;
+              return (
+                <div className="text-right text-[11px]">
+                  {pers.hasBadge ? (
+                    <span className="px-2 py-1 bg-rose-900/50 text-rose-300 rounded-full font-semibold">
+                      ↓ Persistent decline · {pers.persistentDeclinePlants}/{pers.eligiblePlants} plants
+                    </span>
+                  ) : (
+                    <span className="text-slate-600">
+                      {pers.eligiblePlants} plant{pers.eligiblePlants !== 1 ? 's' : ''} w/ 5yr history
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+          <div className="h-44">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={annualCfChartData} margin={{ top: 4, right: 16, bottom: 0, left: -8 }}>
+                <defs>
+                  <linearGradient id="cfGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.18} />
+                    <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                <XAxis
+                  dataKey="year"
+                  stroke="#475569"
+                  fontSize={11}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis
+                  stroke="#475569"
+                  fontSize={11}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: number) => `${v}%`}
+                  domain={['auto', 'auto']}
+                  width={36}
+                />
+                <RechartsTooltip
+                  contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px', fontSize: '12px' }}
+                  formatter={(v: number | null) => [
+                    v != null ? `${v.toFixed(1)}%` : '—',
+                    `${techFilter === 'Both' ? 'Wind + Solar' : techFilter} avg CF`,
+                  ]}
+                  labelFormatter={(label: string) => `${label}`}
+                />
+                {annualCfChartData.length > 0 && annualCfChartData[0].cf != null && (
+                  <ReferenceLine
+                    y={annualCfChartData[0].cf}
+                    stroke="#334155"
+                    strokeDasharray="4 4"
+                    label={{ position: 'right', value: `${annualCfChartData[0].year} baseline`, fill: '#475569', fontSize: 9 }}
+                  />
+                )}
+                <Area
+                  type="monotone"
+                  dataKey="cf"
+                  stroke="#38bdf8"
+                  strokeWidth={2}
+                  fill="url(#cfGradient)"
+                  dot={{ fill: '#38bdf8', r: 4, strokeWidth: 0 }}
+                  activeDot={{ r: 6, fill: '#7dd3fc' }}
+                  isAnimationActive={false}
+                  connectNulls={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          {annualCfChartData.length > 0 && (() => {
+            const first = annualCfChartData.find(d => d.cf != null)?.cf;
+            const last = [...annualCfChartData].reverse().find(d => d.cf != null)?.cf;
+            if (first == null || last == null || first === last) return null;
+            const delta = last - first;
+            return (
+              <p className={`text-[11px] mt-2 ${delta < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {delta < 0 ? '▼' : '▲'} {Math.abs(delta).toFixed(1)} pp change from {annualCfChartData[0].year} to {annualCfChartData[annualCfChartData.length - 1].year}
+                {delta < -2 && (
+                  <span className="text-slate-500 ml-2">— multi-year deterioration visible in generation data</span>
+                )}
+              </p>
+            );
+          })()}
+        </div>
+      )}
 
       {/* ── Regional Pursuit Targets — concentration tables ──────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
