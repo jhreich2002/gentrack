@@ -7,6 +7,7 @@
 DROP FUNCTION IF EXISTS get_regional_trend(text, text);
 DROP FUNCTION IF EXISTS get_subregional_trend(text, text, text);
 DROP FUNCTION IF EXISTS get_plant_cf_windows();
+DROP FUNCTION IF EXISTS get_plant_annual_cf();
 
 
 -- ------------------------------------------------------------
@@ -242,3 +243,80 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION get_subregion_monthly_cf(text, text) TO anon, authenticated;
+
+
+-- ------------------------------------------------------------
+-- get_plant_annual_cf()
+-- Phase: 5-year persistence signals.
+-- Returns per-plant, per-calendar-year capacity factor and
+-- reported-month count for the last 5 complete calendar years
+-- (Wind + Solar only; Solar Thermal/CSP excluded).
+--
+-- Definition:
+--   year_cf   = SUM(mwh) / SUM(nameplate_mw * days_in_month * 24)
+--               across all non-NULL reported months in that year.
+--   month_count = non-NULL months with mwh IS NOT NULL in the year.
+--
+-- Only calendar years with month_count >= 10 are returned
+-- (prevents partial-year bias for oldest and current years).
+--
+-- Used by regionalAnalysisService to compute:
+--   downYears   = consecutive YoY declines ≥ 1 pp ending most recent year
+--   slope_pct   = OLS slope in pp/year across ≥4 qualifying annual points
+--   persistentDecline = downYears >= 3
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION get_plant_annual_cf()
+RETURNS TABLE(
+  plant_id     text,
+  year         int,
+  year_cf      float8,
+  month_count  int
+)
+LANGUAGE sql
+STABLE
+AS $$
+  WITH year_bounds AS (
+    -- 5 most recent complete calendar years (exclude current partial year)
+    SELECT generate_series(
+      EXTRACT(YEAR FROM CURRENT_DATE)::int - 5,
+      EXTRACT(YEAR FROM CURRENT_DATE)::int - 1
+    ) AS yr
+  ),
+  plant_month AS (
+    SELECT
+      mg.plant_id,
+      EXTRACT(YEAR FROM TO_DATE(mg.month, 'YYYY-MM'))::int AS yr,
+      CASE
+        WHEN mg.mwh IS NULL OR p.nameplate_capacity_mw = 0 THEN NULL
+        ELSE mg.mwh
+      END AS mwh_val,
+      CASE
+        WHEN mg.mwh IS NULL OR p.nameplate_capacity_mw = 0 THEN NULL
+        ELSE p.nameplate_capacity_mw * (
+          EXTRACT(DAY FROM (
+            DATE_TRUNC('month', TO_DATE(mg.month, 'YYYY-MM')) + INTERVAL '1 month'
+            - DATE_TRUNC('month', TO_DATE(mg.month, 'YYYY-MM'))
+          )) * 24
+        )
+      END AS capacity_hours
+    FROM monthly_generation mg
+    JOIN plants p ON p.id = mg.plant_id
+    WHERE p.fuel_source IN ('Wind', 'Solar')
+      AND EXTRACT(YEAR FROM TO_DATE(mg.month, 'YYYY-MM'))::int
+          BETWEEN (SELECT MIN(yr) FROM year_bounds)
+              AND (SELECT MAX(yr) FROM year_bounds)
+  )
+  SELECT
+    pm.plant_id,
+    pm.yr                                       AS year,
+    SUM(pm.mwh_val) / NULLIF(SUM(pm.capacity_hours), 0) AS year_cf,
+    COUNT(*) FILTER (WHERE pm.mwh_val IS NOT NULL)::int  AS month_count
+  FROM plant_month pm
+  JOIN year_bounds yb ON yb.yr = pm.yr
+  GROUP BY pm.plant_id, pm.yr
+  HAVING COUNT(*) FILTER (WHERE pm.mwh_val IS NOT NULL) >= 10
+  ORDER BY pm.plant_id, pm.yr;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_plant_annual_cf() TO anon, authenticated;
+

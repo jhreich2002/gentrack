@@ -17,7 +17,8 @@ export enum Region {
 export enum FuelSource {
   Wind = 'Wind',
   Solar = 'Solar',
-  Nuclear = 'Nuclear'
+  Nuclear = 'Nuclear',
+  CSP = 'Solar Thermal',
 }
 
 export interface MonthlyGeneration {

@@ -217,7 +217,7 @@ function singleStateSpecs(): SubregionFeatureSpec[] {
     ],
   });
   specs.push({
-    region: 'ERCOT', subRegion: 'Coast', states: ['TX'],
+    region: 'ERCOT', subRegion: 'Houston', states: ['TX'],
     clip: [
       { axis: 'x', op: '>', value: ERCOT_CUTLINES.westLng },
       { axis: 'y', op: '<', value: ERCOT_CUTLINES.coastLat },
@@ -234,18 +234,18 @@ function singleStateSpecs(): SubregionFeatureSpec[] {
 
   // NYISO (NY)
   specs.push({
-    region: 'NYISO', subRegion: 'Upstate', states: ['NY'],
+    region: 'NYISO', subRegion: 'West/Upstate', states: ['NY'],
     clip: [{ axis: 'y', op: '>', value: NYISO_CUTLINES.upstateLat }],
   });
   specs.push({
-    region: 'NYISO', subRegion: 'Hudson Valley', states: ['NY'],
+    region: 'NYISO', subRegion: 'Capital-Hudson', states: ['NY'],
     clip: [
       { axis: 'y', op: '<', value: NYISO_CUTLINES.upstateLat },
       { axis: 'y', op: '>', value: NYISO_CUTLINES.hudsonLat },
     ],
   });
   specs.push({
-    region: 'NYISO', subRegion: 'NYC/Long Island', states: ['NY'],
+    region: 'NYISO', subRegion: 'NYC/LI', states: ['NY'],
     clip: [{ axis: 'y', op: '<', value: NYISO_CUTLINES.hudsonLat }],
   });
 

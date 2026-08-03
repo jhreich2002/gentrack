@@ -48,7 +48,7 @@ const SUPABASE_KEY  =
   '';
 
 // Dynamic data window configuration
-const EIA923_TRAILING_MONTHS = 24;
+const EIA923_TRAILING_MONTHS = 60;
 const FALLBACK_EIA923_END_MONTH = '2025-12';
 const FALLBACK_EIA860_SURVEY_MONTH = '2024-12';
 const MIN_EXPECTED_EIA923_MONTH = '2025-12';
@@ -88,6 +88,9 @@ interface PowerPlant {
   isMaintenanceOffline?: boolean;
   trailingZeroMonths?: number;
   dataMonthsCount?: number;
+  historyUnreliable?: boolean; // True when early generation history shows a step-change
+                               // (nameplate expansion) — flagged plants excluded from
+                               // multi-year persistence analysis.
 }
 
 interface DataManifest {
@@ -278,6 +281,8 @@ interface PlantCharacteristics {
   lng: number;
   owner: string | undefined;   // entity-name from EIA-860
   operatorId: string | undefined; // entityid from EIA-860
+  isCsp: boolean;              // True when all SUN generators have non-PV prime mover (ST/CP)
+  _pvCapacityMW: number;       // Internal: PV-prime-mover capacity, used for isCsp determination
 }
 
 /**
@@ -304,6 +309,7 @@ async function fetchEIA860Characteristics(
     url.searchParams.append('data[]', 'county');
     url.searchParams.append('data[]', 'latitude');
     url.searchParams.append('data[]', 'longitude');
+    url.searchParams.append('data[]', 'prime_mover');
     // entityid is a dimension field returned automatically — do not add to data[]
     // Facets — use append with [] notation for multi-value arrays
     url.searchParams.append('facets[status][]', 'OP');
@@ -356,18 +362,36 @@ async function fetchEIA860Characteristics(
     const owner = r.entityName || r['entity-name'] || undefined;
     const operatorId = r.entityid ? String(r.entityid) : undefined;
 
+    // Track PV vs non-PV prime mover capacity per plant (for CSP detection).
+    // EIA-860 prime_mover 'PV' = photovoltaic; 'ST'/'CP' = concentrated solar.
+    const primeMover = String(r.prime_mover || r['prime_mover'] || '');
+    const isPvGenerator = primeMover === 'PV' || primeMover === '';
+    const pvCap = isPvGenerator ? cap : 0;
+
     const existing = plantMap.get(code);
     if (!existing) {
-      plantMap.set(code, { nameplateCapacityMW: cap, cod, county, lat, lng, owner, operatorId });
+      plantMap.set(code, {
+        nameplateCapacityMW: cap, cod, county, lat, lng, owner, operatorId,
+        isCsp: false,
+        _pvCapacityMW: pvCap,
+      });
     } else {
       // Sum generator capacities; keep earliest COD; keep first non-empty county/owner
       existing.nameplateCapacityMW += cap;
+      existing._pvCapacityMW += pvCap;
       if (cod && (!existing.cod || cod < existing.cod)) existing.cod = cod;
       if (!existing.county && county) existing.county = county;
       if (!existing.lat && lat) { existing.lat = lat; existing.lng = lng; }
       if (!existing.owner && owner) existing.owner = owner;
       if (!existing.operatorId && operatorId) existing.operatorId = operatorId;
     }
+  }
+
+  // Finalize isCsp: a SUN plant is CSP when it has no PV-prime-mover capacity.
+  // (Non-SUN plants — WND, NUC — will have _pvCapacityMW=0 and isCsp=true by this
+  //  naive rule, so only apply it when fuelSource='Solar' is later confirmed.)
+  for (const ch of plantMap.values()) {
+    ch.isCsp = ch._pvCapacityMW === 0 && ch.nameplateCapacityMW > 0;
   }
 
   console.log(`  ✓ EIA-860 aggregated to ${plantMap.size} unique plants`);
@@ -564,6 +588,10 @@ async function main() {
       if (ch) {
         // Replace estimated capacity with actual EIA-860 nameplate
         plant.nameplateCapacityMW = Math.round(ch.nameplateCapacityMW * 10) / 10;
+        // Reclassify Solar plants with non-PV prime movers as CSP (Solar Thermal)
+        if (plant.fuelSource === 'Solar' && ch.isCsp) {
+          plant.fuelSource = 'Solar Thermal';
+        }
         // Add EIA-860 fields
         if (ch.cod) plant.cod = ch.cod;
         if (ch.county) plant.county = ch.county;
@@ -585,8 +613,8 @@ async function main() {
 
   // Re-assign subRegion now that lat/lng are populated from EIA-860.
   // The initial assignment in processRecords lacked coordinates; this corrects
-  // single-state ISO zones (CAISO NP15/SP15/ZP26, ERCOT West/North/South/Coast,
-  // NYISO Upstate/Hudson Valley/NYC) using actual plant coordinates.
+  // single-state ISO zones (CAISO NP15/SP15/ZP26, ERCOT West/North/South/Houston,
+  // NYISO West/Upstate / Capital-Hudson / NYC-LI) using actual plant coordinates.
   for (const plant of dedupedPlants) {
     plant.subRegion = getSubRegion(
       plant.location.state,
@@ -762,6 +790,44 @@ async function main() {
   }
   console.log(`  ✓ Scored ${finalPlants.length} plants`);
 
+  // ─── Detect expansion step-changes (historyUnreliable) ───────────
+  // A plant whose early generation is <<40% of its recent max is likely to have
+  // expanded its nameplate since COD — early-history CFs will be misleadingly
+  // high because the static nameplate_capacity_mw denominator now includes the
+  // expansion. Flag those plants so the multi-year persistence analysis can
+  // exclude them. Requires ≥30 months in the oldest window.
+  {
+    const EXPANSION_THRESHOLD = 0.40;
+    const MIN_EARLY_MONTHS = 12;
+    let flaggedCount = 0;
+    for (const p of finalPlants) {
+      if (p.fuelSource !== 'Solar' && p.fuelSource !== 'Wind' && p.fuelSource !== 'Solar Thermal') {
+        p.historyUnreliable = false;
+        continue;
+      }
+      const hist = p.generationHistory.filter(h => h.mwh !== null) as { month: string; mwh: number }[];
+      if (hist.length < MIN_EARLY_MONTHS + 12) {
+        p.historyUnreliable = false;
+        continue;
+      }
+      // Split into early (oldest 24 months) and recent (newest 12 months)
+      const earlyWindow = hist.slice(0, 24);
+      const recentWindow = hist.slice(-12);
+      if (earlyWindow.length < MIN_EARLY_MONTHS) { p.historyUnreliable = false; continue; }
+      const earlyMax = Math.max(...earlyWindow.map(h => h.mwh));
+      const recentMax = Math.max(...recentWindow.map(h => h.mwh));
+      if (recentMax > 0 && earlyMax < recentMax * EXPANSION_THRESHOLD) {
+        p.historyUnreliable = true;
+        flaggedCount++;
+      } else {
+        p.historyUnreliable = false;
+      }
+    }
+    if (flaggedCount > 0) {
+      console.log(`  ✓ Flagged ${flaggedCount} plants as historyUnreliable (expansion step-change detected)`);
+    }
+  }
+
   // ─── Write output ────────────────────────────────────────────────
   console.log('\n▶ Writing output...');
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -824,6 +890,7 @@ async function main() {
       is_maintenance_offline: p.isMaintenanceOffline ?? false,
       trailing_zero_months:  p.trailingZeroMonths   ?? 0,
       data_months_count:     p.dataMonthsCount      ?? 0,
+      history_unreliable:    p.historyUnreliable     ?? false,
       last_updated: now,
     }));
 

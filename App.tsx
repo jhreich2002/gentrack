@@ -1070,7 +1070,7 @@ const App: React.FC = () => {
             : view === 'owner-analysis'
             ? <OwnerAnalysisView onBack={() => setView('dashboard')} onCompanyClick={handleCompanyClick} onPlantClick={handlePlantClickFromCompany} />
             : view === 'regional-analysis'
-            ? <RegionalAnalysisDashboard plants={plants} statsMap={statsMap} onPlantClick={handlePlantClickFromRegional} onOwnerClick={handleCompanyClick} onLenderClick={handleLenderClick} />
+            ? <RegionalAnalysisDashboard plants={plants} statsMap={statsMap} onPlantClick={handlePlantClickFromRegional} onOwnerClick={handleCompanyClick} onLenderClick={handleLenderClick} userRole={userRole} />
             : selectedPlant && <PlantDetailView plant={selectedPlant} stats={statsMap[selectedPlant.id]} regionalAvg={regionalAvgFactor} subRegionalAvg={subRegionalAvgFactor} regionalTrend={regionalTrend} subRegionalTrend={subRegionalTrend} generationLoading={generationLoading} isWatched={watchlist.some(w => w.entity_type === 'plant' && w.entity_id === selectedPlant.id)} onToggleWatch={(e) => toggleWatch(e, 'plant', selectedPlant.id)} onBack={() => { if (cameFromLender) { setView('lender-research'); setCameFromLender(false); } else if (cameFromDeveloper && selectedDeveloper) { setView('developer-detail'); setCameFromDeveloper(false); } else if (cameFromPursuits) { setView('pursuits'); setCameFromPursuits(false); } else if (cameFromEntity) { setView('entity'); setCameFromEntity(false); } else if (cameFromCompany && selectedUltParent) { setView('company'); setCameFromCompany(false); } else if (cameFromRegional) { setView('regional-analysis'); setCameFromRegional(false); } else { setView('dashboard'); } }} onCompanyClick={handleCompanyClick} />
         )}
       </main>

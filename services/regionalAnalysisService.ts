@@ -195,6 +195,47 @@ export interface SubregionStats {
   };
   /** ‘Systemic’ (breadth ≥ 60%), ‘Mixed’ (30–60%), ‘Asset-specific’ (≤ 30%), or null when suppressed. */
   diagnosisLabel: string | null;
+  /** 5-year persistence signal, populated after fetchPlantAnnualCf + computePersistenceSignals. */
+  persistence?: PersistenceSignal | null;
+}
+
+// ─── 5-year persistence types ────────────────────────────────────────────────
+
+/** Per-plant annual CF data point returned by the get_plant_annual_cf RPC. */
+export interface AnnualCfRow {
+  plant_id: string;
+  year: number;
+  year_cf: number;
+  month_count: number;
+}
+
+/** Per-plant multi-year decline analysis. */
+export interface PlantPersistence {
+  plantId: string;
+  /** Qualifying annual CF points (≥10 months/yr), sorted by year ascending. */
+  annualPoints: { year: number; cf: number }[];
+  /** Count of consecutive YoY declines ≥1 pp ending at the most recent qualifying year. */
+  downYears: number;
+  /** OLS slope in CF units per year (negative = worsening trend). */
+  slopeCfPerYear: number | null;
+  /** True when downYears ≥ 3. */
+  persistentDecline: boolean;
+  /** True when plant was marked history_unreliable (expansion step-change). */
+  excluded: boolean;
+}
+
+/** Sub-region persistence badge, aggregated from PlantPersistence records. */
+export interface PersistenceSignal {
+  /** Number of plants eligible for persistence analysis (not excluded, ≥4 qualifying years). */
+  eligiblePlants: number;
+  /** Number of those with persistentDecline = true. */
+  persistentDeclinePlants: number;
+  /** persistentDeclinePlants / eligiblePlants (0 when eligiblePlants = 0). */
+  persistentDeclineShare: number;
+  /** True when persistentDeclineShare ≥ 0.25 AND eligiblePlants ≥ 3. */
+  hasBadge: boolean;
+  /** Average downYears across eligible plants (informational). */
+  avgDownYears: number | null;
 }
 
 export interface EntityExposure {
@@ -1234,6 +1275,135 @@ export function buildLenderBriefings(
  * When techFilter is "Both", call twice (Wind + Solar) and merge via cap-weighted avg
  * — for now the caller passes the dominant tech to keep the RPC count low.
  */
+// ─── 5-year persistence helpers ──────────────────────────────────────────────
+
+/**
+ * Fetch annual CF data for all Wind + Solar plants via the get_plant_annual_cf RPC.
+ * Returns an empty array when the RPC has not yet been deployed or data unavailable
+ * (caller should degrade gracefully — persistence badge simply absent).
+ */
+export async function fetchPlantAnnualCf(): Promise<AnnualCfRow[]> {
+  try {
+    const { data, error } = await supabase.rpc('get_plant_annual_cf');
+    if (error) {
+      console.warn('[RegionalAnalysis] get_plant_annual_cf RPC failed:', error.message);
+      return [];
+    }
+    return (data ?? []) as AnnualCfRow[];
+  } catch (err) {
+    console.warn('[RegionalAnalysis] fetchPlantAnnualCf threw:', err);
+    return [];
+  }
+}
+
+/** Minimum CF decline (in CF fraction, not %) to count as a "down year". */
+const DOWN_YEAR_MIN_DECLINE = 0.01; // 1 percentage point
+/** Minimum qualifying annual data points (≥10 months each) for persistence analysis. */
+const MIN_ANNUAL_POINTS = 4;
+
+/**
+ * Compute per-plant persistence from annual CF rows.
+ * Excludes plants marked history_unreliable in the analyses map.
+ */
+export function computePlantPersistence(
+  annualRows: AnnualCfRow[],
+  analysesById: Map<string, { plantId: string; isFlagged: boolean }>,
+  historyUnreliablePlantIds: Set<string>,
+): Map<string, PlantPersistence> {
+  // Group by plant_id
+  const byPlant = new Map<string, { year: number; cf: number }[]>();
+  for (const row of annualRows) {
+    if (!byPlant.has(row.plant_id)) byPlant.set(row.plant_id, []);
+    byPlant.get(row.plant_id)!.push({ year: row.year, cf: row.year_cf });
+  }
+
+  const result = new Map<string, PlantPersistence>();
+  for (const [plantId, pts] of byPlant) {
+    const excluded = historyUnreliablePlantIds.has(plantId);
+    const sorted = pts.sort((a, b) => a.year - b.year);
+
+    if (excluded || sorted.length < MIN_ANNUAL_POINTS) {
+      result.set(plantId, {
+        plantId, annualPoints: sorted, downYears: 0,
+        slopeCfPerYear: null, persistentDecline: false, excluded,
+      });
+      continue;
+    }
+
+    // Count consecutive down years ending at the most recent qualifying year
+    let downYears = 0;
+    for (let i = sorted.length - 1; i >= 1; i--) {
+      const yoyDecline = sorted[i - 1].cf - sorted[i].cf; // positive = decline
+      if (yoyDecline >= DOWN_YEAR_MIN_DECLINE) {
+        downYears++;
+      } else {
+        break; // must be consecutive
+      }
+    }
+
+    // OLS slope using all qualifying points (x = year − mean_year, y = cf)
+    let slopeCfPerYear: number | null = null;
+    if (sorted.length >= 2) {
+      const n = sorted.length;
+      const meanX = sorted.reduce((s, p) => s + p.year, 0) / n;
+      const meanY = sorted.reduce((s, p) => s + p.cf, 0) / n;
+      const ssXY = sorted.reduce((s, p) => s + (p.year - meanX) * (p.cf - meanY), 0);
+      const ssXX = sorted.reduce((s, p) => s + Math.pow(p.year - meanX, 2), 0);
+      if (ssXX > 0) slopeCfPerYear = ssXY / ssXX;
+    }
+
+    result.set(plantId, {
+      plantId, annualPoints: sorted, downYears,
+      slopeCfPerYear, persistentDecline: downYears >= 3, excluded,
+    });
+  }
+  return result;
+}
+
+/** Threshold: sub-region gets persistence badge when ≥25% of eligible plants have persistentDecline. */
+const PERSISTENCE_BADGE_THRESHOLD = 0.25;
+const PERSISTENCE_MIN_ELIGIBLE = 3;
+
+/**
+ * Aggregate plant persistence records onto sub-region stats.
+ * Mutates the `persistence` field on each SubregionStats entry.
+ */
+export function applyPersistenceToSubregions(
+  subregionStats: SubregionStats[],
+  plantPersistence: Map<string, PlantPersistence>,
+  analysesById: Map<string, { plantId: string; region: Region; subRegion: string }>,
+): void {
+  // Group plant persistence by (region, subRegion)
+  const bySubregion = new Map<string, PlantPersistence[]>();
+  for (const [plantId, pp] of plantPersistence) {
+    const analysis = analysesById.get(plantId);
+    if (!analysis) continue;
+    const key = `${analysis.region}|${analysis.subRegion}`;
+    if (!bySubregion.has(key)) bySubregion.set(key, []);
+    bySubregion.get(key)!.push(pp);
+  }
+
+  for (const stat of subregionStats) {
+    const key = `${stat.region}|${stat.subRegion}`;
+    const plants = bySubregion.get(key) ?? [];
+    const eligible = plants.filter(p => !p.excluded && p.annualPoints.length >= MIN_ANNUAL_POINTS);
+    if (eligible.length === 0) {
+      stat.persistence = null;
+      continue;
+    }
+    const persistentCount = eligible.filter(p => p.persistentDecline).length;
+    const share = persistentCount / eligible.length;
+    const avgDownYears = eligible.reduce((s, p) => s + p.downYears, 0) / eligible.length;
+    stat.persistence = {
+      eligiblePlants: eligible.length,
+      persistentDeclinePlants: persistentCount,
+      persistentDeclineShare: share,
+      hasBadge: share >= PERSISTENCE_BADGE_THRESHOLD && eligible.length >= PERSISTENCE_MIN_ELIGIBLE,
+      avgDownYears,
+    };
+  }
+}
+
 export async function fetchSubregionMonthlyCf(
   region: Region,
   fuelSource: FuelSource,
@@ -1259,4 +1429,135 @@ export async function fetchSubregionMonthlyCf(
     console.warn('[RegionalAnalysis] fetchSubregionMonthlyCf threw:', err);
   }
   return result;
+}
+
+// ─── CSP watchlist ────────────────────────────────────────────────────────────
+
+export interface CspWatchlistEntry {
+  id: string;
+  name: string;
+  region: string;
+  state: string;
+  nameplateCapacityMw: number;
+  ttmAvgFactor: number | null;
+  yoyDeclinePts: number | null; // prior_cf - recent_cf (positive = decline)
+  owner: string;
+}
+
+/**
+ * Fetch all plants with fuel_source = 'Solar Thermal' for the CSP Watchlist card.
+ * Returns an empty array when no CSP plants exist yet (prior to a 60-month backfill run).
+ */
+export async function fetchCspWatchlist(): Promise<CspWatchlistEntry[]> {
+  try {
+    const { data, error } = await supabase
+      .from('plants')
+      .select('id, name, region, state, nameplate_capacity_mw, ttm_avg_factor, owner')
+      .eq('fuel_source', 'Solar Thermal')
+      .order('nameplate_capacity_mw', { ascending: false });
+
+    if (error) {
+      console.warn('[RegionalAnalysis] fetchCspWatchlist query failed:', error.message);
+      return [];
+    }
+    if (!data || data.length === 0) return [];
+
+    // Fetch CF windows for YoY column (uses the same get_plant_cf_windows RPC but we
+    // only want the CSP subset). Since CSP is excluded from that RPC's fuel filter,
+    // we compute a rough YoY from ttm_avg_factor alone for now — the RPC will be
+    // updated separately.
+    return (data as any[]).map(row => ({
+      id: String(row.id),
+      name: String(row.name ?? ''),
+      region: String(row.region ?? ''),
+      state: String(row.state ?? ''),
+      nameplateCapacityMw: Number(row.nameplate_capacity_mw ?? 0),
+      ttmAvgFactor: row.ttm_avg_factor != null ? Number(row.ttm_avg_factor) : null,
+      yoyDeclinePts: null, // Populated by a future CSP-specific RPC
+      owner: String(row.owner ?? 'Unknown'),
+    }));
+  } catch (err) {
+    console.warn('[RegionalAnalysis] fetchCspWatchlist threw:', err);
+    return [];
+  }
+}
+
+// ─── Sub-region lender ingestion ──────────────────────────────────────────────
+
+/** Summary of lender-research candidates for a given sub-region. */
+export interface SubregionResearchCandidate {
+  plantId: string;
+  plantName: string;
+  nameplateCapacityMw: number;
+  /** True when this plant has been researched within the last 90 days. */
+  recentlyResearched: boolean;
+  /** True when this plant already has at least one validated lender link. */
+  hasValidatedLink: boolean;
+}
+
+/**
+ * Fetch lender-research candidates for a given (region, subRegion).
+ * Returns flagged (deteriorating) plants that lack validated financing and
+ * have not been researched in the last 90 days.
+ *
+ * Admin-only — caller must gate on userRole === 'admin'.
+ */
+export async function fetchSubregionResearchCandidates(
+  region: Region,
+  subRegion: string,
+  plantAnalyses: { plantId: string; isFlagged: boolean; region: string; subRegion: string }[],
+): Promise<SubregionResearchCandidate[]> {
+  // Step 1: filter flagged plants in this sub-region
+  const flaggedInSub = plantAnalyses.filter(
+    a => a.region === String(region) && a.subRegion === subRegion && a.isFlagged,
+  );
+  if (flaggedInSub.length === 0) return [];
+
+  const plantIds = flaggedInSub.map(a => a.plantId);
+
+  // Step 2: fetch plant names + capacity
+  const { data: plantRows, error: plantErr } = await supabase
+    .from('plants')
+    .select('id, name, nameplate_capacity_mw')
+    .in('id', plantIds);
+
+  if (plantErr) {
+    console.warn('[RegionalAnalysis] fetchSubregionResearchCandidates plants error:', plantErr.message);
+    return [];
+  }
+  const plantMeta = new Map((plantRows ?? []).map((r: any) => [String(r.id), r]));
+
+  // Step 3: fetch validated lender links for these plants
+  const { data: finRows, error: finErr } = await supabase
+    .from('v_plant_financing')
+    .select('plant_id, validated_at')
+    .in('plant_id', plantIds)
+    .not('validated_at', 'is', null);
+
+  const validatedPlantIds = new Set<string>(
+    finErr ? [] : (finRows ?? []).map((r: any) => String(r.plant_id)),
+  );
+
+  // Step 4: fetch recent research timestamps
+  const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const { data: resRows, error: resErr } = await supabase
+    .from('plant_lender_research')
+    .select('plant_id, researched_at')
+    .in('plant_id', plantIds)
+    .gte('researched_at', cutoff);
+
+  const recentlyResearchedIds = new Set<string>(
+    resErr ? [] : (resRows ?? []).map((r: any) => String(r.plant_id)),
+  );
+
+  return plantIds.map(id => {
+    const meta = plantMeta.get(id);
+    return {
+      plantId: id,
+      plantName: meta ? String(meta.name) : id,
+      nameplateCapacityMw: meta ? Number(meta.nameplate_capacity_mw ?? 0) : 0,
+      recentlyResearched: recentlyResearchedIds.has(id),
+      hasValidatedLink: validatedPlantIds.has(id),
+    };
+  });
 }

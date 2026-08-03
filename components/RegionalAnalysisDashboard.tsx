@@ -33,6 +33,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { triggerPlantResearch } from '../services/lenderResearchService';
 
 import { PowerPlant, Region, FuelSource, CapacityFactorStats } from '../types';
 import {
@@ -60,6 +61,12 @@ import {
   type RegionalAnalysisResult,
   type SubregionStats,
   type TopTarget,
+  fetchCspWatchlist,
+  type CspWatchlistEntry,
+  fetchPlantAnnualCf,
+  type AnnualCfRow,
+  computePlantPersistence,
+  fetchSubregionResearchCandidates,
 } from '../services/regionalAnalysisService';
 
 // ─── Props ───────────────────────────────────────────────────────────────────
@@ -69,6 +76,7 @@ interface Props {
   onPlantClick: (plantId: string) => void;
   onOwnerClick: (ultParentName: string) => void;
   onLenderClick: (lenderName: string) => void;
+  userRole?: string | null;
 }
 
 // ─── UI-local types ──────────────────────────────────────────────────────────
@@ -91,6 +99,17 @@ const REGION_CENTERS: Record<Region, [number, number]> = {
   [Region.Southeast]: [32.5, -85.0],
   [Region.Hawaii]: [20.5, -157.5],
   [Region.Alaska]: [62.0, -150.0],
+};
+
+/** One-line description of the zone-split basis, shown as a tooltip on the map header. */
+const REGION_ZONE_BASIS: Partial<Record<Region, string>> = {
+  [Region.CAISO]: 'CAISO price zones (NP15 / ZP26 / SP15) — basis for day-ahead LMP settlement.',
+  [Region.ERCOT]: 'ERCOT load zones (North / South / Houston / West) — nodal price aggregation areas.',
+  [Region.PJM]: 'PJM super-zones: Mid-Atlantic (PA/NJ/MD/DE/DC), Western (OH/WV), Dominion (VA).',
+  [Region.MISO]: 'MISO LRZ groups: North (MN/ND/SD), East (WI/MI), Central (IL/IN/IA), South (MO).',
+  [Region.NYISO]: 'NYISO load zones: West/Upstate (A–E), Capital-Hudson (F–I), NYC/LI (J–K).',
+  [Region.ISONE]: 'ISO-NE state groups: Northern NE (ME/NH/VT), Southern NE (CT/RI), Massachusetts.',
+  [Region.SPP]: 'SPP geography: North (KS/NE), Central (OK), South (AR/TX/NM).',
 };
 
 const REGION_ZOOM: Partial<Record<Region, number>> = {
@@ -168,7 +187,9 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   onPlantClick,
   onOwnerClick,
   onLenderClick,
+  userRole,
 }) => {
+  const isAdmin = userRole === 'admin';
   // ── UI state ──────────────────────────────────────────────────────────────
   const [selectedRegion, setSelectedRegion] = useState<Region>(Region.ERCOT);
   const [techFilter, setTechFilter] = useState<TechFilter>('Both');
@@ -176,6 +197,11 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   const [mapMetric, setMapMetric] = useState<MapMetric>('struggle');
   const [ownerTierFilter, setOwnerTierFilter] = useState<TierFilter>('all');
   const [lenderTierFilter, setLenderTierFilter] = useState<TierFilter>('all');
+  // Lender ingestion state (admin only)
+  const [ingestionSubRegion, setIngestionSubRegion] = useState<string | null>(null);
+  const [ingestionCandidates, setIngestionCandidates] = useState<import('../services/regionalAnalysisService').SubregionResearchCandidate[] | null>(null);
+  const [ingestionProgress, setIngestionProgress] = useState<{ done: number; total: number; errors: number } | null>(null);
+  const [ingestionRunning, setIngestionRunning] = useState(false);
   const [showInternalDetail, setShowInternalDetail] = useState(false);
 
   // ── Async data ────────────────────────────────────────────────────────────
@@ -185,8 +211,18 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   const [lenderStakes, setLenderStakes] = useState<LenderStake[] | null>(null);
   const [geojson, setGeojson] = useState<FeatureCollection | null>(null);
   const [geojsonError, setGeojsonError] = useState<string | null>(null);
-  // Subregion monthly CF for sparklines (Phase 3). Null = not yet fetched.
+  // Subregion monthly CF for sparklines. Null = not yet fetched.
   const [subregionMonthly, setSubregionMonthly] = useState<Map<string, number[]> | null>(null);
+  // 5-year annual CF rows for persistence signals. Empty = RPC not yet deployed / no data.
+  const [annualCfRows, setAnnualCfRows] = useState<AnnualCfRow[]>([]);
+  // CSP watchlist (populated after first 60-month fetch run; empty until then)
+  const [cspWatchlist, setCspWatchlist] = useState<CspWatchlistEntry[]>([]);
+  const [cspWatchlistOpen, setCspWatchlistOpen] = useState(false);
+
+  useEffect(() => {
+    fetchCspWatchlist().then(setCspWatchlist).catch(() => setCspWatchlist([]));
+    fetchPlantAnnualCf().then(setAnnualCfRows).catch(() => setAnnualCfRows([]));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -386,7 +422,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
     );
   }, [analysis, lenderResult]);
 
-  // Subregion sparkline fetch (Phase 3) — re-fires when region or tech changes.
+  // Subregion sparkline fetch — re-fires when region or tech changes.
   useEffect(() => {
     let cancelled = false;
     const tech = techFilter === 'Both' ? 'Wind' : techFilter; // default to Wind when both
@@ -396,6 +432,43 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
     })();
     return () => { cancelled = true; };
   }, [selectedRegion, techFilter]);
+
+  // 5-year persistence — computed from annualCfRows + analysis, keyed by subregion.
+  const subregionPersistenceMap = useMemo<Map<string, import('../services/regionalAnalysisService').PersistenceSignal | null>>(() => {
+    if (!analysis || annualCfRows.length === 0) return new Map();
+    const analysesById = new Map<string, { plantId: string; region: Region; subRegion: string }>();
+    for (const a of analysis.analyses) {
+      analysesById.set(a.plantId, { plantId: a.plantId, region: a.region as Region, subRegion: a.subRegion });
+    }
+    const pp = computePlantPersistence(annualCfRows, new Map(), new Set());
+    // Build a (region|subRegion) → PersistenceSignal map from the plant-level data
+    const bySubregion = new Map<string, import('../services/regionalAnalysisService').PlantPersistence[]>();
+    for (const [plantId, ppItem] of pp) {
+      const meta = analysesById.get(plantId);
+      if (!meta) continue;
+      const key = `${meta.region}|${meta.subRegion}`;
+      if (!bySubregion.has(key)) bySubregion.set(key, []);
+      bySubregion.get(key)!.push(ppItem);
+    }
+    const result = new Map<string, import('../services/regionalAnalysisService').PersistenceSignal | null>();
+    const BADGE_THRESHOLD = 0.25;
+    const MIN_ELIGIBLE = 3;
+    const MIN_ANNUAL_PTS = 4;
+    for (const [key, plants] of bySubregion) {
+      const eligible = plants.filter(p => !p.excluded && p.annualPoints.length >= MIN_ANNUAL_PTS);
+      if (eligible.length === 0) { result.set(key, null); continue; }
+      const persistentCount = eligible.filter(p => p.persistentDecline).length;
+      const share = persistentCount / eligible.length;
+      result.set(key, {
+        eligiblePlants: eligible.length,
+        persistentDeclinePlants: persistentCount,
+        persistentDeclineShare: share,
+        hasBadge: share >= BADGE_THRESHOLD && eligible.length >= MIN_ELIGIBLE,
+        avgDownYears: eligible.reduce((s, p) => s + p.downYears, 0) / eligible.length,
+      });
+    }
+    return result;
+  }, [analysis, annualCfRows]);
 
   // Filter entity lists to those with actual exposed MW when tier != all.
   const filterByTier = (rows: EntityExposure[], tier: TierFilter): EntityExposure[] => {
@@ -576,6 +649,68 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
         </div>
       )}
 
+      {/* ── CSP Watchlist (national, all regions) ──────────────────────── */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <button
+          className="w-full flex items-center justify-between px-5 py-3 text-left hover:bg-slate-800/50 transition-colors"
+          onClick={() => setCspWatchlistOpen(o => !o)}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-white">☀ CSP Watchlist</span>
+            <span className="text-[11px] text-slate-400">
+              Concentrated Solar Power — excluded from PV benchmarks
+            </span>
+            {cspWatchlist.length > 0 && (
+              <span className="px-1.5 py-0.5 bg-orange-900/60 text-orange-300 text-[10px] rounded-full font-semibold">
+                {cspWatchlist.length} plant{cspWatchlist.length !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          <span className="text-slate-500 text-xs">{cspWatchlistOpen ? '▲' : '▼'}</span>
+        </button>
+        {cspWatchlistOpen && (
+          <div className="px-5 pb-4">
+            {cspWatchlist.length === 0 ? (
+              <p className="text-xs text-slate-500 py-2">
+                No CSP plants found. Re-run the EIA ingestion script after the 60-month backfill
+                to classify Solar Thermal plants.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 text-left">
+                      <th className="pb-1.5 pr-3 font-medium">Plant</th>
+                      <th className="pb-1.5 pr-3 font-medium">Region</th>
+                      <th className="pb-1.5 pr-3 font-medium text-right">MW</th>
+                      <th className="pb-1.5 pr-3 font-medium text-right">TTM CF</th>
+                      <th className="pb-1.5 font-medium">Owner</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cspWatchlist.map(plant => (
+                      <tr key={plant.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                        <td className="py-1.5 pr-3 text-white font-medium">{plant.name}</td>
+                        <td className="py-1.5 pr-3 text-slate-400">{plant.region}</td>
+                        <td className="py-1.5 pr-3 text-right text-slate-300">{plant.nameplateCapacityMw.toFixed(0)}</td>
+                        <td className="py-1.5 pr-3 text-right text-slate-300">
+                          {plant.ttmAvgFactor != null ? fmtPct(plant.ttmAvgFactor) : '—'}
+                        </td>
+                        <td className="py-1.5 text-slate-400">{plant.owner}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[10px] text-slate-600 mt-2">
+                  CSP plants are tagged via EIA-860 prime mover codes (ST/CP). Not peer-benchmarked.
+                  Informational only — these plants were removed from Solar CF benchmarks.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* ── Map + benchmark strip ────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
@@ -584,6 +719,14 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
               <h2 className="text-sm font-bold text-white">Sub-region map — {selectedRegion}</h2>
               <p className="text-[11px] text-slate-500">
                 {selectedSubRegion ? `Selected: ${selectedSubRegion}` : 'Click a zone to drill down'}
+                {REGION_ZONE_BASIS[selectedRegion] && (
+                  <span
+                    className="ml-1.5 cursor-help text-slate-600 hover:text-slate-400 transition-colors"
+                    title={REGION_ZONE_BASIS[selectedRegion]}
+                  >
+                    ⓘ
+                  </span>
+                )}
               </p>
             </div>
             <div className="flex gap-1">
@@ -697,6 +840,8 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
               <div className="grid grid-cols-1 gap-1">
                 {regionSubStats.map(s => {
                   const pts = subregionMonthly.get(s.subRegion) ?? [];
+                  const persKey = `${s.region}|${s.subRegion}`;
+                  const pers = subregionPersistenceMap.get(persKey);
                   return (
                     <div key={s.subRegion} className="flex items-center gap-2 text-[11px]">
                       <span
@@ -709,6 +854,19 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
                       <span className="font-mono text-slate-500 text-[10px]">
                         {pts.length > 0 ? `${(pts[pts.length - 1] * 100).toFixed(1)}%` : '—'}
                       </span>
+                      {pers?.hasBadge && (
+                        <span
+                          className="px-1.5 py-0.5 bg-rose-900/60 text-rose-300 text-[9px] rounded-full font-semibold"
+                          title={`Persistent decline: ${pers.persistentDeclinePlants}/${pers.eligiblePlants} plants with ≥3 down years (avg ${pers.avgDownYears?.toFixed(1)} down years)`}
+                        >
+                          ↓ Persistent
+                        </span>
+                      )}
+                      {pers != null && !pers.hasBadge && pers.eligiblePlants < 3 && (
+                        <span className="text-[9px] text-slate-700" title="Insufficient history for multi-year analysis">
+                          ~hist
+                        </span>
+                      )}
                     </div>
                   );
                 })}
@@ -753,6 +911,52 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
 
       {/* ── Lender Briefings ─────────────────────────────────────────────── */}
       <LenderBriefingsSection briefings={lenderBriefings} onLenderClick={onLenderClick} loading={loading} />
+
+      {/* ── Admin: Sub-region lender ingestion ───────────────────────────── */}
+      {isAdmin && (
+        <SubregionIngestionPanel
+          regionSubStats={regionSubStats}
+          analyses={analysis?.analyses ?? []}
+          selectedRegion={selectedRegion}
+          ingestionSubRegion={ingestionSubRegion}
+          ingestionCandidates={ingestionCandidates}
+          ingestionProgress={ingestionProgress}
+          ingestionRunning={ingestionRunning}
+          onRequestCandidates={async (subRegion) => {
+            setIngestionSubRegion(subRegion);
+            setIngestionCandidates(null);
+            setIngestionProgress(null);
+            const candidates = await fetchSubregionResearchCandidates(
+              selectedRegion,
+              subRegion,
+              (analysis?.analyses ?? []).map(a => ({
+                plantId: a.plantId, isFlagged: a.isFlagged,
+                region: a.region, subRegion: a.subRegion,
+              })),
+            );
+            setIngestionCandidates(candidates);
+          }}
+          onRunIngestion={async () => {
+            if (!ingestionCandidates) return;
+            // Queue: plants lacking validated links AND not recently researched
+            const queue = ingestionCandidates.filter(c => !c.hasValidatedLink && !c.recentlyResearched);
+            if (queue.length === 0) return;
+            setIngestionRunning(true);
+            setIngestionProgress({ done: 0, total: queue.length, errors: 0 });
+            let done = 0; let errors = 0;
+            for (const c of queue) {
+              const result = await triggerPlantResearch(c.plantId, false);
+              done++;
+              if (!result.ok && !result.skipped) errors++;
+              setIngestionProgress({ done, total: queue.length, errors });
+              // Small delay to avoid hammering the edge function
+              await new Promise(r => setTimeout(r, 400));
+            }
+            setIngestionRunning(false);
+          }}
+          onDismiss={() => { setIngestionSubRegion(null); setIngestionCandidates(null); setIngestionProgress(null); }}
+        />
+      )}
 
       {/* ── Internal drill-down ──────────────────────────────────────────── */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl">
@@ -1270,6 +1474,134 @@ const Sparkline: React.FC<SparklineProps> = ({ data, color = '#38bdf8' }) => {
   );
 };
 
+// ─── SubregionIngestionPanel (admin only) ────────────────────────────────────
+
+interface SubregionIngestionPanelProps {
+  regionSubStats: import('../services/regionalAnalysisService').SubregionStats[];
+  analyses: import('../services/regionalAnalysisService').PlantAnalysis[];
+  selectedRegion: Region;
+  ingestionSubRegion: string | null;
+  ingestionCandidates: import('../services/regionalAnalysisService').SubregionResearchCandidate[] | null;
+  ingestionProgress: { done: number; total: number; errors: number } | null;
+  ingestionRunning: boolean;
+  onRequestCandidates: (subRegion: string) => Promise<void>;
+  onRunIngestion: () => Promise<void>;
+  onDismiss: () => void;
+}
+
+const COST_PER_PLANT_USD = 0.004;
+
+const SubregionIngestionPanel: React.FC<SubregionIngestionPanelProps> = ({
+  regionSubStats, selectedRegion,
+  ingestionSubRegion, ingestionCandidates, ingestionProgress, ingestionRunning,
+  onRequestCandidates, onRunIngestion, onDismiss,
+}) => {
+  const hotWarmStats = regionSubStats.filter(
+    s => s.struggleScore != null && s.struggleScore >= 35 // warm+ threshold
+  );
+
+  if (hotWarmStats.length === 0) return null;
+
+  const queue = ingestionCandidates?.filter(c => !c.hasValidatedLink && !c.recentlyResearched) ?? [];
+  const estimatedCostUsd = queue.length * COST_PER_PLANT_USD;
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-sm font-bold text-white">🔬 Lender Research — Admin</span>
+        <span className="px-1.5 py-0.5 bg-violet-900/60 text-violet-300 text-[10px] rounded-full font-semibold">Admin only</span>
+      </div>
+      <p className="text-xs text-slate-400 mb-3">
+        Queue flagged plants lacking validated lender links through the sonar pipeline
+        (~${COST_PER_PLANT_USD.toFixed(3)}/plant).
+      </p>
+
+      {/* Sub-region picker */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        {hotWarmStats.map(s => (
+          <button
+            key={s.subRegion}
+            disabled={ingestionRunning}
+            onClick={() => onRequestCandidates(s.subRegion)}
+            className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold border transition-colors ${
+              ingestionSubRegion === s.subRegion
+                ? 'bg-violet-700 border-violet-500 text-white'
+                : 'bg-slate-950 border-slate-700 text-slate-300 hover:border-slate-500'
+            } disabled:opacity-40`}
+          >
+            {s.subRegion}
+            {s.struggleScore != null && (
+              <span className="ml-1.5 opacity-70">({s.struggleScore})</span>
+            )}
+          </button>
+        ))}
+        {ingestionSubRegion && (
+          <button onClick={onDismiss} className="px-2 py-1 text-[10px] text-slate-500 hover:text-slate-300 transition-colors">
+            ✕ dismiss
+          </button>
+        )}
+      </div>
+
+      {/* Candidate list */}
+      {ingestionSubRegion && ingestionCandidates === null && (
+        <p className="text-xs text-slate-500 py-2">Loading candidates…</p>
+      )}
+      {ingestionCandidates !== null && (
+        <div>
+          <div className="text-[11px] text-slate-400 mb-2">
+            <span className="text-white font-semibold">{queue.length}</span> plants in queue
+            {' '}<span className="text-slate-600">·</span>{' '}
+            {ingestionCandidates.filter(c => c.hasValidatedLink).length} already validated
+            {' '}<span className="text-slate-600">·</span>{' '}
+            {ingestionCandidates.filter(c => c.recentlyResearched && !c.hasValidatedLink).length} recently researched (skip)
+            {queue.length > 0 && (
+              <span className="ml-2 text-slate-500">≈ ${estimatedCostUsd.toFixed(2)} est. cost</span>
+            )}
+          </div>
+
+          {queue.length > 0 && !ingestionProgress && (
+            <button
+              onClick={onRunIngestion}
+              disabled={ingestionRunning}
+              className="px-4 py-2 bg-violet-700 hover:bg-violet-600 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-40"
+            >
+              Run research on {queue.length} plant{queue.length !== 1 ? 's' : ''} (~${estimatedCostUsd.toFixed(2)})
+            </button>
+          )}
+          {queue.length === 0 && (
+            <p className="text-xs text-slate-500">All flagged plants in this sub-region are already covered.</p>
+          )}
+
+          {/* Progress */}
+          {ingestionProgress && (
+            <div className="mt-2">
+              <div className="flex items-center gap-3 text-xs">
+                <div className="flex-1 bg-slate-800 rounded-full h-1.5">
+                  <div
+                    className="bg-violet-500 h-1.5 rounded-full transition-all"
+                    style={{ width: `${Math.round((ingestionProgress.done / ingestionProgress.total) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-slate-400 whitespace-nowrap">
+                  {ingestionProgress.done}/{ingestionProgress.total}
+                  {ingestionProgress.errors > 0 && (
+                    <span className="text-rose-400 ml-1">({ingestionProgress.errors} err)</span>
+                  )}
+                </span>
+              </div>
+              {!ingestionRunning && ingestionProgress.done === ingestionProgress.total && (
+                <p className="text-xs text-emerald-400 mt-1">
+                  ✓ Done — results will appear in the Lender Validation queue shortly.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── LenderBriefingsSection ───────────────────────────────────────────────────
 
 interface LenderBriefingsSectionProps {
@@ -1377,6 +1709,7 @@ const LenderBriefingsSection: React.FC<LenderBriefingsSectionProps> = ({
                             <th className="text-right px-2 py-2">vs National</th>
                             <th className="text-right px-2 py-2">Breadth</th>
                             <th className="text-right px-2 py-2">Momentum</th>
+                            <th className="text-right px-2 py-2">Persistence</th>
                             <th className="text-left px-3 py-2">Diagnosis</th>
                           </tr>
                         </thead>
@@ -1401,6 +1734,17 @@ const LenderBriefingsSection: React.FC<LenderBriefingsSectionProps> = ({
                               </td>
                               <td className={`px-2 py-2 text-right font-mono ${bd.momentumPts != null && bd.momentumPts > 0 ? 'text-amber-300' : 'text-slate-400'}`}>
                                 {bd.momentumPts != null ? `${bd.momentumPts >= 0 ? '↑' : '↓'} ${Math.abs(bd.momentumPts * 100).toFixed(1)} pt` : '—'}
+                              </td>
+                              <td className="px-2 py-2 text-right">
+                                {(() => {
+                                  const persKey = `${bd.region}|${bd.subRegion}`;
+                                  const pers = subregionPersistenceMap.get(persKey);
+                                  if (!pers) return <span className="text-slate-600 text-[10px]">—</span>;
+                                  if (pers.eligiblePlants < 3) return <span className="text-slate-600 text-[10px]">~hist</span>;
+                                  return pers.hasBadge
+                                    ? <span className="text-rose-300 text-[10px] font-semibold" title={`${pers.persistentDeclinePlants}/${pers.eligiblePlants} plants`}>↓ {(pers.persistentDeclineShare * 100).toFixed(0)}%</span>
+                                    : <span className="text-slate-500 text-[10px]">{(pers.persistentDeclineShare * 100).toFixed(0)}%</span>;
+                                })()}
                               </td>
                               <td className="px-3 py-2 text-slate-400">{bd.diagnosisLabel ?? '—'}</td>
                             </tr>

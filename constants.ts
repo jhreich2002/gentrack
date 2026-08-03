@@ -18,11 +18,11 @@ export const REGIONS: Region[] = [
 
 export const SUBREGIONS: Record<Region, string[]> = {
   [Region.CAISO]: ['NP15', 'SP15', 'ZP26'],
-  [Region.ERCOT]: ['West', 'North', 'South', 'Coast'],
-  [Region.PJM]: ['Mid-Atlantic', 'Western', 'Southern'],
-  [Region.MISO]: ['North', 'Central', 'South'],
-  [Region.NYISO]: ['Upstate', 'Hudson Valley', 'NYC/Long Island'],
-  [Region.ISONE]: ['Maine/NH', 'VT/CT/RI', 'Massachusetts'],
+  [Region.ERCOT]: ['West', 'North', 'South', 'Houston'],
+  [Region.PJM]: ['Mid-Atlantic', 'Western', 'Dominion'],
+  [Region.MISO]: ['North', 'East', 'Central', 'South'],
+  [Region.NYISO]: ['West/Upstate', 'Capital-Hudson', 'NYC/LI'],
+  [Region.ISONE]: ['Northern NE', 'Southern NE', 'Massachusetts'],
   [Region.SPP]: ['North', 'Central', 'South'],
   [Region.Northwest]: ['WA/OR Coast', 'Inland PNW', 'Mountain'],
   [Region.Southwest]: ['Arizona/Nevada', 'New Mexico', 'Colorado'],
@@ -50,12 +50,14 @@ export const TYPICAL_CAPACITY_FACTORS: Record<FuelSource, number> = {
   [FuelSource.Wind]: 0.35,
   [FuelSource.Solar]: 0.22,
   [FuelSource.Nuclear]: 0.92,
+  [FuelSource.CSP]: 0.24,
 };
 
 export const COLORS: Record<string, string> = {
   [FuelSource.Wind]: '#38bdf8',
   [FuelSource.Solar]: '#facc15',
   [FuelSource.Nuclear]: '#4ade80',
+  [FuelSource.CSP]: '#fb923c',
   curtailed: '#f87171',
   normal: '#94a3b8'
 };

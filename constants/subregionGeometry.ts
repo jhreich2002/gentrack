@@ -52,11 +52,11 @@ export const NYISO_CUTLINES = {
 
 export const SUBREGION_LABELS: Record<string, string[]> = {
   CAISO: ['NP15', 'SP15', 'ZP26'],
-  ERCOT: ['West', 'North', 'South', 'Coast'],
-  PJM: ['Mid-Atlantic', 'Western', 'Southern'],
-  MISO: ['North', 'Central', 'South'],
-  NYISO: ['Upstate', 'Hudson Valley', 'NYC/Long Island'],
-  'ISO-NE': ['Maine/NH', 'VT/CT/RI', 'Massachusetts'],
+  ERCOT: ['West', 'North', 'South', 'Houston'],
+  PJM: ['Mid-Atlantic', 'Western', 'Dominion'],
+  MISO: ['North', 'East', 'Central', 'South'],
+  NYISO: ['West/Upstate', 'Capital-Hudson', 'NYC/LI'],
+  'ISO-NE': ['Northern NE', 'Southern NE', 'Massachusetts'],
   SPP: ['North', 'Central', 'South'],
   Northwest: ['WA/OR Coast', 'Inland PNW', 'Mountain'],
   Southwest: ['Arizona/Nevada', 'New Mexico', 'Colorado'],
@@ -86,10 +86,11 @@ export const STATE_TO_SUBREGION_BY_REGION: Record<string, Record<string, string>
   PJM: {
     PA: 'Mid-Atlantic', NJ: 'Mid-Atlantic', MD: 'Mid-Atlantic', DE: 'Mid-Atlantic', DC: 'Mid-Atlantic',
     OH: 'Western', WV: 'Western',
-    VA: 'Southern',
+    VA: 'Dominion',
   },
   MISO: {
-    MN: 'North', WI: 'North', ND: 'North', SD: 'North', MI: 'North',
+    MN: 'North', ND: 'North', SD: 'North',
+    WI: 'East', MI: 'East',
     IL: 'Central', IN: 'Central', IA: 'Central',
     MO: 'South',
   },
@@ -100,8 +101,8 @@ export const STATE_TO_SUBREGION_BY_REGION: Record<string, Record<string, string>
     AR: 'South', TX: 'South', NM: 'South', LA: 'South',
   },
   'ISO-NE': {
-    ME: 'Maine/NH', NH: 'Maine/NH',
-    VT: 'VT/CT/RI', CT: 'VT/CT/RI', RI: 'VT/CT/RI',
+    ME: 'Northern NE', NH: 'Northern NE', VT: 'Northern NE',
+    CT: 'Southern NE', RI: 'Southern NE',
     MA: 'Massachusetts',
   },
 
@@ -154,13 +155,13 @@ export function resolveSubRegion(
   if (region === 'ERCOT' && lat != null && lng != null) {
     if (lng < ERCOT_CUTLINES.westLng) return 'West';
     if (lat > ERCOT_CUTLINES.northLat) return 'North';
-    if (lat < ERCOT_CUTLINES.coastLat) return 'Coast';
+    if (lat < ERCOT_CUTLINES.coastLat) return 'Houston';
     return 'South';
   }
   if (region === 'NYISO' && lat != null) {
-    if (lat > NYISO_CUTLINES.upstateLat) return 'Upstate';
-    if (lat > NYISO_CUTLINES.hudsonLat) return 'Hudson Valley';
-    return 'NYC/Long Island';
+    if (lat > NYISO_CUTLINES.upstateLat) return 'West/Upstate';
+    if (lat > NYISO_CUTLINES.hudsonLat) return 'Capital-Hudson';
+    return 'NYC/LI';
   }
 
   // 2. Region-scoped state lookup.
