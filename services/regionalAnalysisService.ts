@@ -1502,6 +1502,678 @@ export interface SubregionResearchCandidate {
  *
  * Admin-only — caller must gate on userRole === 'admin'.
  */
+// ─── Zone Target Sheet types ──────────────────────────────────────────────────
+
+/**
+ * How the CF decline is distributed across the calendar year.
+ * Derived from monthly generation history — labeled as a "signature," never
+ * asserted as a confirmed cause (we can observe seasonality, not dispatch logic).
+ *   curtailment-like  = decline concentrated in one season (≥65% of annual loss)
+ *   degradation-like  = decline uniform across spring + summer seasons
+ *   mixed             = neither extreme
+ *   unknown           = insufficient data to classify
+ */
+export type DeclineSignature = 'curtailment-like' | 'degradation-like' | 'mixed' | 'unknown';
+
+/** Per-plant vintage gap vs the plant's own first qualifying annual CF year. */
+export interface VintageGap {
+  plantId: string;
+  /** First qualifying calendar year CF (≥10 reported months). Usually 2021. */
+  baselineCf: number;
+  baselineYear: number;
+  /** TTM CF from cfWindows.recentCf. */
+  currentCf: number;
+  /** baselineCf − currentCf (positive = CF has declined). */
+  gapPp: number;
+  /** gapPp / baselineCf. */
+  gapPct: number;
+  codYear: number | null;
+  /** True when COD is 2021–22 (likely underwritten off peak vintage). */
+  vintageFlag: boolean;
+  declineSignature: DeclineSignature;
+}
+
+/** One owner's portfolio cluster within a zone — the unit of BD outreach. */
+export interface OwnerCluster {
+  owner: string;
+  plants: {
+    plantId: string;
+    plantName: string;
+    mw: number;
+    gapPp: number;
+    codYear: number | null;
+    declineSignature: DeclineSignature;
+  }[];
+  totalMw: number;
+  /** Capacity-weighted average gap across all cluster plants. */
+  capWeightedGapPp: number;
+  /** Estimated annual revenue shortfall ($M) using AVG_REALIZED_PRICE_BY_REGION. */
+  estAnnualShortfallUsd: number | null;
+  /** Validated lenders known for any plant in this cluster. */
+  knownLenders: string[];
+  /** Composite BD targeting score — higher = better call. */
+  targetScore: number;
+  /**
+   * Internal-only conversation opener (never share plant-specific CF externally).
+   * Framed at zone level: "{owner} has {n} plants ({MW} MW) in {zone} where economics
+   * have shifted materially vs likely underwriting assumptions."
+   */
+  conversationOpener: string;
+  /**
+   * True when ≥1 lender passed the concentration filter:
+   *   ≥3 distressed plants AND ≥20% of validated portfolio MW is distressed.
+   */
+  qualifiedLenderDoor: boolean;
+}
+
+/** One plant entry in the Top-10 internal target list. */
+export interface ZoneTargetPlant {
+  rank: number;
+  plantId: string;
+  plantName: string;
+  owner: string;
+  codYear: number | null;
+  mw: number;
+  baselineCf: number;
+  currentCf: number;
+  gapPp: number;
+  declineSignature: DeclineSignature;
+  knownLenders: string[];
+  targetScore: number;
+}
+
+/** Full zone-level BD target sheet. Populated once per (region, subRegion) selection. */
+export interface ZoneTargetSheet {
+  region: Region;
+  subRegion: string;
+  /** Zone-level cap-weighted baseline CF (first qualifying year). */
+  baselineCf: number | null;
+  /** Zone-level TTM CF. */
+  ttmCf: number | null;
+  /** Zone-level gap (pp). */
+  gapPp: number | null;
+  totalMw: number;
+  affectedPlantCount: number;
+  declineSignature: DeclineSignature;
+  /** Plain-English thesis sentence for the MD view. */
+  thesisText: string;
+  /** Owner clusters, sorted by targetScore descending. */
+  ownerClusters: OwnerCluster[];
+  /** Top-10 individual plants ranked by targetScore. */
+  topPlants: ZoneTargetPlant[];
+  /** Composite zone distress score used by "Where to Hunt" strip. */
+  zoneScore: number;
+}
+
+/** Lightweight zone ranking entry for the "Where to Hunt" strip. */
+export interface ZoneHuntEntry {
+  region: Region;
+  subRegion: string;
+  zoneScore: number;
+  capWeightedGapPp: number | null;
+  affectedMw: number;
+  vintageCount: number;
+  diagnosisLabel: string | null;
+  struggleScore: number | null;
+}
+
+// ─── Vintage gap ──────────────────────────────────────────────────────────────
+
+/**
+ * Classify a plant's seasonal decline pattern from its monthly generation history.
+ *
+ * Compares spring (Mar–May) and summer (Jun–Aug) average MWh/MW between the
+ * baseline year and the most recent fully-observed year (latestYear).
+ *
+ * Labeled as a "signature," never asserted as proven cause.
+ */
+export function classifyDeclineSignature(
+  generationHistory: { month: string; mwh: number | null }[],
+  nameplateCapacityMw: number,
+  baselineYear: number,
+): DeclineSignature {
+  if (nameplateCapacityMw <= 0 || generationHistory.length === 0) return 'unknown';
+
+  const springMonths = new Set(['03', '04', '05']);
+  const summerMonths = new Set(['06', '07', '08']);
+
+  const latestYear = Math.max(
+    ...generationHistory
+      .filter(m => m.mwh != null)
+      .map(m => parseInt(m.month.slice(0, 4), 10)),
+  );
+  if (latestYear === baselineYear) return 'unknown';
+
+  const springBaseline: number[] = [];
+  const summerBaseline: number[] = [];
+  const springLatest: number[] = [];
+  const summerLatest: number[] = [];
+
+  for (const m of generationHistory) {
+    if (m.mwh == null) continue;
+    const yr = parseInt(m.month.slice(0, 4), 10);
+    const mon = m.month.slice(5, 7);
+    // Use MWh/MW as a proxy for CF (ignores days-in-month variation, OK for
+    // pattern detection — we only care about relative seasonal change, not
+    // absolute CF values).
+    const cf = m.mwh / nameplateCapacityMw;
+    if (yr === baselineYear) {
+      if (springMonths.has(mon)) springBaseline.push(cf);
+      if (summerMonths.has(mon)) summerBaseline.push(cf);
+    } else if (yr === latestYear) {
+      if (springMonths.has(mon)) springLatest.push(cf);
+      if (summerMonths.has(mon)) summerLatest.push(cf);
+    }
+  }
+
+  const avg = (arr: number[]) =>
+    arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+
+  const sB = avg(springBaseline);
+  const sL = avg(springLatest);
+  const uB = avg(summerBaseline);
+  const uL = avg(summerLatest);
+
+  if (sB == null || sL == null || uB == null || uL == null) return 'unknown';
+
+  const springDelta = sB - sL; // positive = spring worse
+  const summerDelta = uB - uL; // positive = summer worse
+
+  // No meaningful decline → unknown
+  if (springDelta <= 0 && summerDelta <= 0) return 'unknown';
+  const totalDecline = Math.max(springDelta, 0) + Math.max(summerDelta, 0);
+  if (totalDecline <= 0) return 'unknown';
+
+  const springShare = Math.max(springDelta, 0) / totalDecline;
+  const summerShare = Math.max(summerDelta, 0) / totalDecline;
+
+  // If one season accounts for ≥65% of the decline, it's concentrated
+  if (springShare >= 0.65 || summerShare >= 0.65) return 'curtailment-like';
+  // If seasons are close in contribution (within 20% of each other)
+  if (Math.abs(springShare - summerShare) <= 0.20) return 'degradation-like';
+  return 'mixed';
+}
+
+/**
+ * Compute per-plant vintage gaps: baseline CF (first qualifying annual year)
+ * vs current TTM CF.  Returns only plants that have both annual history and
+ * current CF windows.  history_unreliable + CSP plants are excluded.
+ */
+export function computeVintageGap(
+  analyses: PlantAnalysis[],
+  annualCfRows: AnnualCfRow[],
+  cfWindows: Map<string, CfWindow>,
+  plantsMap: Map<string, PowerPlant>,
+  historyUnreliablePlantIds: Set<string>,
+): Map<string, VintageGap> {
+  // Group annual rows by plant
+  const annualByPlant = new Map<string, { year: number; cf: number }[]>();
+  for (const row of annualCfRows) {
+    if (!annualByPlant.has(row.plant_id)) annualByPlant.set(row.plant_id, []);
+    annualByPlant.get(row.plant_id)!.push({ year: row.year, cf: row.year_cf });
+  }
+
+  const result = new Map<string, VintageGap>();
+  for (const a of analyses) {
+    if (historyUnreliablePlantIds.has(a.plantId)) continue;
+    if (a.fuelSource === FuelSource.CSP) continue;
+
+    const win = cfWindows.get(a.plantId);
+    if (!win || win.recentCf == null || win.recentMonths < THRESHOLDS.minMonths) continue;
+
+    const annualPts = (annualByPlant.get(a.plantId) ?? []).sort((x, y) => x.year - y.year);
+    if (annualPts.length === 0) continue;
+
+    const baseline = annualPts[0];
+    const currentCf = win.recentCf;
+    const gapPp = baseline.cf - currentCf; // positive = CF has declined
+
+    const plant = plantsMap.get(a.plantId);
+    const codYear =
+      plant?.cod ? (parseInt(plant.cod.slice(0, 4), 10) || null) : null;
+
+    const declineSignature = plant
+      ? classifyDeclineSignature(plant.generationHistory, a.nameplateMw, baseline.year)
+      : 'unknown';
+
+    result.set(a.plantId, {
+      plantId: a.plantId,
+      baselineCf: baseline.cf,
+      baselineYear: baseline.year,
+      currentCf,
+      gapPp,
+      gapPct: baseline.cf > 0 ? gapPp / baseline.cf : 0,
+      codYear,
+      vintageFlag: codYear != null && codYear >= 2021 && codYear <= 2022,
+      declineSignature,
+    });
+  }
+  return result;
+}
+
+/**
+ * Compute lightweight zone distress scores for the "Where to Hunt" strip.
+ * Does not require owner/lender data — just vintage gaps + analyses.
+ *
+ * zoneScore = capWeightedGapPp × sqrt(affectedMW) × (1 + 0.3×vintageCount)
+ * Only considers plants with gapPp > 0 (genuine decline).
+ */
+export function computeZoneDistressScores(
+  region: Region,
+  techFilter: FuelSource[],
+  analyses: PlantAnalysis[],
+  vintageGaps: Map<string, VintageGap>,
+  subregionStatsMap: Map<string, SubregionStats>,
+): ZoneHuntEntry[] {
+  const techSet = new Set(techFilter.map(String));
+  const zoneMap = new Map<
+    string,
+    { mwGapSum: number; mwSum: number; affectedMw: number; vintageCount: number }
+  >();
+
+  for (const a of analyses) {
+    if (a.region !== region) continue;
+    if (!techSet.has(String(a.fuelSource))) continue;
+    const gap = vintageGaps.get(a.plantId);
+    if (!gap || gap.gapPp <= 0) continue;
+
+    const key = a.subRegion;
+    const prev = zoneMap.get(key) ?? { mwGapSum: 0, mwSum: 0, affectedMw: 0, vintageCount: 0 };
+    zoneMap.set(key, {
+      mwGapSum: prev.mwGapSum + gap.gapPp * a.nameplateMw,
+      mwSum: prev.mwSum + a.nameplateMw,
+      affectedMw: prev.affectedMw + a.nameplateMw,
+      vintageCount: prev.vintageCount + (gap.vintageFlag ? 1 : 0),
+    });
+  }
+
+  const results: ZoneHuntEntry[] = [];
+  for (const [subRegion, d] of zoneMap.entries()) {
+    const capWeightedGapPp = d.mwSum > 0 ? d.mwGapSum / d.mwSum : 0;
+    const zoneScore = capWeightedGapPp * Math.sqrt(d.affectedMw) * (1 + 0.3 * d.vintageCount);
+    const stats = subregionStatsMap.get(`${region}|${subRegion}`);
+    results.push({
+      region,
+      subRegion,
+      zoneScore,
+      capWeightedGapPp,
+      affectedMw: d.affectedMw,
+      vintageCount: d.vintageCount,
+      diagnosisLabel: stats?.diagnosisLabel ?? null,
+      struggleScore: stats?.struggleScore ?? null,
+    });
+  }
+  results.sort((a, b) => b.zoneScore - a.zoneScore);
+  return results;
+}
+
+/** Compute per-plant target score. Used for both owner cluster and plant-level ranking. */
+function computePlantTargetScore(
+  gapPp: number,
+  mw: number,
+  concentrationMult: number,
+  vintageFlag: boolean,
+  hasKnownLender: boolean,
+): number {
+  if (gapPp <= 0) return 0;
+  const gapSeverity = Math.min(gapPp * 100, 15); // cap at 15 pp contribution
+  const vintageMult = vintageFlag ? 1.3 : 1.0;
+  const lenderMult = hasKnownLender ? 1.2 : 1.0;
+  return gapSeverity * Math.log1p(mw / 50) * concentrationMult * vintageMult * lenderMult;
+}
+
+/**
+ * Build the zone-level BD target sheet for a (region, subRegion) selection.
+ *
+ * Assembles: vintage gaps → decline signatures → owner clusters + lender doors →
+ * top-10 plant list → thesis text.
+ *
+ * Lender qualification filter: a lender surfaces as a "BD door" only when they
+ * have ≥3 distressed plants AND their portfolioShare (exposed/total validated MW)
+ * is ≥20%.  This prevents a lender with 1 troubled plant out of 100 from appearing.
+ */
+export function buildZoneTargetSheet(
+  region: Region,
+  subRegion: string,
+  techFilter: FuelSource[],
+  analyses: PlantAnalysis[],
+  vintageGaps: Map<string, VintageGap>,
+  plantsMap: Map<string, PowerPlant>,
+  ownerStakes: OwnershipStake[],
+  zoneLenderExposures: EntityExposure[],
+  subregionStats: SubregionStats | null,
+): ZoneTargetSheet {
+  const techSet = new Set(techFilter.map(String));
+
+  // Plants in this zone with a qualifying vintage gap (gapPp > 0)
+  const zoneGaps: Array<{ analysis: PlantAnalysis; gap: VintageGap; plant: PowerPlant | undefined }> =
+    [];
+  for (const a of analyses) {
+    if (a.region !== region || a.subRegion !== subRegion) continue;
+    if (!techSet.has(String(a.fuelSource))) continue;
+    const gap = vintageGaps.get(a.plantId);
+    if (!gap || gap.gapPp <= 0) continue;
+    zoneGaps.push({ analysis: a, gap, plant: plantsMap.get(a.plantId) });
+  }
+
+  // Qualified lender doors (≥3 distressed plants AND ≥20% portfolio share)
+  const qualifiedLenders = new Set<string>(
+    zoneLenderExposures
+      .filter(l => l.flaggedPlantIds.length >= 3 && l.portfolioShare >= 0.20)
+      .map(l => l.entityName),
+  );
+
+  // Map plantId → known lenders in this zone
+  const plantLenders = new Map<string, string[]>();
+  for (const l of zoneLenderExposures) {
+    for (const pid of l.flaggedPlantIds) {
+      if (!plantLenders.has(pid)) plantLenders.set(pid, []);
+      // Include all validated lenders for the plant (coverage info), not just qualified ones
+      plantLenders.get(pid)!.push(l.entityName);
+    }
+  }
+
+  // Build a reverse map: eiaCode → owner name + share (for O&M lookup)
+  // ownerStakes.plantId = eia_site_code (plain number string like "12345")
+  // analyses.plantId = "EIA-12345"
+  const eiaOwnerMap = new Map<string, string[]>(); // eiaCode → owners
+  for (const s of ownerStakes) {
+    if (!eiaOwnerMap.has(s.plantId)) eiaOwnerMap.set(s.plantId, []);
+    eiaOwnerMap.get(s.plantId)!.push(s.entityName);
+  }
+
+  // Resolve owner for a plant (primary owner = highest-share stake, fallback = plant.owner)
+  const getOwner = (plantId: string, plant: PowerPlant | undefined): string => {
+    const eiaCode = plant?.eiaPlantCode ?? plantId.replace('EIA-', '');
+    const owners = eiaOwnerMap.get(eiaCode);
+    if (owners && owners.length > 0) return owners[0];
+    return plant?.owner ?? 'Unknown';
+  };
+
+  // ── Build owner clusters ─────────────────────────────────────────────────
+  const clusterMap = new Map<string, typeof zoneGaps>();
+  for (const item of zoneGaps) {
+    const owner = getOwner(item.analysis.plantId, item.plant);
+    if (!clusterMap.has(owner)) clusterMap.set(owner, []);
+    clusterMap.get(owner)!.push(item);
+  }
+
+  const price = AVG_REALIZED_PRICE_BY_REGION[String(region)] ?? 35;
+
+  const ownerClusters: OwnerCluster[] = [];
+  for (const [owner, items] of clusterMap.entries()) {
+    const n = items.length;
+    const concentrationMult = n >= 3 ? 2.0 : n >= 2 ? 1.5 : 1.0;
+    const totalMw = items.reduce((s, x) => s + x.analysis.nameplateMw, 0);
+    const mwGapSum = items.reduce((s, x) => s + x.gap.gapPp * x.analysis.nameplateMw, 0);
+    const capWeightedGapPp = totalMw > 0 ? mwGapSum / totalMw : 0;
+
+    // $M/yr shortfall: MW × 8760 × gapPp × price
+    const estAnnualShortfallUsd =
+      totalMw > 0 && capWeightedGapPp > 0
+        ? (totalMw * 8760 * capWeightedGapPp * price) / 1_000_000
+        : null;
+
+    // Known lenders for any plant in this cluster
+    const lenderSet = new Set<string>();
+    for (const x of items) {
+      for (const l of plantLenders.get(x.analysis.plantId) ?? []) lenderSet.add(l);
+    }
+    const knownLenders = Array.from(lenderSet);
+    const hasKnownLender = knownLenders.length > 0;
+    const qualifiedLenderDoor = knownLenders.some(l => qualifiedLenders.has(l));
+
+    // Owner-level target score = cap-weighted plant scores
+    const targetScore = items.reduce((s, x) => {
+      return s + computePlantTargetScore(
+        x.gap.gapPp,
+        x.analysis.nameplateMw,
+        concentrationMult,
+        x.gap.vintageFlag,
+        hasKnownLender,
+      );
+    }, 0);
+
+    // Conversation opener (internal only — zone framing, no plant-specific CF)
+    const codYears = [...new Set(items.map(x => x.gap.codYear).filter(Boolean))];
+    const codStr = codYears.length > 0 ? ` (COD ${codYears.sort().join(', ')})` : '';
+    const gapStr = `${(capWeightedGapPp * 100).toFixed(1)} pp`;
+    const lenderLine = qualifiedLenderDoor
+      ? ` Validated lender exposure known (${knownLenders.filter(l => qualifiedLenders.has(l)).join(', ')}).`
+      : '';
+    const conversationOpener =
+      `${owner} has ${n} plant${n > 1 ? 's' : ''} (${Math.round(totalMw)} MW) in ` +
+      `${subRegion}${codStr} where generation has declined ~${gapStr} vs their likely ` +
+      `underwriting window. Zone economics have shifted materially.${lenderLine}`;
+
+    ownerClusters.push({
+      owner,
+      plants: items.map(x => ({
+        plantId: x.analysis.plantId,
+        plantName: x.plant?.name ?? x.analysis.plantId,
+        mw: x.analysis.nameplateMw,
+        gapPp: x.gap.gapPp,
+        codYear: x.gap.codYear,
+        declineSignature: x.gap.declineSignature,
+      })),
+      totalMw,
+      capWeightedGapPp,
+      estAnnualShortfallUsd,
+      knownLenders,
+      targetScore,
+      conversationOpener,
+      qualifiedLenderDoor,
+    });
+  }
+  ownerClusters.sort((a, b) => b.targetScore - a.targetScore);
+
+  // ── Build top-10 plant list ──────────────────────────────────────────────
+  const allPlantScores: ZoneTargetPlant[] = zoneGaps.map(({ analysis, gap, plant }) => {
+    const owner = getOwner(analysis.plantId, plant);
+    const concentrationMult = (clusterMap.get(owner)?.length ?? 1) >= 3
+      ? 2.0
+      : (clusterMap.get(owner)?.length ?? 1) >= 2 ? 1.5 : 1.0;
+    const knownLenders = plantLenders.get(analysis.plantId) ?? [];
+    const ts = computePlantTargetScore(
+      gap.gapPp,
+      analysis.nameplateMw,
+      concentrationMult,
+      gap.vintageFlag,
+      knownLenders.length > 0,
+    );
+    return {
+      rank: 0, // assigned below
+      plantId: analysis.plantId,
+      plantName: plant?.name ?? analysis.plantId,
+      owner,
+      codYear: gap.codYear,
+      mw: analysis.nameplateMw,
+      baselineCf: gap.baselineCf,
+      currentCf: gap.currentCf,
+      gapPp: gap.gapPp,
+      declineSignature: gap.declineSignature,
+      knownLenders,
+      targetScore: ts,
+    };
+  });
+  allPlantScores.sort((a, b) => b.targetScore - a.targetScore);
+  const topPlants = allPlantScores.slice(0, 10).map((p, i) => ({ ...p, rank: i + 1 }));
+
+  // ── Zone-level metrics ───────────────────────────────────────────────────
+  const totalMwAll = zoneGaps.reduce((s, x) => s + x.analysis.nameplateMw, 0);
+  const baselineMwSum = zoneGaps.reduce((s, x) => s + x.gap.baselineCf * x.analysis.nameplateMw, 0);
+  const currentMwSum = zoneGaps.reduce((s, x) => s + x.gap.currentCf * x.analysis.nameplateMw, 0);
+  const baselineCfZone = totalMwAll > 0 ? baselineMwSum / totalMwAll : null;
+  const ttmCfZone = totalMwAll > 0 ? currentMwSum / totalMwAll : null;
+  const gapPpZone = baselineCfZone != null && ttmCfZone != null ? baselineCfZone - ttmCfZone : null;
+
+  const vintageCount = zoneGaps.filter(x => x.gap.vintageFlag).length;
+  const zoneScore =
+    gapPpZone != null ? gapPpZone * Math.sqrt(totalMwAll) * (1 + 0.3 * vintageCount) : 0;
+
+  // Dominant decline signature: most frequent among zone plants
+  const sigCounts = { 'curtailment-like': 0, 'degradation-like': 0, mixed: 0, unknown: 0 };
+  for (const x of zoneGaps) sigCounts[x.gap.declineSignature]++;
+  const dominantSig = (Object.entries(sigCounts) as [DeclineSignature, number][])
+    .sort((a, b) => b[1] - a[1])[0][0];
+
+  // Thesis text
+  const baseYearStr = zoneGaps.length > 0
+    ? String(Math.min(...zoneGaps.map(x => x.gap.baselineYear)))
+    : 'baseline';
+  const gapStr2 = gapPpZone != null
+    ? `${(gapPpZone * 100).toFixed(1)} pp`
+    : 'material';
+  const sigLabel: Record<DeclineSignature, string> = {
+    'curtailment-like': 'curtailment-like seasonal pattern',
+    'degradation-like': 'uniform multi-year degradation',
+    mixed: 'mixed decline pattern',
+    unknown: 'decline signature unclear',
+  };
+  const thesisText =
+    `${subRegion} (${String(region)} ${techFilter.map(String).join('/')}): ` +
+    `cap-weighted CF ${baselineCfZone != null ? `${(baselineCfZone * 100).toFixed(1)}%` : '—'} ` +
+    `(${baseYearStr}) → ${ttmCfZone != null ? `${(ttmCfZone * 100).toFixed(1)}%` : '—'} (TTM), ` +
+    `down ${gapStr2} vs baseline. ` +
+    `${zoneGaps.length} plant${zoneGaps.length !== 1 ? 's' : ''} / ${Math.round(totalMwAll)} MW affected. ` +
+    `${sigLabel[dominantSig]}.`;
+
+  return {
+    region,
+    subRegion,
+    baselineCf: baselineCfZone,
+    ttmCf: ttmCfZone,
+    gapPp: gapPpZone,
+    totalMw: totalMwAll,
+    affectedPlantCount: zoneGaps.length,
+    declineSignature: dominantSig,
+    thesisText,
+    ownerClusters,
+    topPlants,
+    zoneScore,
+  };
+}
+
+// ─── BD Review Loop — snapshot + disposition DB helpers ──────────────────────
+
+/** Status a managing director can assign to a zone/owner/plant target. */
+export type BdDispositionStatus = 'new' | 'watch' | 'pursue' | 'dismissed';
+
+export interface BdDisposition {
+  id: string;
+  scope: 'zone' | 'owner' | 'plant';
+  key: string;             // e.g. "ERCOT|West" for zone, or owner name, or plantId
+  status: BdDispositionStatus;
+  note: string | null;
+  decidedBy: string | null;
+  decidedAt: string;       // ISO-8601
+}
+
+export interface BdSnapshotEntry {
+  snapshotDate: string;    // YYYY-MM-DD
+  scope: 'zone' | 'owner' | 'plant';
+  key: string;
+  targetScore: number;
+  gapPp: number | null;
+  mw: number;
+  rank: number;
+}
+
+/**
+ * Fetch all BD dispositions from the bd_dispositions table.
+ * Returns an empty array when the table doesn't exist yet (migration not run).
+ */
+export async function fetchBdDispositions(): Promise<BdDisposition[]> {
+  try {
+    const { data, error } = await supabase
+      .from('bd_dispositions')
+      .select('*')
+      .order('decided_at', { ascending: false });
+    if (error) {
+      // Table may not exist yet — degrade gracefully.
+      if (error.code === '42P01') return [];
+      console.warn('[RegionalAnalysis] fetchBdDispositions error:', error.message);
+      return [];
+    }
+    return (data ?? []).map((r: any) => ({
+      id: String(r.id),
+      scope: r.scope as BdDisposition['scope'],
+      key: String(r.key),
+      status: r.status as BdDispositionStatus,
+      note: r.note ?? null,
+      decidedBy: r.decided_by ?? null,
+      decidedAt: String(r.decided_at),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Upsert (insert-or-update) a disposition record.
+ * key = `zone:${region}|${subRegion}` | `owner:${name}` | `plant:${plantId}`
+ */
+export async function upsertBdDisposition(
+  scope: BdDisposition['scope'],
+  key: string,
+  status: BdDispositionStatus,
+  note: string | null,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('bd_dispositions')
+      .upsert(
+        { scope, key, status, note, decided_at: new Date().toISOString() },
+        { onConflict: 'scope,key' },
+      );
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * Fetch the most recent snapshot entries for a given region.
+ * Returns an empty array when the table doesn't exist yet.
+ */
+export async function fetchLatestBdSnapshot(region: Region): Promise<BdSnapshotEntry[]> {
+  try {
+    // Get the most recent snapshot_date
+    const { data: dateRow, error: dateErr } = await supabase
+      .from('bd_target_snapshots')
+      .select('snapshot_date')
+      .like('key', `${String(region)}|%`)
+      .order('snapshot_date', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (dateErr || !dateRow) return [];
+
+    const { data, error } = await supabase
+      .from('bd_target_snapshots')
+      .select('*')
+      .like('key', `${String(region)}|%`)
+      .eq('snapshot_date', dateRow.snapshot_date);
+
+    if (error) {
+      if (error.code === '42P01') return [];
+      return [];
+    }
+    return (data ?? []).map((r: any) => ({
+      snapshotDate: String(r.snapshot_date),
+      scope: r.scope as BdSnapshotEntry['scope'],
+      key: String(r.key),
+      targetScore: Number(r.target_score ?? 0),
+      gapPp: r.gap_pp != null ? Number(r.gap_pp) : null,
+      mw: Number(r.mw ?? 0),
+      rank: Number(r.rank ?? 0),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export async function fetchSubregionResearchCandidates(
   region: Region,
   subRegion: string,

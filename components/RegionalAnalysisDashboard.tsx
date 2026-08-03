@@ -53,6 +53,12 @@ import {
   buildPlantsById,
   ownerExposuresForScope,
   lenderExposuresForScope,
+  computeVintageGap,
+  computeZoneDistressScores,
+  buildZoneTargetSheet,
+  fetchBdDispositions,
+  upsertBdDisposition,
+  fetchLatestBdSnapshot,
   type CfWindow,
   type EntityExposure,
   type LenderBriefing,
@@ -63,6 +69,14 @@ import {
   type RegionalAnalysisResult,
   type SubregionStats,
   type TopTarget,
+  type VintageGap,
+  type ZoneTargetSheet,
+  type ZoneHuntEntry,
+  type OwnerCluster,
+  type ZoneTargetPlant,
+  type BdDisposition,
+  type BdDispositionStatus,
+  type BdSnapshotEntry,
   fetchCspWatchlist,
   type CspWatchlistEntry,
   fetchPlantAnnualCf,
@@ -205,6 +219,12 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   const [ingestionProgress, setIngestionProgress] = useState<{ done: number; total: number; errors: number } | null>(null);
   const [ingestionRunning, setIngestionRunning] = useState(false);
   const [showInternalDetail, setShowInternalDetail] = useState(false);
+  // Zone Target Sheet
+  const [showTargetPlants, setShowTargetPlants] = useState(false);
+  const [autoSelectedZone, setAutoSelectedZone] = useState(false);
+  // BD dispositions (sticky MD review loop)
+  const [bdDispositions, setBdDispositions] = useState<BdDisposition[]>([]);
+  const [bdSnapshot, setBdSnapshot] = useState<BdSnapshotEntry[]>([]);
 
   // ── Async data ────────────────────────────────────────────────────────────
   const [cfWindows, setCfWindows] = useState<Map<string, CfWindow> | null>(null);
@@ -224,6 +244,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
   useEffect(() => {
     fetchCspWatchlist().then(setCspWatchlist).catch(() => setCspWatchlist([]));
     fetchPlantAnnualCf().then(setAnnualCfRows).catch(() => setAnnualCfRows([]));
+    fetchBdDispositions().then(setBdDispositions).catch(() => setBdDispositions([]));
   }, []);
 
   useEffect(() => {
@@ -497,6 +518,90 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
       }));
   }, [analysis, annualCfRows, selectedRegion, selectedSubRegion, techArr]);
 
+  // ── Vintage gaps (per-plant baseline vs TTM) ──────────────────────────────
+  const plantsMapForGap = useMemo(() => {
+    const m = new Map<string, PowerPlant>();
+    for (const p of plants) m.set(p.id, p);
+    return m;
+  }, [plants]);
+
+  const vintageGaps = useMemo<Map<string, VintageGap>>(() => {
+    if (!analysis || annualCfRows.length === 0 || !cfWindows) return new Map();
+    return computeVintageGap(
+      analysis.analyses,
+      annualCfRows,
+      cfWindows,
+      plantsMapForGap,
+      new Set(), // historyUnreliable — not tracked client-side; service uses plant data
+    );
+  }, [analysis, annualCfRows, cfWindows, plantsMapForGap]);
+
+  // ── Zone distress scores for "Where to Hunt" strip ────────────────────────
+  const zoneHuntEntries = useMemo<ZoneHuntEntry[]>(() => {
+    if (!analysis || vintageGaps.size === 0) return [];
+    return computeZoneDistressScores(
+      selectedRegion,
+      techArr,
+      analysis.analyses,
+      vintageGaps,
+      analysis.subregionStatsMap,
+    );
+  }, [analysis, vintageGaps, selectedRegion, techArr]);
+
+  // Auto-select the worst zone on first load (once per region switch).
+  useEffect(() => {
+    if (zoneHuntEntries.length === 0) return;
+    if (autoSelectedZone && selectedSubRegion !== null) return;
+    const worst = zoneHuntEntries[0];
+    if (worst) {
+      setSelectedSubRegion(worst.subRegion);
+      setAutoSelectedZone(true);
+    }
+  }, [zoneHuntEntries, autoSelectedZone]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset auto-select flag when user switches region so we re-auto-select.
+  useEffect(() => {
+    setAutoSelectedZone(false);
+    setSelectedSubRegion(null);
+  }, [selectedRegion]);
+
+  // ── Zone target sheet for the selected zone ───────────────────────────────
+  const zoneTargetSheet = useMemo<ZoneTargetSheet | null>(() => {
+    if (!analysis || !selectedSubRegion || vintageGaps.size === 0 || !ownerStakes || !lenderStakes) return null;
+    const zoneLenderExposures = lenderResult?.exposures ?? [];
+    return buildZoneTargetSheet(
+      selectedRegion,
+      selectedSubRegion,
+      techArr,
+      analysis.analyses,
+      vintageGaps,
+      plantsMapForGap,
+      ownerStakes,
+      zoneLenderExposures,
+      analysis.subregionStatsMap.get(`${selectedRegion}|${selectedSubRegion}`) ?? null,
+    );
+  }, [analysis, selectedRegion, selectedSubRegion, techArr, vintageGaps, plantsMapForGap, ownerStakes, lenderStakes, lenderResult]);
+
+  // BD snapshot fetch — re-fires when region changes.
+  useEffect(() => {
+    fetchLatestBdSnapshot(selectedRegion).then(setBdSnapshot).catch(() => setBdSnapshot([]));
+  }, [selectedRegion]);
+
+  // BD disposition lookup helpers
+  const getDisposition = (scope: BdDisposition['scope'], key: string): BdDisposition | undefined =>
+    bdDispositions.find(d => d.scope === scope && d.key === key);
+
+  const handleDispose = async (scope: BdDisposition['scope'], key: string, status: BdDispositionStatus) => {
+    const res = await upsertBdDisposition(scope, key, status, null);
+    if (res.ok) {
+      setBdDispositions(prev => {
+        const next = prev.filter(d => !(d.scope === scope && d.key === key));
+        next.push({ id: key, scope, key, status, note: null, decidedBy: null, decidedAt: new Date().toISOString() });
+        return next;
+      });
+    }
+  };
+
   // Filter entity lists to those with actual exposed MW when tier != all.
   const filterByTier = (rows: EntityExposure[], tier: TierFilter): EntityExposure[] => {
     if (tier === 'all') return rows.filter(r => r.exposedMw > 0 || tier === 'all');
@@ -563,7 +668,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
     const props = feature.properties as Record<string, string> | undefined;
     if (props && props.region === selectedRegion) {
       const s = analysis?.subregionStatsMap.get(`${selectedRegion}|${props.subRegion}`);
-      const ttmStr = s?.ttmCf != null ? fmtPct(s.ttmCf) : '—';
+      const ttmStr = s?.capWeightedTtmCf != null ? fmtPct(s.capWeightedTtmCf) : '—';
       const yoyPts = s?.signalComponents.selfTrendPts;
       const yoyStr = yoyPts != null
         ? `${yoyPts >= 0 ? '+' : ''}${(yoyPts * 100).toFixed(1)} pt`
@@ -653,6 +758,30 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
           </button>
         )}
       </div>
+
+      {/* ── Where to Hunt strip ──────────────────────────────────────────── */}
+      {zoneHuntEntries.length > 0 && (
+        <WhereToHuntStrip
+          entries={zoneHuntEntries.slice(0, 3)}
+          selectedSubRegion={selectedSubRegion}
+          onSelectZone={setSelectedSubRegion}
+          dispositions={bdDispositions}
+        />
+      )}
+
+      {/* ── Zone Target Sheet ────────────────────────────────────────────── */}
+      {zoneTargetSheet && (
+        <ZoneTargetSheetPanel
+          sheet={zoneTargetSheet}
+          showTargetPlants={showTargetPlants}
+          onToggleTargetPlants={() => setShowTargetPlants(v => !v)}
+          onOwnerClick={onOwnerClick}
+          onPlantClick={onPlantClick}
+          dispositions={bdDispositions}
+          snapshot={bdSnapshot}
+          onDispose={handleDispose}
+        />
+      )}
 
       {/* ── Top BD Targets ───────────────────────────────────────────────── */}
       <TopTargetsTable
@@ -1071,7 +1200,7 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
       </div>
 
       {/* ── Lender Briefings ─────────────────────────────────────────────── */}
-      <LenderBriefingsSection briefings={lenderBriefings} onLenderClick={onLenderClick} loading={loading} />
+      <LenderBriefingsSection briefings={lenderBriefings} onLenderClick={onLenderClick} loading={loading} subregionPersistenceMap={subregionPersistenceMap} />
 
       {/* ── Admin: Sub-region lender ingestion ───────────────────────────── */}
       {isAdmin && (
@@ -1155,6 +1284,448 @@ const RegionalAnalysisDashboard: React.FC<Props> = ({
 };
 
 export default RegionalAnalysisDashboard;
+
+// ─── WhereToHuntStrip ─────────────────────────────────────────────────────────
+
+interface WhereToHuntStripProps {
+  entries: ZoneHuntEntry[];
+  selectedSubRegion: string | null;
+  onSelectZone: (z: string) => void;
+  dispositions: BdDisposition[];
+}
+
+const WhereToHuntStrip: React.FC<WhereToHuntStripProps> = ({
+  entries, selectedSubRegion, onSelectZone, dispositions,
+}) => {
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-sm font-bold text-white">Where to Hunt</span>
+        <span className="text-[11px] text-slate-500">Top zones by vintage gap severity × MW</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {entries.map((e, i) => {
+          const isSelected = selectedSubRegion === e.subRegion;
+          const disp = dispositions.find(d => d.scope === 'zone' && d.key === `${e.region}|${e.subRegion}`);
+          const dismissed = disp?.status === 'dismissed';
+          return (
+            <button
+              key={e.subRegion}
+              onClick={() => onSelectZone(e.subRegion)}
+              disabled={dismissed}
+              className={`text-left rounded-xl border p-3 transition-colors relative ${
+                isSelected
+                  ? 'bg-blue-900/30 border-blue-500'
+                  : dismissed
+                  ? 'bg-slate-900/30 border-slate-800 opacity-50 cursor-not-allowed'
+                  : 'bg-slate-900 border-slate-800 hover:border-slate-600'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    {i === 0 && !dismissed && (
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse flex-shrink-0 mt-0.5" />
+                    )}
+                    <span className="text-xs font-bold text-white">{e.subRegion}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    {e.capWeightedGapPp != null
+                      ? `↓ ${(e.capWeightedGapPp * 100).toFixed(1)} pp vs baseline`
+                      : '—'}
+                  </div>
+                  <div className="text-[10px] text-slate-600 mt-0.5">
+                    {fmtMw(e.affectedMw)} affected
+                    {e.vintageCount > 0 && (
+                      <span className="ml-1.5 text-amber-600/80">{e.vintageCount} 2021–22 vintage</span>
+                    )}
+                  </div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  {e.struggleScore != null && (
+                    <span
+                      className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                      style={{ color: struggleColor(e.struggleScore), backgroundColor: `${struggleColor(e.struggleScore)}20` }}
+                    >
+                      {e.struggleScore}
+                    </span>
+                  )}
+                  {disp && disp.status !== 'new' && (
+                    <div className="mt-1">
+                      <span className={`text-[9px] font-bold uppercase px-1 py-0.5 rounded ${
+                        disp.status === 'pursue' ? 'bg-emerald-900/40 text-emerald-400' :
+                        disp.status === 'watch'  ? 'bg-amber-900/40 text-amber-400' :
+                        'bg-slate-800 text-slate-500'
+                      }`}>
+                        {disp.status}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ─── ZoneTargetSheetPanel ─────────────────────────────────────────────────────
+
+interface ZoneTargetSheetPanelProps {
+  sheet: ZoneTargetSheet;
+  showTargetPlants: boolean;
+  onToggleTargetPlants: () => void;
+  onOwnerClick: (name: string) => void;
+  onPlantClick: (id: string) => void;
+  dispositions: BdDisposition[];
+  snapshot: BdSnapshotEntry[];
+  onDispose: (scope: BdDisposition['scope'], key: string, status: BdDispositionStatus) => Promise<void>;
+}
+
+const DISPOSITION_OPTIONS: { status: BdDispositionStatus; label: string; cls: string }[] = [
+  { status: 'watch',     label: 'Watch',     cls: 'text-amber-400 border-amber-700/40 bg-amber-900/20' },
+  { status: 'pursue',    label: 'Pursue',    cls: 'text-emerald-400 border-emerald-700/40 bg-emerald-900/20' },
+  { status: 'dismissed', label: 'Dismiss',   cls: 'text-slate-500 border-slate-700 bg-slate-900' },
+];
+
+const DispositionPicker: React.FC<{
+  scope: BdDisposition['scope'];
+  keyStr: string;
+  dispositions: BdDisposition[];
+  onDispose: (scope: BdDisposition['scope'], key: string, status: BdDispositionStatus) => Promise<void>;
+}> = ({ scope, keyStr, dispositions, onDispose }) => {
+  const current = dispositions.find(d => d.scope === scope && d.key === keyStr);
+  return (
+    <div className="flex gap-1 items-center">
+      {DISPOSITION_OPTIONS.map(o => (
+        <button
+          key={o.status}
+          onClick={() => onDispose(scope, keyStr, o.status)}
+          className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border transition-colors ${
+            current?.status === o.status
+              ? o.cls + ' ring-1 ring-offset-0'
+              : 'text-slate-600 border-slate-800 bg-slate-950 hover:text-slate-400'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+const ZoneTargetSheetPanel: React.FC<ZoneTargetSheetPanelProps> = ({
+  sheet, showTargetPlants, onToggleTargetPlants, onOwnerClick, onPlantClick,
+  dispositions, snapshot, onDispose,
+}) => {
+  // Snapshot delta for a zone entry
+  const snapshotEntry = snapshot.find(s => s.scope === 'zone' && s.key === `${sheet.region}|${sheet.subRegion}`);
+  const scoreDelta = snapshotEntry ? sheet.zoneScore - snapshotEntry.targetScore : null;
+
+  const sigLabel: Record<import('../services/regionalAnalysisService').DeclineSignature, string> = {
+    'curtailment-like': 'Curtailment-like',
+    'degradation-like': 'Multi-year degradation',
+    mixed: 'Mixed pattern',
+    unknown: '—',
+  };
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+      {/* Header */}
+      <div className="px-5 py-4 border-b border-slate-800">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-sm font-bold text-white">Zone Target Sheet</h2>
+              <span className="text-xs font-bold text-blue-400">{sheet.subRegion}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                sheet.declineSignature === 'curtailment-like' ? 'bg-amber-900/30 text-amber-300 border-amber-700/30' :
+                sheet.declineSignature === 'degradation-like' ? 'bg-rose-900/30 text-rose-300 border-rose-700/30' :
+                'bg-slate-800 text-slate-400 border-slate-700'
+              }`}>
+                {sigLabel[sheet.declineSignature]}
+              </span>
+              {scoreDelta != null && Math.abs(scoreDelta) > 0.5 && (
+                <span className={`text-[10px] font-mono ${scoreDelta > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {scoreDelta > 0 ? '▲' : '▼'} vs last snapshot
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">{sheet.thesisText}</p>
+          </div>
+          <div className="flex-shrink-0 text-right">
+            <div className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">MD Review</div>
+            <DispositionPicker
+              scope="zone"
+              keyStr={`${sheet.region}|${sheet.subRegion}`}
+              dispositions={dispositions}
+              onDispose={onDispose}
+            />
+          </div>
+        </div>
+
+        {/* Zone KPI strip */}
+        <div className="mt-3 flex flex-wrap gap-4 text-[11px]">
+          <div>
+            <span className="text-slate-500">Baseline CF </span>
+            <span className="text-slate-200 font-mono">
+              {sheet.baselineCf != null ? `${(sheet.baselineCf * 100).toFixed(1)}%` : '—'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500">TTM CF </span>
+            <span className="text-slate-200 font-mono">
+              {sheet.ttmCf != null ? `${(sheet.ttmCf * 100).toFixed(1)}%` : '—'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500">Gap </span>
+            <span className={`font-mono font-bold ${sheet.gapPp != null && sheet.gapPp > 0 ? 'text-rose-300' : 'text-slate-400'}`}>
+              {sheet.gapPp != null ? `${sheet.gapPp > 0 ? '−' : ''}${(Math.abs(sheet.gapPp) * 100).toFixed(1)} pp` : '—'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500">Plants / MW </span>
+            <span className="text-slate-200 font-mono">{sheet.affectedPlantCount} / {fmtMw(sheet.totalMw)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Owner cluster table */}
+      <div className="px-5 py-4">
+        <div className="flex items-center gap-2 mb-3">
+          <h3 className="text-xs font-bold text-white uppercase tracking-wider">Owner Clusters</h3>
+          <span className="text-[10px] text-slate-500">Ranked by BD targeting score · sorted by concentration × gap × vintage</span>
+        </div>
+
+        {sheet.ownerClusters.length === 0 ? (
+          <p className="text-xs text-slate-500 py-3">No owner clusters with sufficient vintage gap data in this zone.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-800">
+            <table className="w-full text-xs min-w-[700px]">
+              <thead className="bg-slate-950/60 text-slate-500 uppercase text-[10px] font-bold">
+                <tr>
+                  <th className="text-left px-3 py-2">Owner</th>
+                  <th className="text-right px-2 py-2">Plants</th>
+                  <th className="text-right px-2 py-2">MW</th>
+                  <th className="text-right px-2 py-2">Avg Gap</th>
+                  <th className="text-right px-2 py-2">Est. $/yr<sup className="text-[8px]">†</sup></th>
+                  <th className="text-left px-2 py-2">Lenders</th>
+                  <th className="text-left px-2 py-2">MD Review</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sheet.ownerClusters.map(cluster => {
+                  const ownerKey = `owner:${cluster.owner}`;
+                  const disp = dispositions.find(d => d.scope === 'owner' && d.key === ownerKey);
+                  const dismissed = disp?.status === 'dismissed';
+                  return (
+                    <React.Fragment key={cluster.owner}>
+                      <tr className={`border-t border-slate-800 ${dismissed ? 'opacity-40' : 'hover:bg-slate-800/30'} transition-colors`}>
+                        <td className="px-3 py-2.5">
+                          <button
+                            onClick={() => onOwnerClick(cluster.owner)}
+                            className="text-blue-400 hover:text-blue-300 font-semibold text-left leading-tight"
+                          >
+                            {cluster.owner}
+                          </button>
+                          {cluster.plants.length >= 2 && (
+                            <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[9px] font-bold border ${
+                              cluster.plants.length >= 3
+                                ? 'bg-rose-900/40 text-rose-300 border-rose-700/30'
+                                : 'bg-amber-900/40 text-amber-300 border-amber-700/30'
+                            }`}>
+                              {cluster.plants.length} plants — portfolio exposure
+                            </span>
+                          )}
+                          {cluster.qualifiedLenderDoor && (
+                            <span className="ml-1.5 px-1.5 py-0.5 bg-violet-900/40 text-violet-300 border border-violet-700/30 rounded-full text-[9px] font-bold">
+                              lender door
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2.5 text-right font-mono text-slate-300">{cluster.plants.length}</td>
+                        <td className="px-2 py-2.5 text-right font-mono text-slate-300">{fmtMw(cluster.totalMw)}</td>
+                        <td className="px-2 py-2.5 text-right font-mono text-rose-300">
+                          {cluster.capWeightedGapPp > 0 ? `−${(cluster.capWeightedGapPp * 100).toFixed(1)} pp` : '—'}
+                        </td>
+                        <td className="px-2 py-2.5 text-right font-mono text-slate-300">
+                          {cluster.estAnnualShortfallUsd != null && cluster.estAnnualShortfallUsd > 0.05
+                            ? `~$${cluster.estAnnualShortfallUsd.toFixed(1)}M`
+                            : '—'}
+                        </td>
+                        <td className="px-2 py-2.5">
+                          {cluster.knownLenders.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {cluster.knownLenders.slice(0, 2).map(l => (
+                                <span key={l} className={`px-1.5 py-0.5 rounded text-[9px] border font-medium ${
+                                  cluster.qualifiedLenderDoor
+                                    ? 'bg-violet-900/30 text-violet-300 border-violet-700/30'
+                                    : 'bg-slate-800 text-slate-400 border-slate-700'
+                                }`}>
+                                  {l}
+                                </span>
+                              ))}
+                              {cluster.knownLenders.length > 2 && (
+                                <span className="text-[9px] text-slate-600">+{cluster.knownLenders.length - 2}</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-slate-600">—</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2.5">
+                          <DispositionPicker
+                            scope="owner"
+                            keyStr={ownerKey}
+                            dispositions={dispositions}
+                            onDispose={onDispose}
+                          />
+                        </td>
+                      </tr>
+                      {/* Conversation opener (internal — collapsed by default) */}
+                      {!dismissed && (
+                        <tr className="bg-slate-950/40 border-t border-slate-800/50">
+                          <td colSpan={7} className="px-3 pb-2 pt-1">
+                            <div className="flex items-start gap-1.5">
+                              <span className="text-[9px] text-slate-600 uppercase tracking-widest font-bold mt-0.5 flex-shrink-0">
+                                Internal opener
+                              </span>
+                              <span className="text-[11px] text-slate-500 italic leading-relaxed">
+                                {cluster.conversationOpener}
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p className="text-[10px] text-slate-600 mt-2">
+          <sup>†</sup> Revenue shortfall estimate: cap-weighted CF gap × MW × 8,760 hr/yr × {
+            AVG_REALIZED_PRICE_BY_REGION[String(sheet.region)] ?? 35
+          }/MWh (EIA avg realized — directional only, not a price forecast).
+          Conversation openers are internal-only — do not share plant-specific CF data externally.
+        </p>
+      </div>
+
+      {/* Top-10 target plants (expandable, INTERNAL) */}
+      <div className="border-t border-slate-800">
+        <button
+          onClick={onToggleTargetPlants}
+          className="w-full flex items-center justify-between px-5 py-3 text-left hover:bg-slate-800/40 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-300">
+              Top {Math.min(sheet.topPlants.length, 10)} Target Plants — FTI Internal Only
+            </span>
+            <span className="px-1.5 py-0.5 bg-rose-900/30 text-rose-300 border border-rose-700/30 text-[9px] rounded font-bold uppercase">
+              INTERNAL
+            </span>
+          </div>
+          <svg
+            className={`w-3.5 h-3.5 text-slate-500 transform transition-transform ${showTargetPlants ? 'rotate-180' : ''}`}
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {showTargetPlants && (
+          <div className="px-5 pb-5">
+            <div className="bg-rose-950/20 border border-rose-800/30 rounded-xl p-3 mb-3 text-[11px] text-rose-300">
+              These are internal analysis assets only. Never share plant-specific CF data, gap figures, or
+              this ranking with external counterparties.
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-slate-800">
+              <table className="w-full text-xs min-w-[760px]">
+                <thead className="bg-slate-950/60 text-slate-500 uppercase text-[10px] font-bold">
+                  <tr>
+                    <th className="text-center px-2 py-2 w-6">#</th>
+                    <th className="text-left px-3 py-2">Plant</th>
+                    <th className="text-left px-2 py-2">Owner</th>
+                    <th className="text-right px-2 py-2">COD</th>
+                    <th className="text-right px-2 py-2">MW</th>
+                    <th className="text-right px-2 py-2">Baseline</th>
+                    <th className="text-right px-2 py-2">TTM</th>
+                    <th className="text-right px-2 py-2">Gap</th>
+                    <th className="text-left px-2 py-2">Signature</th>
+                    <th className="text-left px-3 py-2">MD Review</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sheet.topPlants.map(p => {
+                    const plantKey = `plant:${p.plantId}`;
+                    const disp = dispositions.find(d => d.scope === 'plant' && d.key === plantKey);
+                    const dismissed = disp?.status === 'dismissed';
+                    return (
+                      <tr
+                        key={p.plantId}
+                        className={`border-t border-slate-800 ${dismissed ? 'opacity-40' : 'hover:bg-slate-800/30'} transition-colors`}
+                      >
+                        <td className="px-2 py-2 text-center text-slate-600 font-mono text-[11px]">{p.rank}</td>
+                        <td className="px-3 py-2">
+                          <button
+                            onClick={() => onPlantClick(p.plantId)}
+                            className="text-blue-400 hover:text-blue-300 font-semibold text-left"
+                          >
+                            {p.plantName}
+                          </button>
+                          {p.knownLenders.length > 0 && (
+                            <span className="ml-1.5 text-[9px] text-violet-400">• lender known</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2 text-slate-400">{p.owner}</td>
+                        <td className="px-2 py-2 text-right font-mono text-slate-400">
+                          {p.codYear ?? '—'}
+                          {p.codYear != null && p.codYear >= 2021 && p.codYear <= 2022 && (
+                            <span className="ml-1 text-amber-500" title="2021–22 vintage: likely underwritten at peak">★</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-slate-300">{p.mw.toFixed(0)}</td>
+                        <td className="px-2 py-2 text-right font-mono text-slate-400">{(p.baselineCf * 100).toFixed(1)}%</td>
+                        <td className="px-2 py-2 text-right font-mono text-slate-300">{(p.currentCf * 100).toFixed(1)}%</td>
+                        <td className="px-2 py-2 text-right font-mono font-bold text-rose-300">
+                          {p.gapPp > 0 ? `−${(p.gapPp * 100).toFixed(1)} pp` : '—'}
+                        </td>
+                        <td className="px-2 py-2">
+                          <span className={`text-[9px] px-1 py-0.5 rounded border ${
+                            p.declineSignature === 'curtailment-like' ? 'text-amber-300 bg-amber-900/20 border-amber-700/30' :
+                            p.declineSignature === 'degradation-like' ? 'text-rose-300 bg-rose-900/20 border-rose-700/30' :
+                            'text-slate-500 bg-slate-800 border-slate-700'
+                          }`}>
+                            {p.declineSignature === 'unknown' ? '—' : p.declineSignature}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <DispositionPicker
+                            scope="plant"
+                            keyStr={plantKey}
+                            dispositions={dispositions}
+                            onDispose={onDispose}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
@@ -1769,12 +2340,14 @@ interface LenderBriefingsSectionProps {
   briefings: LenderBriefing[];
   onLenderClick: (name: string) => void;
   loading: boolean;
+  subregionPersistenceMap: Map<string, import('../services/regionalAnalysisService').PersistenceSignal | null>;
 }
 
 const LenderBriefingsSection: React.FC<LenderBriefingsSectionProps> = ({
   briefings,
   onLenderClick,
   loading,
+  subregionPersistenceMap,
 }) => {
   const [open, setOpen] = useState(false);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);

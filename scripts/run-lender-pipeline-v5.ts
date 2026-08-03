@@ -32,18 +32,26 @@ async function main() {
   ]);
   const internalAuthToken = requireAnyEnv(['INTERNAL_AUTH_TOKEN', 'VITE_INTERNAL_AUTH_TOKEN']);
 
-  const cohort = parseArg('cohort', 'curtailed');       // 'curtailed' | 'fleet'
+  const cohort = parseArg('cohort', 'curtailed');       // 'curtailed' | 'fleet' | 'zone'
   const concurrency = Number(parseArg('concurrency', '3'));
   const maxCost = Number(parseArg('max-cost', '50'));
   const force = hasFlag('force');
   const dryRun = hasFlag('dry-run');
+  // zone cohort args
+  const zoneRegion = parseArg('region', '');       // e.g. ERCOT
+  const zoneSubRegion = parseArg('sub-region', ''); // e.g. West
 
   const dateStr = new Date().toISOString().slice(0, 10);
   const logPath = path.join(LOGS_DIR, `fleet-run-${dateStr}.jsonl`);
   const skippedPath = path.join(LOGS_DIR, `fleet-run-${dateStr}-skipped.txt`);
 
-  if (!['curtailed', 'fleet'].includes(cohort)) {
-    console.error(`Unknown --cohort value "${cohort}". Use "curtailed" or "fleet".`);
+  if (!['curtailed', 'fleet', 'zone'].includes(cohort)) {
+    console.error(`Unknown --cohort value "${cohort}". Use "curtailed", "fleet", or "zone".`);
+    process.exit(1);
+  }
+
+  if (cohort === 'zone' && (!zoneRegion || !zoneSubRegion)) {
+    console.error('--cohort zone requires --region <ISO> and --sub-region <zone> (e.g. --region ERCOT --sub-region West).');
     process.exit(1);
   }
 
@@ -125,6 +133,54 @@ async function main() {
     console.log(
       `Fleet cohort: ${allPlants.length} total plants, ${researchedIds.size} already researched, ` +
       `${plants.length} to run.`,
+    );
+  } else {
+    // zone mode: Wind + Solar plants in the specified (region, sub_region) lacking validated lenders.
+    // Skips plants already successfully researched unless --force is set.
+    const PAGE = 1000;
+    const acc: { id: string; eia_plant_code: string; name: string }[] = [];
+    let from = 0;
+    while (true) {
+      const res = await supabase
+        .from('plants')
+        .select('id, eia_plant_code, name, nameplate_capacity_mw')
+        .eq('region', zoneRegion)
+        .eq('sub_region', zoneSubRegion)
+        .in('fuel_source', ['Wind', 'Solar'])
+        .order('nameplate_capacity_mw', { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (res.error) throw res.error;
+      const rows = (res.data ?? []) as any[];
+      acc.push(...rows);
+      if (rows.length < PAGE) break;
+      from += PAGE;
+    }
+
+    if (!force) {
+      // Skip already-researched (non-error) plants
+      const resIds = new Set<string>();
+      let rFrom = 0;
+      while (true) {
+        const res = await supabase
+          .from('plant_lender_research')
+          .select('plant_id')
+          .neq('status', 'error')
+          .not('completed_at', 'is', null)
+          .range(rFrom, rFrom + PAGE - 1);
+        if (res.error) break;
+        const rows = (res.data ?? []) as { plant_id: string }[];
+        rows.forEach(r => resIds.add(r.plant_id));
+        if (rows.length < PAGE) break;
+        rFrom += PAGE;
+      }
+      plants = acc.filter(p => !resIds.has(p.id));
+    } else {
+      plants = acc;
+    }
+
+    console.log(
+      `Zone cohort: ${acc.length} Wind/Solar plants in ${zoneRegion} / ${zoneSubRegion}, ` +
+      `${plants.length} to run (use --force to re-research already-covered plants).`,
     );
   }
 
